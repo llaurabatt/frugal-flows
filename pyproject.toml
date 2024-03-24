@@ -1,0 +1,36 @@
+[project]
+name = "deep-copula-frugal"
+version = "0.1.0"
+description = "Deep copula frugal simulations in JAX."
+readme = "README.md"
+requires-python ="~=3.9"
+authors = [
+  {name = "Laura Battaglia", email = "laura.battaglia@keble.ox.ac.uk"},
+  {name = "Daniel Manela", email = "daniel.manela@mansfield.ox.ac.uk"},
+]
+keywords = ["jax", "copula", "causal-inference", "deep-learning", "frugal-parametrisation"]
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "Natural Language :: English",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+urls = {repository = "https://github.com/llaurabat91/deep-copula-frugal" }
+
+[build-system]
+requires = ["setuptools >= 61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["deep_copula_frugal/*"] 
+exclude = ["tests", "tests.*", "examples"]
+
+[tool.ruff]
+extend-include = ["*.ipynb"]
+fixable = ["I001", "F401"]
+ignore = ["E402", "E721", "E731", "E741", "F722"]
+ignore-init-module-imports = true
+select = ["E", "F", "I001"]
+src = []

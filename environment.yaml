@@ -1,0 +1,15 @@
+name: deep-frugal
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python >=3.8
+  - ipykernel 
+  - ipywidgets
+  - jax
+  - matplotlib
+  - pip:
+    - --editable ./
+  # - pip:
+  #   - some-package==1.2.3  # Example PyPI package
+  #   - another-package
