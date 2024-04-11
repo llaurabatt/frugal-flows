@@ -9,8 +9,14 @@ dependencies:
   - jax
   - matplotlib
   - ruff
+  - equinox
+  - optax
+  - pre-commit
+  - notebook
+  - distrax
+  - seaborn
+  - pip
   - pip:
+    # - pre-commit
+    - flowjax
     - --editable ./
-  # - pip:
-  #   - some-package==1.2.3  # Example PyPI package
-  #   - another-package
