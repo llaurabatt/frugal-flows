@@ -3,7 +3,7 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - python >=3.8
+  - python >=3.10
   - ipykernel 
   - ipywidgets
   - jax
@@ -18,5 +18,6 @@ dependencies:
   - pip
   - pip:
     # - pre-commit
-    - flowjax
+    # - flowjax
+    - --editable ./flowjax/
     - --editable ./
