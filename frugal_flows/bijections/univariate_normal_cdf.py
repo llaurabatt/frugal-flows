@@ -30,20 +30,24 @@ class UnivariateNormalCDF(AbstractBijection):
     cond_shape: ClassVar[None] = None
     ate: Array
     scale: Array | wrappers.AbstractUnwrappable[Array]
+    const: Array
 
     def __init__(
         self,
         ate: ArrayLike = 0,
         scale: ArrayLike = 1,
+        const: ArrayLike = 0,
     ):
         self.ate, scale = jnp.broadcast_arrays(
             *(arraylike_to_array(a, dtype=float) for a in (ate, scale)),
         )
         self.shape = scale.shape  # (1,)
         self.scale = scale  # wrappers.BijectionReparam(scale, SoftPlus()) #why not constraining it to be inputted as positive??
+        self.const = const
 
-    def transform(self, x, condition=None):
-        location_x = self.ate * condition[0] if (condition is not None) else self.ate
+    def transform(self, x, condition=[0]):
+        # location_x = self.ate * condition[0] if (condition is not None) else self.ate
+        location_x = self.const + self.ate * condition[0]
         return jax.scipy.stats.norm.cdf(x, loc=location_x, scale=self.scale)
         # return x * self.scale + self.loc
 
