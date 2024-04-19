@@ -25,7 +25,6 @@ class UnivariateNormalCDF(AbstractBijection):
     """
 
     shape: tuple[int, ...]
-    # cond_shape: ClassVar[None] = None
     cond_shape: int | None = None
     ate: Array
     scale: Array | wrappers.AbstractUnwrappable[Array]
@@ -78,6 +77,6 @@ class UnivariateNormalCDF(AbstractBijection):
             location_y = self.ate * condition[0] + self.const
         inverse_y = jax.scipy.special.ndtri(y) * self.scale + location_y
         log_det_y = -jax.scipy.stats.norm.logpdf(
-            inverse_y, loc=location_y, scale=self.scale
+            inverse_y[0], loc=location, scale=self.scale
         )
         return inverse_y, log_det_y
