@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
-
 import jax
 import jax.numpy as jnp
 from flowjax import wrappers
@@ -27,7 +25,8 @@ class UnivariateNormalCDF(AbstractBijection):
     """
 
     shape: tuple[int, ...]
-    cond_shape: ClassVar[None] = None
+    # cond_shape: ClassVar[None] = None
+    cond_shape: int | None = None
     ate: Array
     scale: Array | wrappers.AbstractUnwrappable[Array]
     const: Array
@@ -37,32 +36,46 @@ class UnivariateNormalCDF(AbstractBijection):
         ate: ArrayLike = 0,
         scale: ArrayLike = 1,
         const: ArrayLike = 0,
+        cond_dim: ArrayLike = None,
     ):
-        self.ate, scale = jnp.broadcast_arrays(
-            *(arraylike_to_array(a, dtype=float) for a in (ate, scale)),
+        self.ate, scale, self.const = jnp.broadcast_arrays(
+            *(arraylike_to_array(a, dtype=float) for a in (ate, scale, const)),
         )
         self.shape = scale.shape  # (1,)
         self.scale = scale  # wrappers.BijectionReparam(scale, SoftPlus()) #why not constraining it to be inputted as positive??
-        self.const = const
+        if cond_dim is None:
+            self.cond_shape = None
+        else:
+            self.cond_shape = (cond_dim,)
 
-    def transform(self, x, condition=[0]):
-        # location_x = self.ate * condition[0] if (condition is not None) else self.ate
-        location_x = self.const + self.ate * condition[0]
+    def transform(self, x, condition=None):
+        if self.cond_shape is None:
+            location_x = self.const
+        else:
+            location_x = self.ate * condition[0] + self.const
         return jax.scipy.stats.norm.cdf(x, loc=location_x, scale=self.scale)
-        # return x * self.scale + self.loc
 
     def transform_and_log_det(self, x, condition=None):
-        location_x = self.ate * condition[0] if (condition is not None) else self.ate
+        if self.cond_shape is None:
+            location_x = self.const
+        else:
+            location_x = self.ate * condition[0] + self.const
         transformed_x = jax.scipy.stats.norm.cdf(x, loc=location_x, scale=self.scale)
         log_det_x = jax.scipy.stats.norm.logpdf(x, loc=location_x, scale=self.scale)
         return transformed_x, log_det_x
 
     def inverse(self, y, condition=None):
-        location_y = self.ate * condition[0] if (condition is not None) else self.ate
+        if self.cond_shape is None:
+            location_y = self.const
+        else:
+            location_y = self.ate * condition[0] + self.const
         return jax.scipy.special.ndtri(y) * self.scale + location_y
 
     def inverse_and_log_det(self, y, condition=None):
-        location_y = self.ate * condition[0] if (condition is not None) else self.ate
+        if self.cond_shape is None:
+            location_y = self.const
+        else:
+            location_y = self.ate * condition[0] + self.const
         inverse_y = jax.scipy.special.ndtri(y) * self.scale + location_y
         log_det_y = -jax.scipy.stats.norm.logpdf(
             inverse_y, loc=location_y, scale=self.scale

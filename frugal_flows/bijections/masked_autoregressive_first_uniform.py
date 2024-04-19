@@ -189,20 +189,23 @@ class MaskedAutoregressiveFirstUniform(AbstractBijection):
                 self.cond_shape = (cond_dim_nomask,)
                 # we give conditioning variables rank -1 (no masking of edges to output)
                 in_ranks = jnp.hstack((jnp.arange(dim), -jnp.ones(cond_dim_nomask)))
-        elif cond_dim_nomask is None:
-            self.cond_shape = (cond_dim_mask,)
-            # we give conditioning variables rank dim (masking of all edges to output)
-            in_ranks = jnp.hstack((jnp.arange(dim), jnp.ones(cond_dim_mask) * (dim)))
         else:
-            self.cond_shape = (cond_dim_mask + cond_dim_nomask,)
-            # we give conditioning variables rank -1 (no masking of edges to output)
-            in_ranks = jnp.hstack(
-                (
-                    jnp.arange(dim),
-                    -jnp.ones(cond_dim_nomask),
-                    jnp.ones(cond_dim_mask) * (dim),
+            if cond_dim_nomask is None:
+                self.cond_shape = (cond_dim_mask,)
+                # we give conditioning variables rank dim (masking of all edges to output)
+                in_ranks = jnp.hstack(
+                    (jnp.arange(dim), jnp.ones(cond_dim_mask) * (dim))
                 )
-            )
+            else:
+                self.cond_shape = (cond_dim_mask + cond_dim_nomask,)
+                # we give conditioning variables rank -1 (no masking of edges to output)
+                in_ranks = jnp.hstack(
+                    (
+                        jnp.arange(dim),
+                        -jnp.ones(cond_dim_nomask),
+                        jnp.ones(cond_dim_mask) * (dim),
+                    )
+                )
 
         hidden_ranks = jnp.arange(nn_width) % dim
         out_ranks = jnp.repeat(jnp.arange(dim), num_params)
