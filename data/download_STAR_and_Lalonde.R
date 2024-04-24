@@ -1,6 +1,7 @@
 # Load required packages
 # Install and load required packages
-install.packages("AER", dependencies = T)
+
+#install.packages("AER", dependencies = T)
 library(AER)
 
 select_star_columns <- function(star_data, suffix) {
@@ -35,7 +36,8 @@ star_filtered_data <- star[complete.cases(star), ]
 write.csv(star_filtered_data, file = "filtered_STAR_dataset.csv", row.names = FALSE)
 
 # Load Lalonde dataset
-install.packages("designmatch", dependencies = T)
+#install.packages("designmatch", dependencies = T)
 library(designmatch)
 data(lalonde)
-write.csv(Lalonde, file = "Lalonde_dataset.csv", row.names = FALSE)
+lalonde_filtered_data <- lalonde[complete.cases(lalonde), ]
+write.csv(lalonde_filtered_data, file = "filtered_lalonde_dataset.csv", row.names = FALSE)
