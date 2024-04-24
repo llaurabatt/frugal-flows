@@ -54,15 +54,15 @@ Each of the following sets of variables has an entry for kindergarten (`k`), 1st
 
 ## Lalonde Dataset
 ### Schema
-The treatment assignment indicator is the first variable of the data frame: treatment (1 = treated; 0 = control). The subsequent features are:
-* age, measured in years (continuous)
-* education, measured in years (ordinal/continuous);
-* black, indicating race (1 if black, 0 otherwise);
-* hispanic, indicating race (1 if Hispanic, 0 otherwise);
-* married, indicating marital status (1 if married, 0 otherwise);
-* nodegree, indicating high school diploma (1 if no degree, 0 otherwise);
+The `treatment` assignment indicator is the first variable of the data frame: `treatment` (1 = treated; 0 = control). The subsequent features are:
+* `age`, measured in years (continuous)
+* `education`, measured in years (ordinal/continuous);
+* `black`, indicating race (1 if black, 0 otherwise);
+* `hispanic`, indicating race (1 if Hispanic, 0 otherwise);
+* `married`, indicating marital status (1 if married, 0 otherwise);
+* `nodegree`, indicating high school diploma (1 if no degree, 0 otherwise);
 
 The outcomes are:
-* re74, real earnings in 1974 (continuous)
-* re75, real earnings in 1975 (continuous)
-* re78, real earnings in 1978 (continuous)
+* `re74`, real earnings in 1974 (continuous)
+* `re75`, real earnings in 1975 (continuous)
+* `re78`, real earnings in 1978 (continuous)
