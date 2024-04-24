@@ -28,11 +28,14 @@ names(star)[5:15] <- nam
 star$id <- factor(star$id)
 star$grade <- factor(star$grade, levels = lev, labels = c("kindergarten", "1st", "2nd", "3rd"))
 
-na_counts_per_column <- colSums(is.na(STAR))
+na_counts_per_column <- colSums(is.na(star))
 print(na_counts_per_column)
-complete_data <- STAR[complete.cases(STAR), ]
+star_filtered_data <- star[complete.cases(star), ]
 
-write.csv(STAR, file = "STAR_dataset.csv", row.names = FALSE)
+write.csv(star_filtered_data, file = "filtered_STAR_dataset.csv", row.names = FALSE)
+
 # Load Lalonde dataset
-data(Lalonde)
+install.packages("designmatch", dependencies = T)
+library(designmatch)
+data(lalonde)
 write.csv(Lalonde, file = "Lalonde_dataset.csv", row.names = FALSE)
