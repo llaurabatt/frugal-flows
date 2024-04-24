@@ -1,8 +1,6 @@
 # Load required packages
 # Install and load required packages
 
-#install.packages("AER", dependencies = T)
-library(AER)
 
 select_star_columns <- function(star_data, suffix) {
   base_cols <- c("gender", "ethnicity", "birth")
@@ -14,6 +12,8 @@ select_star_columns <- function(star_data, suffix) {
 }
 
 # Load STAR dataset
+library(AER)
+# install.packages("AER", dependencies = T)
 data(STAR)
 ## reshape data from wide into long format
 ## 1. variables and their levels
@@ -36,8 +36,15 @@ star_filtered_data <- star[complete.cases(star), ]
 write.csv(star_filtered_data, file = "filtered_STAR_dataset.csv", row.names = FALSE)
 
 # Load Lalonde dataset
-#install.packages("designmatch", dependencies = T)
+# install.packages("designmatch", dependencies = T)
 library(designmatch)
 data(lalonde)
 lalonde_filtered_data <- lalonde[complete.cases(lalonde), ]
 write.csv(lalonde_filtered_data, file = "filtered_lalonde_dataset.csv", row.names = FALSE)
+
+
+# Double ML Data
+# install.packages('DoubleML', dependencies = T)
+library(DoubleML)
+data_401k <- fetch_401k(return_type = "data.table", instrument = TRUE)
+write.csv(data_401k, file = "filtered_401k_data.csv", row.names = FALSE)
