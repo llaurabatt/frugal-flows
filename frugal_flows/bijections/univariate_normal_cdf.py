@@ -81,3 +81,7 @@ class UnivariateNormalCDF(AbstractBijection):
             inverse_y, loc=location_y, scale=self.scale
         )
         return inverse_y, log_det_y
+
+    def haha(self):
+        print("haha")
+        return 1
