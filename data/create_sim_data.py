@@ -25,7 +25,11 @@ except Exception as e:
 # Set random seed
 np.random.seed(42)
 
-# CORRELATION_MATRIX = np.array([[1.0, 0.8, 0.6], [0.8, 1.0, 0.4], [0.6, 0.4, 1.0]])
+# Upper triangle of correlation values for copula
+CORRELATION_VALUES = [0.5, 0.8, 0.2, 0.2,
+                           0.5, 0.5, 0.2,
+                                0.2, 0.4,
+                                     0.6]
 
 # # Select marginal distributions of Z
 # MARGINAL_Z = {
