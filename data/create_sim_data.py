@@ -5,63 +5,27 @@ import scipy.stats as ss
 # Set random seed
 np.random.seed(42)
 
-# Upper triangle of correlation values for copula
-CORRELATION_VALUES = [0.1, 0.6, 0, 0.8, 0.1, 0.5, 0.9, 0.8, 0.8, 0.6]
+CORRELATION_MATRIX = np.array([
+    [1., 0.8, 0.6],
+    [0.8, 1., 0.4],
+    [0.6, 0.4, 1.]
+])
 
-CORRELATION_MATRIX = np.array(
-    [
-        [
-            1.0,
-            CORRELATION_VALUES[0],
-            CORRELATION_VALUES[1],
-            CORRELATION_VALUES[2],
-            CORRELATION_VALUES[3],
-        ],
-        [
-            CORRELATION_VALUES[0],
-            1.0,
-            CORRELATION_VALUES[4],
-            CORRELATION_VALUES[5],
-            CORRELATION_VALUES[6],
-        ],
-        [
-            CORRELATION_VALUES[1],
-            CORRELATION_VALUES[4],
-            1.0,
-            CORRELATION_VALUES[7],
-            CORRELATION_VALUES[8],
-        ],
-        [
-            CORRELATION_VALUES[2],
-            CORRELATION_VALUES[5],
-            CORRELATION_VALUES[7],
-            1.0,
-            CORRELATION_VALUES[9],
-        ],
-        [
-            CORRELATION_VALUES[3],
-            CORRELATION_VALUES[6],
-            CORRELATION_VALUES[8],
-            CORRELATION_VALUES[9],
-            1.0,
-        ],
-    ]
-)
 
 # Select marginal distributions of Z
 MARGINAL_Z = {
-    "Z1": ss.bernoulli(p=0.5),
-    "Z2": ss.poisson(mu=5.0),
-    "Z3": ss.norm(loc=0, scale=1),
-    "Z4": ss.norm(loc=0, scale=1),
+#    "Z1": ss.bernoulli(p=0.5),
+#    "Z2": ss.poisson(mu=5.0),
+    "Z1": ss.norm(loc=0, scale=1),
+    "Z2": ss.norm(loc=0, scale=1),
 }
 
-N = 1000
+N = 2000
 TREATMENT_TYPE = "C"
 OUTCOME_TYPE = "C"
-PROP_SCORE_WEIGHTS = [2, 0.5, 0, -3]  # Check propscore weights are of same dim as Z
-PROP_SCORE_WEIGHTS = [2, 0.5, 3, -3]  # Check propscore weights are of same dim as Z
-OUTCOME_WEIGHTS = [1, -1]
+PROP_SCORE_WEIGHTS = [3, -3]  # Check propscore weights are of same dim as Z
+PROP_SCORE_WEIGHTS = [0, -0]  # Check propscore weights are of same dim as Z
+OUTCOME_WEIGHTS = [1, 1]
 
 
 def generate_copula_samples(N: int, correlation_matrix: np.ndarray) -> np.ndarray:
@@ -203,7 +167,7 @@ def simulate_data(
     data = np.concatenate(
         [outcome.reshape(-1, 1), treatment.reshape(-1, 1), Z_marginal_samples], axis=1
     )
-    data = pd.DataFrame(data, columns=["Y", "X", "Z1", "Z2", "Z3", "Z4"])
+    data = pd.DataFrame(data, columns=["Y", "X"] + list(MARGINAL_Z.keys()))
     return data
 
 
