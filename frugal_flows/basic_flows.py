@@ -8,14 +8,12 @@ from flowjax.bijections import (
     AbstractBijection,
     Affine,
     Chain,
-    Concatenate,
     Invert,
     Loc,
     Permute,
     Scan,
     SoftPlus,
 )
-from flowjax.bijections.utils import Identity
 from flowjax.distributions import AbstractDistribution, Transformed
 from flowjax.flows import _add_default_permute
 from flowjax.wrappers import BijectionReparam, NonTrainable
@@ -128,11 +126,11 @@ def masked_autoregressive_flow_first_uniform(
 
     def make_layer(key):  # masked autoregressive layer + permutation
         bij_key, perm_key = jr.split(key)
-        list_bijections = [Identity((cond_u_y_dim,))]
+        # list_bijections = [Identity((cond_u_y_dim,))]
         MAF_bijection = MaskedAutoregressiveFirstUniform(
             key=bij_key,
             transformer=transformer,
-            dim=dim - cond_u_y_dim,
+            dim=dim,  # dim - cond_u_y_dim,
             # cond_dim=cond_dim,
             cond_dim_mask=cond_dim_mask,
             cond_dim_nomask=cond_dim_nomask,
@@ -141,8 +139,9 @@ def masked_autoregressive_flow_first_uniform(
             nn_depth=nn_depth,
             nn_activation=nn_activation,
         )
-        list_bijections.append(MAF_bijection)
-        bijection = Concatenate(list_bijections)
+        # list_bijections.append(MAF_bijection)
+        # bijection = Concatenate(list_bijections)
+        bijection = MAF_bijection
         return _add_default_permute_but_first(bijection, dim, perm_key)
 
     keys = jr.split(key, flow_layers)

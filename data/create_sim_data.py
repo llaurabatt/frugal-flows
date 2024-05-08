@@ -5,17 +5,13 @@ import scipy.stats as ss
 # Set random seed
 np.random.seed(42)
 
-CORRELATION_MATRIX = np.array([
-    [1., 0.8, 0.6],
-    [0.8, 1., 0.4],
-    [0.6, 0.4, 1.]
-])
+CORRELATION_MATRIX = np.array([[1.0, 0.8, 0.6], [0.8, 1.0, 0.4], [0.6, 0.4, 1.0]])
 
 
 # Select marginal distributions of Z
 MARGINAL_Z = {
-#    "Z1": ss.bernoulli(p=0.5),
-#    "Z2": ss.poisson(mu=5.0),
+    #    "Z1": ss.bernoulli(p=0.5),
+    #    "Z2": ss.poisson(mu=5.0),
     "Z1": ss.norm(loc=0, scale=1),
     "Z2": ss.norm(loc=0, scale=1),
 }
@@ -23,8 +19,8 @@ MARGINAL_Z = {
 N = 2000
 TREATMENT_TYPE = "C"
 OUTCOME_TYPE = "C"
-PROP_SCORE_WEIGHTS = [3, -3]  # Check propscore weights are of same dim as Z
-PROP_SCORE_WEIGHTS = [0, -0]  # Check propscore weights are of same dim as Z
+PROP_SCORE_WEIGHTS = [6, 6]  # Check propscore weights are of same dim as Z
+# PROP_SCORE_WEIGHTS = [0, -0]  # Check propscore weights are of same dim as Z
 OUTCOME_WEIGHTS = [1, 1]
 
 
