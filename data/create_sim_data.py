@@ -19,7 +19,7 @@ MARGINAL_Z = {
 N = 2000
 TREATMENT_TYPE = "C"
 OUTCOME_TYPE = "C"
-PROP_SCORE_WEIGHTS = [6, 6]  # Check propscore weights are of same dim as Z
+PROP_SCORE_WEIGHTS = [2, 2]  # Check propscore weights are of same dim as Z
 # PROP_SCORE_WEIGHTS = [0, -0]  # Check propscore weights are of same dim as Z
 OUTCOME_WEIGHTS = [1, 1]
 
@@ -110,7 +110,6 @@ def sample_outcome(
     """
     treatment = treatment.reshape(-1, 1)
     treatment = np.concatenate((np.ones((N, 1)), treatment), axis=1)
-    print(treatment[:5])
     if outcome_type == "D":
         p = 1 / (1 + np.exp(-np.dot(treatment, outcome_weights)))
         outcome = ss.binom(1, p).ppf(outcome_quantiles)
