@@ -92,6 +92,8 @@ def train_frugal_flow(
     u_z: ArrayLike,  # impose discrete
     optimizer: optax.GradientTransformation | None = None,
     RQS_knots: int = 8,
+    nn_depth: int = 1,
+    nn_width: int = 50,
     show_progress: bool = True,
     learning_rate: float = 5e-4,
     max_epochs: int = 100,
@@ -122,6 +124,8 @@ def train_frugal_flow(
             transformer=transformer,
             invert=True,
             cond_dim_mask=cond_dim,
+            nn_depth=nn_depth,
+            nn_width=nn_width,
             # cond_dim_nomask=x.shape[1],
             # cond_dim=x.shape[1],
         )
