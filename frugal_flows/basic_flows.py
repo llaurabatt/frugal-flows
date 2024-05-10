@@ -94,6 +94,7 @@ def masked_autoregressive_flow_first_uniform(
     nn_depth: int = 1,
     nn_activation: Callable = jnn.relu,
     invert: bool = True,
+    stop_grad_until: int | None = None,
 ) -> Transformed:
     """Masked autoregressive flow.
 
@@ -138,6 +139,7 @@ def masked_autoregressive_flow_first_uniform(
             nn_width=nn_width,
             nn_depth=nn_depth,
             nn_activation=nn_activation,
+            stop_grad_until=stop_grad_until,
         )
         # list_bijections.append(MAF_bijection)
         # bijection = Concatenate(list_bijections)

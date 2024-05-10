@@ -14,6 +14,7 @@ from flowjax.bijections.utils import Identity
 from flowjax.distributions import Transformed, Uniform, _StandardUniform
 from flowjax.flows import masked_autoregressive_flow
 from flowjax.train import fit_to_data
+from flowjax.utils import get_ravelled_pytree_constructor
 from flowjax.wrappers import NonTrainable
 from jaxtyping import ArrayLike
 
@@ -100,6 +101,7 @@ def train_frugal_flow(
     max_patience: int = 5,
     batch_size: int = 100,
     condition: ArrayLike | None = None,
+    stop_grad_until_active: bool = False,
 ):
     nvars = u_z.shape[1]
     key, subkey = jr.split(key)
@@ -116,6 +118,10 @@ def train_frugal_flow(
     base_dist = Uniform(-jnp.ones(nvars + 1), jnp.ones(nvars + 1))
 
     transformer = RationalQuadraticSpline(knots=RQS_knots, interval=1)
+    if stop_grad_until_active:
+        _, stop_grad_until = get_ravelled_pytree_constructor(transformer)
+    else:
+        stop_grad_until = None
 
     frugal_flow = (
         masked_autoregressive_flow_first_uniform(  # masked_autoregressive_flow(
@@ -126,6 +132,7 @@ def train_frugal_flow(
             cond_dim_mask=cond_dim,
             nn_depth=nn_depth,
             nn_width=nn_width,
+            stop_grad_until=stop_grad_until,
             # cond_dim_nomask=x.shape[1],
             # cond_dim=x.shape[1],
         )
