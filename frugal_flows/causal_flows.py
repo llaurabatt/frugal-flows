@@ -133,7 +133,7 @@ def train_frugal_flow(
             cond_dim_mask=cond_dim,
             nn_depth=nn_depth,
             nn_width=nn_width,
-            flow_layers=flow_layers
+            flow_layers=flow_layers,
             stop_grad_until=stop_grad_until,
             # cond_dim_nomask=x.shape[1],
             # cond_dim=x.shape[1],
