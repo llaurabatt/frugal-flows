@@ -80,7 +80,7 @@ class RationalQuadraticSplineCond(AbstractBijection):
         # avoid numerical precision issues transforming from in -> out of bounds
         y = jnp.clip(y, -self.interval, self.interval)
         if condition is not None:
-            return jnp.where(in_bounds, y, x) + self.ate * condition
+            return jnp.where(in_bounds, y, x) + self.ate * condition[0]
         else:
             return jnp.where(in_bounds, y, x)
 
@@ -92,7 +92,7 @@ class RationalQuadraticSplineCond(AbstractBijection):
     def inverse(self, y, condition=None):
         # Following notation from the paper
         if condition is not None:
-            y = y - self.ate * condition
+            y = y - self.ate * condition[0]
         x_pos, y_pos, derivatives = self.x_pos, self.y_pos, self.derivatives
         in_bounds = jnp.logical_and(y >= -self.interval, y <= self.interval)
         y_robust = jnp.where(in_bounds, y, 0)  # To avoid nans
@@ -122,7 +122,7 @@ class RationalQuadraticSplineCond(AbstractBijection):
         """The derivative dy/dx of the forward transformation."""
         # Following notation from the paper (eq. 5)
         if condition is not None:
-            x = x - self.ate * condition
+            x = x - self.ate * condition[0]
         x_pos, y_pos, derivatives = self.x_pos, self.y_pos, self.derivatives
         in_bounds = jnp.logical_and(x >= -self.interval, x <= self.interval)
         x_robust = jnp.where(in_bounds, x, 0)  # To avoid nans
