@@ -91,7 +91,12 @@ def generate_uz_samples(Z_disc=None, Z_cont=None, use_marginal_flow=False, seed=
         uz_disc_samples = marg_flow['u_z_discr']
     else:
         if use_marginal_flow:
-            pass
+            cont_marg_flow = get_independent_quantiles(
+                key = subkeys[0],
+                z_cont=Z_cont,
+                **frugal_flow_hyperparams
+            )
+            uz_cont_samples = cont_marg_flow['u_z_cont']
         else:
             uz_cont_samples = calculate_ecdf(Z_cont)
         disc_marg_flow = get_independent_quantiles(
