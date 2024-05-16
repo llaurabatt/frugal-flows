@@ -2,6 +2,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jr
+import numpy as np
 import optax
 from flowjax.bijections import (
     Affine,
@@ -326,17 +327,31 @@ def get_independent_quantiles(
         if return_z_cont_flow:
             res["z_cont_flow"] = z_cont_flow
 
+    def rankdata(z_disc):
+        z_disc_ordered = []
+        z_rank_mapping = {}
+        for d in range(z_disc.shape[1]):
+            z_disc_d = z_disc[:, d]
+            unique_z_disc_d = jnp.unique(z_disc_d)
+            rank_mapping = {k: v for k, v in zip(np.array(unique_z_disc_d), np.arange(len(unique_z_disc_d)))}
+            z_disc_new = jnp.array([rank_mapping[i] for i in np.array(z_disc_d)])
+            z_disc_ordered.append(z_disc_new)
+            z_rank_mapping[d] = rank_mapping
+        return jnp.vstack(z_disc_ordered).T, z_rank_mapping
+
     if z_discr is not None:
-        n_discr = z_discr.shape[1]
-        keys = jr.split(key, n_discr)
+        z_discr_ordered, z_discr_rank_mapping = rankdata(z_discr)
+        n_discr_ordered = z_discr_ordered.shape[1]
+        keys = jr.split(key, n_discr_ordered)
         vmapped_get_discrete_quantiles = jax.vmap(
             univariate_discrete_cdf, in_axes=(0, 1, None)
         )
         u_z_discr_T, z_discr_empirical_cdf_long = vmapped_get_discrete_quantiles(
-            keys, z_discr, len(jnp.unique(z_discr))
+            keys, z_discr_ordered, len(jnp.unique(z_discr))
         )
 
         res["z_discr_empirical_cdf_long"] = z_discr_empirical_cdf_long
         res["u_z_discr"] = u_z_discr_T.T
+        res["z_discr_rank_mapping"] = z_discr_rank_mapping
 
     return res
