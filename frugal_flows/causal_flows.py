@@ -103,6 +103,7 @@ def train_frugal_flow(
     max_patience: int = 5,
     batch_size: int = 100,
     condition: ArrayLike | None = None,
+    mask_condition: bool = True,
     stop_grad_until_active: bool = False,
 ):
     nvars = u_z.shape[1]
@@ -112,6 +113,13 @@ def train_frugal_flow(
         cond_dim = None
     else:
         cond_dim = condition.shape[1]
+    if mask_condition:
+        cond_dim_mask = cond_dim
+        cond_dim_nomask = None
+    else:
+        cond_dim_mask = None
+        cond_dim_nomask = cond_dim
+
     list_bijections = [
         UnivariateNormalCDF(ate=5.0, scale=2.0, const=5.0, cond_dim=cond_dim)
     ] + [Identity(())] * nvars
@@ -131,7 +139,8 @@ def train_frugal_flow(
             base_dist=base_dist,
             transformer=transformer,
             invert=True,
-            cond_dim_mask=cond_dim,
+            cond_dim_mask=cond_dim_mask,
+            cond_dim_nomask=cond_dim_nomask,
             nn_depth=nn_depth,
             nn_width=nn_width,
             flow_layers=flow_layers,
@@ -196,7 +205,7 @@ def independent_continuous_marginal_flow(
     nn_depth: int = 1,
     show_progress: bool = True,
     learning_rate: float = 5e-4,
-    max_epochs: int = 100,    
+    max_epochs: int = 100,
     max_patience: int = 5,
     batch_size: int = 100,
     val_prop: float = 0.1,
@@ -214,7 +223,7 @@ def independent_continuous_marginal_flow(
         transformer=transformer,
         flow_layers=flow_layers,
         nn_width=nn_width,
-        nn_depth=nn_depth
+        nn_depth=nn_depth,
     )  # Support on [-1, 1]
 
     flow = Transformed(flow, Invert(Tanh(flow.shape)))  # Unbounded support
