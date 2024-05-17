@@ -16,6 +16,7 @@ from frugal_flows.bijections import UnivariateNormalCDF
 
 from data.create_sim_data import generate_data_samples
 import data.template_causl_simulations as causl_py
+import wandb
 
 # Activate automatic conversion of rpy2 objects to pandas objects
 pandas2ri.activate()
@@ -146,13 +147,17 @@ def frugal_fitting(X, Y, use_marginal_flow=False, Z_disc=None, Z_cont=None, seed
         **frugal_flow_hyperparams
     )
     causal_margin = frugal_flow.bijection.bijections[-1].bijection.bijections[0]
-    return {
+    min_loss = jnp.min(jnp.array(losses['val']))
+    output = {
         'frugal_flow': frugal_flow,
         'losses': losses,
         'causal_margin': causal_margin,
         'uz_disc': uz_disc_samples,
-        'uz_cont': uz_cont_samples
+        'uz_cont': uz_cont_samples,
+        'val_loss': min_loss,
     }
+    wandb.log(data={'val_loss': min_loss})
+    return output, min_loss
 
 def run_simulations(data_generating_function: callable, seed: int, num_samples: int, num_iter: int, causal_params: list, hyperparams_dict: dict) -> pd.DataFrame:
     """
