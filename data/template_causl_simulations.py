@@ -14,7 +14,6 @@ from rpy2.robjects.packages import SignatureTranslatedAnonymousPackage
 from frugal_flows.causal_flows import independent_continuous_marginal_flow, get_independent_quantiles, train_frugal_flow
 from frugal_flows.bijections import UnivariateNormalCDF
 
-from data.create_sim_data import generate_data_samples
 import data.template_causl_simulations as causl_py
 import wandb
 
