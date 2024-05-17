@@ -657,7 +657,7 @@ def univariate_discrete_cdf(
 
     uniforms = jr.uniform(key, (n_samples,))
     vmapped_uniform_shift = jax.vmap(uniform_shift)
-    u_z_discr = vmapped_uniform_shift(uniforms, z_discr)
+    u_z_discr = vmapped_uniform_shift(uniforms, z_discr.flatten())
 
     return u_z_discr, z_discr_empirical_cdf_long
 
