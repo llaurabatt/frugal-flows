@@ -33,6 +33,9 @@ def train_copula_flow(
     u_z: ArrayLike,  # impose discrete
     optimizer: optax.GradientTransformation | None = None,
     RQS_knots: int = 8,
+    nn_depth: int = 1,
+    nn_width: int = 50,
+    flow_layers: int = 4,
     show_progress: bool = True,
     learning_rate: float = 5e-4,
     max_epochs: int = 100,
@@ -50,6 +53,9 @@ def train_copula_flow(
         key=subkey,
         base_dist=base_dist,
         transformer=transformer,
+        nn_depth=nn_depth,
+        nn_width=nn_width,
+        flow_layers=flow_layers,
     )  # Support on [-1, 1]
 
     copula_flow = Transformed(
@@ -402,7 +408,6 @@ def train_frugal_flow_gaussian(
     ] + [Identity(())] * nvars
 
     marginal_transform = Stack(list_bijections)
-
     base_dist = Uniform(-jnp.ones(nvars + 1), jnp.ones(nvars + 1))
 
     transformer = RationalQuadraticSpline(knots=RQS_knots, interval=1)
