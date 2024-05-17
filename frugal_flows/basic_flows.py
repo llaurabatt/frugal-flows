@@ -11,6 +11,7 @@ from flowjax.bijections import (
     Invert,
     Loc,
     Permute,
+    RationalQuadraticSpline,
     Scan,
     SoftPlus,
 )
@@ -18,6 +19,7 @@ from flowjax.distributions import AbstractDistribution, Transformed
 from flowjax.flows import _add_default_permute
 from flowjax.wrappers import BijectionReparam, NonTrainable
 from jax import Array
+from jax.typing import ArrayLike
 
 from frugal_flows.bijections import (
     MaskedAutoregressiveFirstUniform,
@@ -291,3 +293,34 @@ def masked_autoregressive_flow_masked_cond(
     layers = eqx.filter_vmap(make_layer)(keys)
     bijection = Invert(Scan(layers)) if invert else Scan(layers)
     return Transformed(base_dist, bijection)
+
+
+def masked_autoregressive_bijection_masked_condition(
+    key: jr.PRNGKey,
+    dim: ArrayLike,
+    condition: ArrayLike,
+    RQS_knots: int = 8,
+    nn_depth: int = 1,
+    nn_width: int = 50,
+    flow_layers: int = 4,
+):
+    invert = True
+    transformer = RationalQuadraticSpline(knots=RQS_knots, interval=1)
+
+    def make_layer(key):
+        bij_key, perm_key = jr.split(key)
+        bijection = MaskedAutoregressiveMaskedCond(
+            key=bij_key,
+            transformer=transformer,
+            dim=dim,
+            cond_dim_mask=condition.shape[1],
+            nn_width=nn_width,
+            nn_depth=nn_depth,
+        )
+        return _add_default_permute(bijection, dim, perm_key)
+
+    keys = jr.split(key, flow_layers)
+    layers = eqx.filter_vmap(make_layer)(keys)
+    maf_bijection = Invert(Scan(layers)) if invert else Scan(layers)
+
+    return maf_bijection

@@ -6,6 +6,7 @@ import numpy as np
 import optax
 from flowjax.bijections import (
     Affine,
+    Concatenate,
     Invert,
     RationalQuadraticSpline,
     Stack,
@@ -20,10 +21,11 @@ from flowjax.wrappers import NonTrainable
 from jaxtyping import ArrayLike
 
 from frugal_flows.basic_flows import (
+    masked_autoregressive_bijection_masked_condition,
     masked_autoregressive_flow_first_uniform,
     masked_independent_flow,
 )
-from frugal_flows.bijections import UnivariateNormalCDF
+from frugal_flows.bijections import LocCond, UnivariateNormalCDF
 
 
 def train_copula_flow(
@@ -88,6 +90,382 @@ def train_copula_flow(
     return copula_flow, losses
 
 
+def train_frugal_flow_location_translation(
+    key: jr.PRNGKey,
+    y: ArrayLike,
+    u_z: ArrayLike,  # impose discrete
+    optimizer: optax.GradientTransformation | None = None,
+    RQS_knots: int = 8,
+    nn_depth: int = 1,
+    nn_width: int = 50,
+    flow_layers: int = 4,
+    show_progress: bool = True,
+    learning_rate: float = 5e-4,
+    max_epochs: int = 100,
+    max_patience: int = 5,
+    batch_size: int = 100,
+    condition: ArrayLike | None = None,
+    mask_condition: bool = True,
+    stop_grad_until_active: bool = False,
+    causal_model_args: dict | None = None,
+):
+    nvars = u_z.shape[1]
+
+    if condition is None:
+        cond_dim = None
+    else:
+        cond_dim = condition.shape[1]
+    if mask_condition:
+        cond_dim_mask = cond_dim
+        cond_dim_nomask = None
+    else:
+        cond_dim_mask = None
+        cond_dim_nomask = cond_dim
+
+    list_bijections_affine = [Identity((1,))] + [
+        Invert(Affine(loc=-jnp.ones(nvars), scale=jnp.ones(nvars) * 2))
+    ]
+    bijections_affine = Concatenate(list_bijections_affine)
+
+    key, subkey = jr.split(key)
+    ate_maf_bijection = masked_autoregressive_bijection_masked_condition(
+        key=subkey,
+        dim=1,
+        condition=condition,
+        RQS_knots=causal_model_args["RQS_knots"],
+        nn_depth=causal_model_args["nn_depth"],
+        nn_width=causal_model_args["nn_width"],
+        flow_layers=causal_model_args["flow_layers"],
+    )
+
+    list_bijections_ate_maf = [ate_maf_bijection] + [Identity((1,))] * nvars
+    bijections_ate_maf = Concatenate(list_bijections_ate_maf)
+
+    list_bijections_tanh = [Invert(Tanh(()))] + [Identity(())] * nvars
+    bijections_tanh = Stack(list_bijections_tanh)
+
+    list_bijections_loccond = [LocCond(ate=causal_model_args["ate"])] + [
+        Identity(())
+    ] * nvars
+    bijections_loccond = Stack(list_bijections_loccond)
+
+    base_dist = Uniform(-jnp.ones(nvars + 1), jnp.ones(nvars + 1))
+
+    transformer = RationalQuadraticSpline(knots=RQS_knots, interval=1)
+    if stop_grad_until_active:
+        _, stop_grad_until = get_ravelled_pytree_constructor(transformer)
+    else:
+        stop_grad_until = None
+
+    key, subkey = jr.split(key)
+    frugal_flow = masked_autoregressive_flow_first_uniform(
+        key=subkey,
+        base_dist=base_dist,
+        transformer=transformer,
+        invert=True,
+        cond_dim_mask=cond_dim_mask,
+        cond_dim_nomask=cond_dim_nomask,
+        nn_depth=nn_depth,
+        nn_width=nn_width,
+        flow_layers=flow_layers,
+        stop_grad_until=stop_grad_until,
+    )  # Support on [-1, 1]
+
+    frugal_flow = Transformed(
+        frugal_flow,
+        bijections_affine,
+    )
+
+    frugal_flow = Transformed(
+        frugal_flow,
+        bijections_ate_maf,
+    )
+
+    frugal_flow = Transformed(
+        frugal_flow,
+        bijections_tanh,
+    )
+    frugal_flow = Transformed(
+        frugal_flow,
+        bijections_loccond,
+    )
+    frugal_flow = frugal_flow.merge_transforms()
+    frugal_flow = eqx.tree_at(
+        where=lambda frugal_flow: frugal_flow.bijection.bijections[-4],
+        pytree=frugal_flow,
+        replace_fn=NonTrainable,
+    )
+
+    frugal_flow = eqx.tree_at(
+        where=lambda frugal_flow: frugal_flow.bijection.bijections[0],
+        pytree=frugal_flow,
+        replace_fn=NonTrainable,
+    )
+
+    key, subkey = jr.split(key)
+
+    # Train
+    key, subkey = jr.split(key)
+    frugal_flow, losses = fit_to_data(
+        key=subkey,
+        dist=frugal_flow,
+        x=jnp.hstack([y, u_z]),
+        condition=condition,
+        optimizer=optimizer,
+        show_progress=show_progress,
+        learning_rate=learning_rate,
+        max_epochs=max_epochs,
+        max_patience=max_patience,
+        batch_size=batch_size,
+    )
+
+    return frugal_flow, losses
+
+
+def train_frugal_flow_flexible_discrete(
+    key: jr.PRNGKey,
+    y: ArrayLike,
+    u_z: ArrayLike,  # impose discrete
+    optimizer: optax.GradientTransformation | None = None,
+    RQS_knots: int = 8,
+    nn_depth: int = 1,
+    nn_width: int = 50,
+    flow_layers: int = 4,
+    show_progress: bool = True,
+    learning_rate: float = 5e-4,
+    max_epochs: int = 100,
+    max_patience: int = 5,
+    batch_size: int = 100,
+    condition: ArrayLike | None = None,
+    mask_condition: bool = True,
+    stop_grad_until_active: bool = False,
+    causal_model_args: dict | None = None,
+):
+    nvars = u_z.shape[1]
+
+    key, subkey = jr.split(key)
+    outcome, _ = univariate_discrete_cdf(
+        key=subkey, z_discr=y.flatten(), max_unique_z_discr_size=len(jnp.unique(y))
+    )
+    outcome = jnp.expand_dims(outcome, axis=1)
+
+    if condition is None:
+        cond_dim = None
+    else:
+        cond_dim = condition.shape[1]
+    if mask_condition:
+        cond_dim_mask = cond_dim
+        cond_dim_nomask = None
+    else:
+        cond_dim_mask = None
+        cond_dim_nomask = cond_dim
+
+    list_bijections_affine = [Identity((1,))] + [
+        Invert(Affine(loc=-jnp.ones(nvars), scale=jnp.ones(nvars) * 2))
+    ]
+    bijections_affine = Concatenate(list_bijections_affine)
+
+    key, subkey = jr.split(key)
+    ate_maf_bijection = masked_autoregressive_bijection_masked_condition(
+        key=subkey,
+        dim=1,
+        condition=condition,
+        RQS_knots=causal_model_args["RQS_knots"],
+        nn_depth=causal_model_args["nn_depth"],
+        nn_width=causal_model_args["nn_width"],
+        flow_layers=causal_model_args["flow_layers"],
+    )
+
+    list_bijections_ate_maf = [ate_maf_bijection] + [Identity((1,))] * nvars
+    bijections_ate_maf = Concatenate(list_bijections_ate_maf)
+
+    list_bijections_affine_output = [
+        Invert(Affine(loc=-jnp.ones(1), scale=jnp.ones(1) * 2))
+    ] + [Identity((nvars,))]
+    bijections_affine_output = Concatenate(list_bijections_affine_output)
+
+    base_dist = Uniform(-jnp.ones(nvars + 1), jnp.ones(nvars + 1))
+
+    transformer = RationalQuadraticSpline(knots=RQS_knots, interval=1)
+    if stop_grad_until_active:
+        _, stop_grad_until = get_ravelled_pytree_constructor(transformer)
+    else:
+        stop_grad_until = None
+
+    key, subkey = jr.split(key)
+    frugal_flow = masked_autoregressive_flow_first_uniform(
+        key=subkey,
+        base_dist=base_dist,
+        transformer=transformer,
+        invert=True,
+        cond_dim_mask=cond_dim_mask,
+        cond_dim_nomask=cond_dim_nomask,
+        nn_depth=nn_depth,
+        nn_width=nn_width,
+        flow_layers=flow_layers,
+        stop_grad_until=stop_grad_until,
+    )  # Support on [-1, 1]
+
+    frugal_flow = Transformed(
+        frugal_flow,
+        bijections_affine,
+    )
+
+    frugal_flow = Transformed(
+        frugal_flow,
+        bijections_ate_maf,
+    )
+
+    frugal_flow = Transformed(
+        frugal_flow,
+        bijections_affine_output,
+    )
+
+    frugal_flow = frugal_flow.merge_transforms()
+    frugal_flow = eqx.tree_at(
+        where=lambda frugal_flow: frugal_flow.bijection.bijections[-3],
+        pytree=frugal_flow,
+        replace_fn=NonTrainable,
+    )
+
+    frugal_flow = eqx.tree_at(
+        where=lambda frugal_flow: frugal_flow.bijection.bijections[-1],
+        pytree=frugal_flow,
+        replace_fn=NonTrainable,
+    )
+
+    frugal_flow = eqx.tree_at(
+        where=lambda frugal_flow: frugal_flow.bijection.bijections[0],
+        pytree=frugal_flow,
+        replace_fn=NonTrainable,
+    )
+
+    key, subkey = jr.split(key)
+
+    # Train
+    key, subkey = jr.split(key)
+    frugal_flow, losses = fit_to_data(
+        key=subkey,
+        dist=frugal_flow,
+        x=jnp.hstack([outcome, u_z]),
+        condition=condition,
+        optimizer=optimizer,
+        show_progress=show_progress,
+        learning_rate=learning_rate,
+        max_epochs=max_epochs,
+        max_patience=max_patience,
+        batch_size=batch_size,
+    )
+
+    return frugal_flow, losses
+
+
+def train_frugal_flow_gaussian(
+    key: jr.PRNGKey,
+    y: ArrayLike,
+    u_z: ArrayLike,  # impose discrete
+    optimizer: optax.GradientTransformation | None = None,
+    RQS_knots: int = 8,
+    nn_depth: int = 1,
+    nn_width: int = 50,
+    flow_layers: int = 4,
+    show_progress: bool = True,
+    learning_rate: float = 5e-4,
+    max_epochs: int = 100,
+    max_patience: int = 5,
+    batch_size: int = 100,
+    condition: ArrayLike | None = None,
+    mask_condition: bool = True,
+    stop_grad_until_active: bool = False,
+    causal_model_args: dict | None = None,
+):
+    nvars = u_z.shape[1]
+
+    if condition is None:
+        cond_dim = None
+    else:
+        cond_dim = condition.shape[1]
+    if mask_condition:
+        cond_dim_mask = cond_dim
+        cond_dim_nomask = None
+    else:
+        cond_dim_mask = None
+        cond_dim_nomask = cond_dim
+
+    list_bijections = [
+        UnivariateNormalCDF(
+            ate=causal_model_args["ate"],
+            scale=causal_model_args["scale"],
+            const=causal_model_args["const"],
+            cond_dim=cond_dim,
+        )
+    ] + [Identity(())] * nvars
+
+    marginal_transform = Stack(list_bijections)
+
+    base_dist = Uniform(-jnp.ones(nvars + 1), jnp.ones(nvars + 1))
+
+    transformer = RationalQuadraticSpline(knots=RQS_knots, interval=1)
+    if stop_grad_until_active:
+        _, stop_grad_until = get_ravelled_pytree_constructor(transformer)
+    else:
+        stop_grad_until = None
+
+    key, subkey = jr.split(key)
+    frugal_flow = masked_autoregressive_flow_first_uniform(
+        key=subkey,
+        base_dist=base_dist,
+        transformer=transformer,
+        invert=True,
+        cond_dim_mask=cond_dim_mask,
+        cond_dim_nomask=cond_dim_nomask,
+        nn_depth=nn_depth,
+        nn_width=nn_width,
+        flow_layers=flow_layers,
+        stop_grad_until=stop_grad_until,
+    )  # Support on [-1, 1]
+
+    frugal_flow = Transformed(
+        frugal_flow,
+        Invert(Affine(loc=-jnp.ones(nvars + 1), scale=jnp.ones(nvars + 1) * 2)),
+    )
+    frugal_flow = Transformed(
+        frugal_flow,
+        Invert(marginal_transform),
+    )
+    frugal_flow = frugal_flow.merge_transforms()
+    frugal_flow = eqx.tree_at(
+        where=lambda frugal_flow: frugal_flow.bijection.bijections[-2],
+        pytree=frugal_flow,
+        replace_fn=NonTrainable,
+    )
+
+    frugal_flow = eqx.tree_at(
+        where=lambda frugal_flow: frugal_flow.bijection.bijections[0],
+        pytree=frugal_flow,
+        replace_fn=NonTrainable,
+    )
+
+    key, subkey = jr.split(key)
+
+    # Train
+    key, subkey = jr.split(key)
+    frugal_flow, losses = fit_to_data(
+        key=subkey,
+        dist=frugal_flow,
+        x=jnp.hstack([y, u_z]),
+        condition=condition,
+        optimizer=optimizer,
+        show_progress=show_progress,
+        learning_rate=learning_rate,
+        max_epochs=max_epochs,
+        max_patience=max_patience,
+        batch_size=batch_size,
+    )
+
+    return frugal_flow, losses
+
+
 def train_frugal_flow(
     key: jr.PRNGKey,
     y: ArrayLike,
@@ -105,92 +483,79 @@ def train_frugal_flow(
     condition: ArrayLike | None = None,
     mask_condition: bool = True,
     stop_grad_until_active: bool = False,
+    causal_model="gaussian",
+    causal_model_args: dict | None = None,
 ):
-    nvars = u_z.shape[1]
-    key, subkey = jr.split(key)
-
-    if condition is None:
-        cond_dim = None
-    else:
-        cond_dim = condition.shape[1]
-    if mask_condition:
-        cond_dim_mask = cond_dim
-        cond_dim_nomask = None
-    else:
-        cond_dim_mask = None
-        cond_dim_nomask = cond_dim
-
-    list_bijections = [
-        UnivariateNormalCDF(ate=5.0, scale=2.0, const=5.0, cond_dim=cond_dim)
-    ] + [Identity(())] * nvars
-    marginal_transform = Stack(list_bijections)
-
-    base_dist = Uniform(-jnp.ones(nvars + 1), jnp.ones(nvars + 1))
-
-    transformer = RationalQuadraticSpline(knots=RQS_knots, interval=1)
-    if stop_grad_until_active:
-        _, stop_grad_until = get_ravelled_pytree_constructor(transformer)
-    else:
-        stop_grad_until = None
-
-    frugal_flow = (
-        masked_autoregressive_flow_first_uniform(  # masked_autoregressive_flow(
-            key=subkey,
-            base_dist=base_dist,
-            transformer=transformer,
-            invert=True,
-            cond_dim_mask=cond_dim_mask,
-            cond_dim_nomask=cond_dim_nomask,
+    valid_causal_models = [
+        "gaussian",
+        "flexible_discrete_output",
+        "location_translation",
+    ]
+    if causal_model == "gaussian":
+        frugal_flow, losses = train_frugal_flow_gaussian(
+            key=key,
+            y=y,
+            u_z=u_z,  # impose discrete
+            optimizer=optimizer,
+            RQS_knots=RQS_knots,
             nn_depth=nn_depth,
             nn_width=nn_width,
             flow_layers=flow_layers,
-            stop_grad_until=stop_grad_until,
-            # cond_dim_nomask=x.shape[1],
-            # cond_dim=x.shape[1],
+            show_progress=show_progress,
+            learning_rate=learning_rate,
+            max_epochs=max_epochs,
+            max_patience=max_patience,
+            batch_size=batch_size,
+            condition=condition,
+            mask_condition=mask_condition,
+            stop_grad_until_active=stop_grad_until_active,
+            causal_model_args=causal_model_args,
         )
-    )  # Support on [-1, 1]
 
-    frugal_flow = Transformed(
-        frugal_flow,
-        Invert(Affine(loc=-jnp.ones(nvars + 1), scale=jnp.ones(nvars + 1) * 2)),
-    )
+    elif causal_model == "flexible_discrete_output":
+        frugal_flow, losses = train_frugal_flow_flexible_discrete(
+            key=key,
+            y=y,
+            u_z=u_z,  # impose discrete
+            optimizer=optimizer,
+            RQS_knots=RQS_knots,
+            nn_depth=nn_depth,
+            nn_width=nn_width,
+            flow_layers=flow_layers,
+            show_progress=show_progress,
+            learning_rate=learning_rate,
+            max_epochs=max_epochs,
+            max_patience=max_patience,
+            batch_size=batch_size,
+            condition=condition,
+            mask_condition=mask_condition,
+            stop_grad_until_active=stop_grad_until_active,
+            causal_model_args=causal_model_args,
+        )
 
-    frugal_flow = Transformed(
-        frugal_flow,
-        Invert(marginal_transform),
-    )
+    elif causal_model == "location_translation":
+        frugal_flow, losses = train_frugal_flow_location_translation(
+            key=key,
+            y=y,
+            u_z=u_z,
+            optimizer=optimizer,
+            RQS_knots=RQS_knots,
+            nn_depth=nn_depth,
+            nn_width=nn_width,
+            flow_layers=flow_layers,
+            show_progress=show_progress,
+            learning_rate=learning_rate,
+            max_epochs=max_epochs,
+            max_patience=max_patience,
+            batch_size=batch_size,
+            condition=condition,
+            mask_condition=mask_condition,
+            stop_grad_until_active=stop_grad_until_active,
+            causal_model_args=causal_model_args,
+        )
 
-    frugal_flow = frugal_flow.merge_transforms()
-
-    assert isinstance(frugal_flow.base_dist, _StandardUniform)
-
-    frugal_flow = eqx.tree_at(
-        where=lambda frugal_flow: frugal_flow.bijection.bijections[0],
-        pytree=frugal_flow,
-        replace_fn=NonTrainable,
-    )
-
-    frugal_flow = eqx.tree_at(
-        where=lambda frugal_flow: frugal_flow.bijection.bijections[-2],
-        pytree=frugal_flow,
-        replace_fn=NonTrainable,
-    )
-
-    key, subkey = jr.split(key)
-
-    # Train
-    frugal_flow, losses = fit_to_data(
-        key=subkey,
-        dist=frugal_flow,
-        x=jnp.hstack([y, u_z]),
-        condition=condition,
-        optimizer=optimizer,
-        show_progress=show_progress,
-        learning_rate=learning_rate,
-        max_epochs=max_epochs,
-        max_patience=max_patience,
-        batch_size=batch_size,
-    )
+    else:
+        raise ValueError(f"Invalid choice. Please choose from: {valid_causal_models}")
 
     return frugal_flow, losses
 
@@ -342,7 +707,12 @@ def get_independent_quantiles(
         for d in range(z_disc.shape[1]):
             z_disc_d = z_disc[:, d]
             unique_z_disc_d = jnp.unique(z_disc_d)
-            rank_mapping = {k: v for k, v in zip(np.array(unique_z_disc_d), np.arange(len(unique_z_disc_d)))}
+            rank_mapping = {
+                k: v
+                for k, v in zip(
+                    np.array(unique_z_disc_d), np.arange(len(unique_z_disc_d))
+                )
+            }
             z_disc_new = jnp.array([rank_mapping[i] for i in np.array(z_disc_d)])
             z_disc_ordered.append(z_disc_new)
             z_rank_mapping[d] = rank_mapping

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
-
 import jax.numpy as jnp
 from flowjax.bijections.bijection import AbstractBijection
 from flowjax.utils import arraylike_to_array
@@ -25,15 +23,21 @@ class LocCond(AbstractBijection):
     """
 
     shape: tuple[int, ...]
-    cond_shape: ClassVar[None] = None
+    # cond_shape: ClassVar[None] = None
+    cond_shape: int | None = None
     ate: Array
 
     def __init__(
         self,
         ate: ArrayLike = 0,
+        cond_dim: ArrayLike = None,
     ):
         self.ate = arraylike_to_array(ate)
         self.shape = self.ate.shape
+        if cond_dim is None:
+            self.cond_shape = None
+        else:
+            self.cond_shape = (cond_dim,)
 
     def transform(self, x, condition=None):
         return x + self.ate * condition[0]
