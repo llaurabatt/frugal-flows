@@ -45,7 +45,6 @@ def sample_outcome(
             f"Only one between frugal flow object and u_yx can be provided for {causal_model} model"
         )
 
-    print(frugal_flow is not None)
     if (
         (u_yx is not None)
         & (frugal_flow is not None)
