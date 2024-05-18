@@ -4,6 +4,7 @@ import equinox as eqx
 import jax.nn as jnn
 import jax.numpy as jnp
 import jax.random as jr
+import optax
 from flowjax.bijections import (
     AbstractBijection,
     Affine,
@@ -14,9 +15,11 @@ from flowjax.bijections import (
     RationalQuadraticSpline,
     Scan,
     SoftPlus,
+    Tanh,
 )
-from flowjax.distributions import AbstractDistribution, Transformed
-from flowjax.flows import _add_default_permute
+from flowjax.distributions import AbstractDistribution, Transformed, Uniform
+from flowjax.flows import _add_default_permute, masked_autoregressive_flow
+from flowjax.train import fit_to_data
 from flowjax.wrappers import BijectionReparam, NonTrainable
 from jax import Array
 from jax.typing import ArrayLike
@@ -27,6 +30,80 @@ from frugal_flows.bijections import (
     MaskedAutoregressiveTransformerCond,
     MaskedIndependent,
 )
+
+
+def univariate_marginal_flow(
+    key: jr.PRNGKey,
+    z_cont: Array,
+    optimizer: optax.GradientTransformation | None = None,
+    RQS_knots: int = 8,
+    flow_layers: int = 8,
+    nn_width: int = 50,
+    nn_depth: int = 1,
+    show_progress: bool = True,
+    learning_rate: float = 5e-4,
+    max_epochs: int = 100,
+    max_patience: int = 5,
+    batch_size: int = 100,
+    val_prop: float = 0.1,
+):
+    if z_cont.ndim == 1:
+        # Reshape one-dimensional array to two dimensions with second dim as 1
+        z_cont = z_cont.reshape(-1, 1)
+    elif z_cont.ndim == 2:
+        if z_cont.shape[1] > 1:
+            raise ValueError(
+                "Univariate input with shape (n_samples,) or (n_samples,1) is required"
+            )
+    else:
+        raise ValueError(
+            "Univariate input with shape (n_samples,) or (n_samples,1) is required"
+        )
+
+    nvars = z_cont.shape[1]
+    assert nvars == 1
+    key, subkey = jr.split(key)
+
+    base_dist = Uniform(-jnp.ones(nvars), jnp.ones(nvars))
+
+    transformer = RationalQuadraticSpline(knots=RQS_knots, interval=1)
+
+    flow = masked_autoregressive_flow(
+        key=subkey,
+        base_dist=base_dist,
+        transformer=transformer,
+        flow_layers=flow_layers,
+        nn_width=nn_width,
+        nn_depth=nn_depth,
+    )  # Support on [-1, 1]
+
+    flow = Transformed(flow, Invert(Tanh(flow.shape)))  # Unbounded support
+
+    flow = flow.merge_transforms()
+
+    flow = eqx.tree_at(
+        where=lambda flow: flow.bijection.bijections[0],
+        pytree=flow,
+        replace_fn=NonTrainable,
+    )
+
+    key, subkey = jr.split(key)
+
+    # Train
+    flow, losses = fit_to_data(
+        key=subkey,
+        dist=flow,
+        x=z_cont,
+        learning_rate=learning_rate,
+        max_patience=max_patience,
+        max_epochs=max_epochs,
+        batch_size=batch_size,
+        show_progress=show_progress,
+        optimizer=optimizer,
+        val_prop=val_prop,
+    )
+
+    return flow, losses
 
 
 def masked_independent_flow(

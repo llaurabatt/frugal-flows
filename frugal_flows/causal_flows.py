@@ -1,3 +1,5 @@
+from functools import partial
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -24,6 +26,7 @@ from frugal_flows.basic_flows import (
     masked_autoregressive_bijection_masked_condition,
     masked_autoregressive_flow_first_uniform,
     masked_independent_flow,
+    univariate_marginal_flow,
 )
 from frugal_flows.bijections import LocCond, UnivariateNormalCDF
 
@@ -694,9 +697,9 @@ def get_independent_quantiles(
     key, subkey = jr.split(key)
 
     if z_cont is not None:
-        z_cont_flow, z_cont_losses = independent_continuous_marginal_flow(
-            key=key,
-            z_cont=z_cont,
+        partial_univariate_marginal_cdf = partial(
+            univariate_marginal_cdf,
+            key=subkey,
             optimizer=optimizer,
             RQS_knots=RQS_knots,
             flow_layers=flow_layers,
@@ -708,13 +711,42 @@ def get_independent_quantiles(
             max_patience=max_patience,
             batch_size=batch_size,
         )
-        z_cont_marginal_cdf = jax.vmap(z_cont_flow.bijection.inverse, in_axes=(0,))
-
-        u_z_cont = z_cont_marginal_cdf(z_cont)
+        u_z_cont = []
+        z_cont_flows = []
+        for i in jnp.arange(z_cont.shape[1]):
+            (
+                u_z_cont_univariate,
+                z_cont_flow_univariate,
+            ) = partial_univariate_marginal_cdf(z_cont=z_cont[:, i])
+            u_z_cont.append(u_z_cont_univariate)
+            z_cont_flows.append(z_cont_flow_univariate)
+        u_z_cont = jnp.hstack(u_z_cont)
         res["u_z_cont"] = u_z_cont
 
         if return_z_cont_flow:
-            res["z_cont_flow"] = z_cont_flow
+            res["z_cont_flows"] = z_cont_flows
+
+        # z_cont_flow, z_cont_losses = independent_continuous_marginal_flow(
+        #     key=key,
+        #     z_cont=z_cont,
+        #     optimizer=optimizer,
+        #     RQS_knots=RQS_knots,
+        #     flow_layers=flow_layers,
+        #     nn_width=nn_width,
+        #     nn_depth=nn_depth,
+        #     show_progress=show_progress,
+        #     learning_rate=learning_rate,
+        #     max_epochs=max_epochs,
+        #     max_patience=max_patience,
+        #     batch_size=batch_size,
+        # )
+        # z_cont_marginal_cdf = jax.vmap(z_cont_flow.bijection.inverse, in_axes=(0,))
+
+        # u_z_cont = z_cont_marginal_cdf(z_cont)
+        # res["u_z_cont"] = u_z_cont
+
+        # if return_z_cont_flow:
+        #     res["z_cont_flow"] = z_cont_flow
 
     def rankdata(z_disc):
         z_disc_ordered = []
@@ -749,3 +781,50 @@ def get_independent_quantiles(
         res["z_discr_rank_mapping"] = z_discr_rank_mapping
 
     return res
+
+
+def univariate_marginal_cdf(
+    key: jr.PRNGKey,
+    z_cont: ArrayLike,
+    optimizer: optax.GradientTransformation | None = None,
+    RQS_knots: int = 8,
+    flow_layers: int = 8,
+    nn_width: int = 50,
+    nn_depth: int = 1,
+    show_progress: bool = True,
+    learning_rate: float = 5e-4,
+    max_epochs: int = 100,
+    max_patience: int = 5,
+    batch_size: int = 100,
+    val_prop: float = 0.1,
+):
+    if z_cont.ndim == 1:
+        # Reshape one-dimensional array to two dimensions with second dim as 1
+        z_cont = z_cont.reshape(-1, 1)
+    elif z_cont.ndim == 2:
+        if z_cont.shape[1] > 1:
+            raise ValueError(
+                "Univariate input with shape (n_samples,) or (n_samples,1) is required"
+            )
+    else:
+        raise ValueError(
+            "Univariate input with shape (n_samples,) or (n_samples,1) is required"
+        )
+
+    z_cont_flow, z_cont_losses = univariate_marginal_flow(
+        key=key,
+        z_cont=z_cont,
+        optimizer=optimizer,
+        RQS_knots=RQS_knots,
+        flow_layers=flow_layers,
+        nn_width=nn_width,
+        nn_depth=nn_depth,
+        show_progress=show_progress,
+        learning_rate=learning_rate,
+        max_epochs=max_epochs,
+        max_patience=max_patience,
+        batch_size=batch_size,
+    )
+    z_cont_marginal_cdf = jax.vmap(z_cont_flow.bijection.inverse, in_axes=(0,))
+    u_z_cont = z_cont_marginal_cdf(z_cont)
+    return u_z_cont, z_cont_flow
