@@ -632,6 +632,16 @@ def univariate_discrete_cdf(
     z_discr: ArrayLike,
     max_unique_z_discr_size: int,
 ):
+    if z_discr.ndim >= 2:
+        _, dim = z_discr.shape
+        if dim > 1:
+            raise ValueError(
+                "input must be 1D with shape (n_samples,) or 2D with shape (n_samples,1)"
+            )
+
+    if (z_discr.dtype != "int64") & (z_discr.dtype != "int32"):
+        raise ValueError("type of input must be integer")
+
     n_samples = z_discr.shape[0]
     pmf_keys, pmf_vals = jnp.unique(
         z_discr, return_counts=True, size=max_unique_z_discr_size
