@@ -12,6 +12,7 @@ dependencies:
   - equinox
   - optax
   - pre-commit
+  - rpy2
   - notebook
   - distrax
   - seaborn
