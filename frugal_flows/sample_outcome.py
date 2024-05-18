@@ -45,6 +45,7 @@ def sample_outcome(
             f"Only one between frugal flow object and u_yx can be provided for {causal_model} model"
         )
 
+    print(frugal_flow is not None)
     if (
         (u_yx is not None)
         & (frugal_flow is not None)
@@ -83,6 +84,7 @@ def sample_outcome(
             flow_fake_condition = None
         else:
             flow_fake_condition = jnp.ones((n_samples, frugal_flow.cond_shape[0]))
+        print(flow_fake_condition)
 
         # verify flow has a compatible structure
 
@@ -173,6 +175,7 @@ def sample_outcome(
                 f"{causal_model} causal_model requires a 'location_translation' pretrained frugal_flow"
             )
 
+        print(flow_fake_condition)
         outcome_samples = location_translation_outcome(
             u_y=corruni_standard,
             causal_condition=causal_condition,
