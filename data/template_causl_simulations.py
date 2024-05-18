@@ -215,9 +215,9 @@ def generate_data_samples(rscript):
     Z_disc = jnp.array(data_xdyc[[col for col in data_xdyc.columns if col.startswith('Zd')]].values).astype(int)
     Z_cont = jnp.array(data_xdyc[[col for col in data_xdyc.columns if col.startswith('Zc')]].values)
     if Z_cont.size == 0:
-        Z_cont = None
+       Z_cont = None
     if Z_disc.size == 0:
-        Z_disc = None
+       Z_disc = None
     X = jnp.array(data_xdyc['X'].values)[:, None]
     Y = jnp.array(data_xdyc['Y'].values)[:, None]
 
