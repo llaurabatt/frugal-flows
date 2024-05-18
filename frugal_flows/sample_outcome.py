@@ -175,7 +175,6 @@ def sample_outcome(
                 f"{causal_model} causal_model requires a 'location_translation' pretrained frugal_flow"
             )
 
-        print(flow_fake_condition)
         outcome_samples = location_translation_outcome(
             u_y=corruni_standard,
             causal_condition=causal_condition,
