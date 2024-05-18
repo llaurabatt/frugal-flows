@@ -36,15 +36,35 @@ def sample_outcome(
     if (u_yx is None) & (frugal_flow is None):
         raise ValueError("Either a frugal flow object or u_yx is required")
 
-    if (u_yx is not None) & (frugal_flow is not None):
-        raise ValueError("Only one between frugal flow object and u_yx can be provided")
+    if (
+        (u_yx is not None)
+        & (frugal_flow is not None)
+        & (causal_model != "location_translation")
+    ):
+        raise ValueError(
+            f"Only one between frugal flow object and u_yx can be provided for {causal_model} model"
+        )
+
+    if (
+        (u_yx is not None)
+        & (frugal_flow is not None)
+        & (causal_model == "location_translation")
+    ):
+        warnings.warn(
+            f"Since both frugal flow object and u_yx are provided to {causal_model} model, u_yx quantiles will be used to sample from the flow object. If you want to fully sample from the flow object, please provide only the frugal flow object."
+        )
 
     if (causal_model == "location_translation") & (frugal_flow is None):
         raise ValueError(
-            "A frugal flow object is required for simulating outcome with location_translation model"
+            f"A frugal flow object is required for simulating outcome with {causal_model} model"
         )
+    if u_yx is not None:
+        assert len(u_yx) == n_samples
+        if (u_yx.min() < 0.0) | (u_yx.max() > 1.0):
+            raise ValueError("u_yx input must be between 0. and 1.")
+        corruni_standard = u_yx
 
-    if frugal_flow is not None:
+    elif frugal_flow is not None:
         flow_dim = frugal_flow.shape[0]
 
         if frugal_flow.cond_shape is None:
@@ -114,12 +134,6 @@ def sample_outcome(
             )
             corruni_standard = (corruni_y / 2) + 0.5
 
-    elif u_yx is not None:
-        assert len(u_yx) == n_samples
-        if (u_yx.min() < 0.0) | (u_yx.max() > 1.0):
-            raise ValueError("u_yx input must be between 0. and 1.")
-        corruni_standard = u_yx
-
     if causal_model == "logistic_regression":
         outcome_samples = logistic_outcome(
             u_y=corruni_standard,
@@ -142,7 +156,7 @@ def sample_outcome(
             )
         except Exception:
             raise ValueError(
-                "location_translation causal_model requires a location_translation pretrained frugal_flow"
+                f"{causal_model} causal_model requires a 'location_translation' pretrained frugal_flow"
             )
 
         outcome_samples = location_translation_outcome(
