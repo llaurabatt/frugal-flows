@@ -50,6 +50,13 @@ def sample_outcome(
         & (frugal_flow is not None)
         & (causal_model == "location_translation")
     ):
+        # produce a flow_fake_condition even if u_yx is provided as it will be used to sample from the flow object
+        flow_dim = frugal_flow.shape[0]
+        if frugal_flow.cond_shape is None:
+            flow_fake_condition = None
+        else:
+            flow_fake_condition = jnp.ones((n_samples, frugal_flow.cond_shape[0]))
+
         warnings.warn(
             f"Since both frugal flow object and u_yx are provided to {causal_model} model, u_yx quantiles will be used to sample from the flow object. If you want to fully sample from the flow object, please provide only the frugal flow object."
         )
