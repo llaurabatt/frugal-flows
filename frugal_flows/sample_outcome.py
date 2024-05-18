@@ -19,6 +19,7 @@ def sample_outcome(
     causal_model: str,
     causal_condition: ArrayLike | None = None,
     causal_cdf: AbstractBijection | None = UnivariateNormalCDF,
+    u_yx: ArrayLike | None = None,
     **treatment_kwargs: dict,
 ):
     valid_causal_models = ["logistic_regression", "causal_cdf", "location_translation"]
@@ -41,6 +42,9 @@ def sample_outcome(
         corruni_minus1_plus1, flow_fake_condition
     )
     corruni_y = corruni[:, 0]
+    if u_yx != None:
+        assert len(u_yx) == n_samples
+        corruni = u_yx
     if affine_to_standard:
         if (corruni_y.min() >= 0.0) & (corruni_y.max() <= 1.0):
             warnings.warn(
