@@ -69,7 +69,12 @@ def sample_outcome(
         assert len(u_yx) == n_samples
         if (u_yx.min() < 0.0) | (u_yx.max() > 1.0):
             raise ValueError("u_yx input must be between 0. and 1.")
-        corruni_standard = u_yx
+        if causal_model == "location_translation":
+            # This model expects the input to be in (-1,1)
+            corruni_standard = (u_yx * 2) - 1
+        else:
+            # This model expects the input to be in (0,1)
+            corruni_standard = u_yx
 
     elif frugal_flow is not None:
         flow_dim = frugal_flow.shape[0]
@@ -131,11 +136,13 @@ def sample_outcome(
         corruni_y = corruni[:, 0]
 
         try:
+            # in this case the flow expects the input to be in (-1,1)
             assert isinstance(
                 frugal_flow.bijection.bijections[2].tree.bijections[0], Identity
             )
             corruni_standard = corruni_y
         except Exception:
+            # in this case the flow expects the input to be in (0,1)
             assert (isinstance(frugal_flow.bijection.bijections[2].tree, Invert)) & (
                 isinstance(frugal_flow.bijection.bijections[2].tree.bijection, Affine)
             )
