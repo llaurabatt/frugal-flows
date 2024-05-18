@@ -116,7 +116,7 @@ def generate_uz_samples(Z_disc=None, Z_cont=None, use_marginal_flow=False, seed=
         'uz_samples': uz_samples
     }
 
-def frugal_fitting(X, Y, use_marginal_flow=False, Z_disc=None, Z_cont=None, seed=0, frugal_flow_hyperparams={}):
+def frugal_fitting(X, Y, use_marginal_flow=False, Z_disc=None, Z_cont=None, seed=0, frugal_flow_hyperparams={}, causal_model=None, causal_model_args={}):
     """
     Fits a frugal flow model to the given data.
 
@@ -143,7 +143,9 @@ def frugal_fitting(X, Y, use_marginal_flow=False, Z_disc=None, Z_cont=None, seed
         y=Y,
         u_z=uz_samples['uz_samples'],
         condition=X,
-        **frugal_flow_hyperparams
+        **frugal_flow_hyperparams,
+        causal_model=causal_model,
+        causal_model_args=causal_model_args
     )
     causal_margin = frugal_flow.bijection.bijections[-1].bijection.bijections[0]
     min_loss = jnp.min(jnp.array(losses['val']))
@@ -155,10 +157,10 @@ def frugal_fitting(X, Y, use_marginal_flow=False, Z_disc=None, Z_cont=None, seed
         'uz_cont': uz_cont_samples,
         'val_loss': min_loss,
     }
-    wandb.log(data={'val_loss': min_loss})
+    # wandb.log(data={'val_loss': min_loss})
     return output, min_loss
 
-def run_simulations(data_generating_function: callable, seed: int, num_samples: int, num_iter: int, causal_params: list, hyperparams_dict: dict) -> pd.DataFrame:
+def run_simulations(data_generating_function: callable, seed: int, num_samples: int, num_iter: int, causal_params: list, hyperparams_dict: dict, causal_model_args: dict) -> pd.DataFrame:
     """
     Run simulations using the provided data generating function.
 
@@ -176,8 +178,11 @@ def run_simulations(data_generating_function: callable, seed: int, num_samples: 
     results = []
     for i in range(num_iter):
         Z_disc, Z_cont, X, Y = data_generating_function(num_samples, seed=seed+i, causal_params=causal_params).values()
-        frugal_fit = causl_py.frugal_fitting(
-            X, Y, Z_cont=Z_cont, Z_disc=Z_disc, seed=seed+i, frugal_flow_hyperparams=hyperparams_dict
+        frugal_fit, losses = causl_py.frugal_fitting(
+            X, Y, Z_cont=Z_cont, Z_disc=Z_disc, seed=seed+i,
+            frugal_flow_hyperparams=hyperparams_dict,
+            causal_model='gaussian',
+            causal_model_args=causal_model_args,
         )
         causal_margin = frugal_fit['causal_margin']
         results.append(np.array([
@@ -185,6 +190,7 @@ def run_simulations(data_generating_function: callable, seed: int, num_samples: 
             causal_margin.const,
             causal_margin.scale
         ]))
+        print(results)
     return pd.DataFrame(np.array(results), columns=causal_param_names)
 
 
@@ -246,17 +252,20 @@ def generate_gaussian_samples(N, causal_params, seed=0):
 def generate_mixed_samples(N, causal_params, seed=0):
     mixed_cont_rscript = f"""
     library(causl)
-    pars <- list(Zc1 = list(beta = 0, phi=1),
-                 Zc2 = list(beta = c(1,1), phi=1),
-                 Zc3 = list(beta = c(1,1), phi=1),
-                 Zc4 = list(beta = c(0,1,1,1), phi=0.5),
-                 X = list(beta = c(0,1,1,1)),
+    pars <- list(Zc1 = list(beta = c(1), phi=1),
+                 Zc2 = list(beta = c(1), phi=1),
+                 Zc3 = list(beta = c(1), phi=1),
+                 Zc4 = list(beta = c(1), phi=1),
+                 X = list(beta = c(-2,1,1,1,1)),
                  Y = list(beta = c({causal_params[0]}, {causal_params[1]}), phi=1),
-                 cop = list(beta=matrix(c(2,1,0.5,1,1,1,1,1,1,1), nrow=1)))
+                 cop = list(beta=matrix(c(0.5,0.3,0.1,0.1,
+                                              0.4,0.1,0.1,
+                                                  0.1,0.1,
+                                                      0.1), nrow=1)))
     
     set.seed({seed})  # for consistency
     fams <- list(c(3,3,3,3),5,1,1)
-    data_samples <- causalSamp({N}, formulas=list(list(Zc1~1, Zc2~Zc1, Zc3~Zc1, Zc4~Zc3+Zc2+Zc1), X~Zc1+Zc2+Zc3, Y~X, ~1), family=fams, pars=pars)
+    data_samples <- causalSamp({N}, formulas=list(list(Zc1~1, Zc2~1, Zc3~1, Zc4~1), X~Zc1+Zc2+Zc3+Zc4, Y~X, ~1), family=fams, pars=pars)
     """
     data = generate_data_samples(mixed_cont_rscript)
     return data
@@ -277,6 +286,72 @@ def generate_discrete_samples(N, causal_params, seed=0):
                                              0.4,0.1,0.1,
                                                  0.1,0.1,
                                                      0.1), nrow=1)))
+    set.seed({seed})
+    data_samples <- rfrugalParam({N}, formulas = forms, family = fams, pars = pars)
+    """
+    data = generate_data_samples(disc_rscript)
+    return data
+
+
+def generate_many_discrete_samples(N, causal_params, seed=0):
+    disc_rscript = f"""
+    library(causl)
+    forms <- list(list(Zc1 ~ 1, Zc2 ~ 1, Zc3 ~ 1, Zc4 ~ 1, Zc5 ~ 1, Zd1 ~ 1, Zd2 ~ 1, Zd3 ~ 1, Zd4 ~ 1, Zd5 ~ 1), X ~ Zc1+Zc2+Zc3+Zc4+Zc5+Zd1+Zd2+Zd3+Zd4+Zd5, Y ~ X, ~ 1)
+    fams <- list(c(1,1,1,1,1,5,5,5,5,5), 5, 1, 1)
+    pars <- list(Zc1 = list(beta=0, phi=1),
+                Zc2 = list(beta=0, phi=1),
+                Zc3 = list(beta=0, phi=1),
+                Zc4 = list(beta=0, phi=1),
+                Zc5 = list(beta=0, phi=1),
+                Zd1 = list(beta=0),
+                Zd2 = list(beta=0),
+                Zd3 = list(beta=0),
+                Zd4 = list(beta=0),
+                Zd5 = list(beta=0),
+                X = list(beta=c(-0.3,0.1,0.2,0.5,-0.2,1,0.3,-0.4,0.7,-0.1,0.9)),
+                Y = list(beta=c({causal_params[0]}, {causal_params[1]}), phi=1),
+                cop = list(beta=matrix(c(0.3,0.4,0.5,0.1,-0.2,-0.7,0.5,-0.4, 0.5,
+                                            -0.3,0.6,-0.3,0.4,-0.4,0.6,0.3,  0.2,
+                                                -0.5,0.2,-0.1,-0.1,0.0,-0.4,-0.4,
+                                                    -0.2,-0.2,-0.5,0.5,0.3,  0.4,
+                                                        -0.1,-0.1,-0.5,-0.6,-0.2,
+                                                             -0.0,0.4,0.2,   0.5,
+                                                                 -0.5,0.4,  -0.4,
+                                                                      0.4,   0.4,
+                                                                             0.4), nrow=1)))
+    set.seed({seed})
+    data_samples <- rfrugalParam({N}, formulas = forms, family = fams, pars = pars)
+    """
+    data = generate_data_samples(disc_rscript)
+    return data
+
+
+def generate_many_discrete_samples_sparse(N, causal_params, seed=0):
+    disc_rscript = f"""
+    library(causl)
+    forms <- list(list(Zc1 ~ 1, Zc2 ~ 1, Zc3 ~ 1, Zc4 ~ 1, Zc5 ~ 1, Zd1 ~ 1, Zd2 ~ 1, Zd3 ~ 1, Zd4 ~ 1, Zd5 ~ 1), X ~ Zc1+Zc2+Zc3+Zc4+Zc5+Zd1+Zd2+Zd3+Zd4+Zd5, Y ~ X, ~ 1)
+    fams <- list(c(1,1,1,1,1,5,5,5,5,5), 5, 1, 1)
+    pars <- list(Zc1 = list(beta=0, phi=1),
+                Zc2 = list(beta=0, phi=1),
+                Zc3 = list(beta=0, phi=1),
+                Zc4 = list(beta=0, phi=1),
+                Zc5 = list(beta=0, phi=1),
+                Zd1 = list(beta=0),
+                Zd2 = list(beta=0),
+                Zd3 = list(beta=0),
+                Zd4 = list(beta=0),
+                Zd5 = list(beta=0),
+                X = list(beta=c(-0.3,0.1,0.2,0.5,-0.2,1,0.3,-0.4,0.7,-0.1,0.9)),
+                Y = list(beta=c({causal_params[0]}, {causal_params[1]}), phi=1),
+                cop = list(beta=matrix(c(0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,
+                                             0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,
+                                                 0.0,0.0,0.0,0.0,0.0,0.0,0.5,
+                                                     0.0,0.0,0.0,0.0,0.0,0.0,
+                                                         0.0,0.0,0.0,0.0,0.0,
+                                                             0.0,0.0,0.0,0.0,
+                                                                 0.0,0.0,0.8,
+                                                                     0.0,0.0,
+                                                                         0.7), nrow=1)))
     set.seed({seed})
     data_samples <- rfrugalParam({N}, formulas = forms, family = fams, pars = pars)
     """
