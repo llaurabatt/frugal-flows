@@ -281,7 +281,7 @@ def generate_discrete_samples(N, causal_params, seed=0):
                 Zd4 = list(beta=0),
                 X = list(beta=c(-2, 0.8, 2.0, 0.8, 4)),
                 Y = list(beta=c({causal_params[0]}, {causal_params[1]}), phi=1),
-                cop = list(beta=matrix(c(0.2,0.3,0.5,0.5,
+                cop = list(beta=matrix(c(0.8,0.7,0.5,0.5,
                                              0.3,0.3,0.8,
                                                  0.1,0.4,
                                                      0.7), nrow=1)))
