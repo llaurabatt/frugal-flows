@@ -255,12 +255,12 @@ def generate_mixed_samples(N, causal_params, seed=0):
                  Zc2 = list(beta = c(1), phi=1),
                  Zc3 = list(beta = c(1), phi=1),
                  Zc4 = list(beta = c(1), phi=1),
-                 X = list(beta = c(-2,1,1,1,1)),
+                 X = list(beta = c(-3,-1,3,2,1)),
                  Y = list(beta = c({causal_params[0]}, {causal_params[1]}), phi=1),
-                 cop = list(beta=matrix(c(0.5,0.3,0.1,0.1,
-                                              0.4,0.1,0.1,
-                                                  0.1,0.1,
-                                                      0.1), nrow=1)))
+                 cop = list(beta=matrix(c(0.1,0.3,0.1,0.5,
+                                              0.1,0.1,0.4,
+                                                  0.1,0.4,
+                                                      0.3), nrow=1)))
     
     set.seed({seed})  # for consistency
     fams <- list(c(3,3,3,3),5,1,1)
@@ -273,18 +273,18 @@ def generate_mixed_samples(N, causal_params, seed=0):
 def generate_discrete_samples(N, causal_params, seed=0):
     disc_rscript = f"""
     library(causl)
-    forms <- list(list(Zc1 ~ 1, Zc2 ~ 1, Zd3 ~ 1, Zd4 ~ 1), X ~ Zc1*Zc2+Zd3+Zd4, Y ~ X, ~ 1)
+    forms <- list(list(Zc1 ~ 1, Zc2 ~ 1, Zd3 ~ 1, Zd4 ~ 1), X ~ Zc1+Zc2+Zd3+Zd4, Y ~ X, ~ 1)
     fams <- list(c(1,1,5,5), 5, 1, 1)
     pars <- list(Zc1 = list(beta=0, phi=1),
                 Zc2 = list(beta=0, phi=2),
                 Zd3 = list(beta=0),
                 Zd4 = list(beta=0),
-                X = list(beta=c(-1.2, 0.4, 0.8, 2.0, -0.8, 4)),
+                X = list(beta=c(-2, 0.8, 2.0, 0.8, 4)),
                 Y = list(beta=c({causal_params[0]}, {causal_params[1]}), phi=1),
-                cop = list(beta=matrix(c(0.5,0.3,0.1,0.1,
-                                             0.4,0.1,0.1,
-                                                 0.1,0.1,
-                                                     0.1), nrow=1)))
+                cop = list(beta=matrix(c(0.2,0.3,0.5,0.5,
+                                             0.3,0.3,0.8,
+                                                 0.1,0.4,
+                                                     0.7), nrow=1)))
     set.seed({seed})
     data_samples <- rfrugalParam({N}, formulas = forms, family = fams, pars = pars)
     """
