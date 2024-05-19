@@ -6,14 +6,28 @@ from jax import Array
 
 
 def from_quantiles_to_marginal_cont(
-    key: jr.PRNGKey, flow: list | AbstractDistribution, n_samples: int
+    key: jr.PRNGKey,
+    flow: list | AbstractDistribution,
+    n_samples: int,
+    u_z: Array | None = None,
 ):
+    if u_z is not None:
+        if u_z.ndim == 1:
+            # Reshape one-dimensional array to two dimensions with second dim as 1
+            u_z = u_z.reshape(-1, 1)
+
     if isinstance(flow, list):
         marginal_samples = []
-        for flow_i in flow:
-            flow_dim = 1
+        if u_z is not None:
+            unis_standard = u_z
+        else:
+            nvars = len(flow)
             key, subkey = jr.split(key)
-            uni_standard = jr.uniform(subkey, shape=(n_samples, flow_dim))
+            unis_standard = jr.uniform(subkey, shape=(n_samples, nvars))
+
+        for i, flow_i in enumerate(flow):
+            flow_dim = 1
+            uni_standard = unis_standard[:, i, None]
             uni_minus1_plus1 = jax.vmap(flow_i.bijection.bijections[0].tree.transform)(
                 uni_standard
             )
@@ -30,8 +44,11 @@ def from_quantiles_to_marginal_cont(
 
     elif isinstance(flow, AbstractDistribution):
         flow_dim = flow.shape[0]
-        key, subkey = jr.split(key)
-        uni_standard = jr.uniform(subkey, shape=(n_samples, flow_dim))
+        if u_z is not None:
+            uni_standard = u_z
+        else:
+            key, subkey = jr.split(key)
+            uni_standard = jr.uniform(subkey, shape=(n_samples, flow_dim))
         uni_minus1_plus1 = jax.vmap(flow.bijection.bijections[0].tree.transform)(
             uni_standard
         )
@@ -50,25 +67,49 @@ def from_quantiles_to_marginal_cont(
 
 
 def from_quantiles_to_marginal_discr(
-    key: jr.PRNGKey, mappings: dict, nvars: int, empirical_cdfs: Array, n_samples: int
+    key: jr.PRNGKey,
+    mappings: dict,
+    nvars: int,
+    empirical_cdfs: Array,
+    n_samples: int,
+    u_z: Array | None = None,
 ):
+    if u_z is not None:
+        if u_z.ndim == 1:
+            # Reshape one-dimensional array to two dimensions with second dim as 1
+            u_z = u_z.reshape(-1, 1)
+
+        unis_standard = u_z
+    else:
+        key, subkey = jr.split(key)
+        unis_standard = jr.uniform(subkey, shape=(n_samples, nvars))
+
     z_discr_rank_mapping_array = jnp.vstack(
         [jnp.array(list(d.values())) for d in mappings.values()]
     )
     vmapped_from_quantiles_to_marginal_discr = jax.vmap(
-        univariate_from_quantiles_to_marginal_discr, in_axes=(0, 0, None, 0)
+        univariate_from_quantiles_to_marginal_discr, in_axes=(0, 0, None, 0, 0)
     )
     keys = jr.split(key, nvars)
     marginal_samples_discr = vmapped_from_quantiles_to_marginal_discr(
-        keys, empirical_cdfs, n_samples, z_discr_rank_mapping_array
+        keys,
+        empirical_cdfs,
+        n_samples,
+        z_discr_rank_mapping_array,
+        unis_standard.T,
     )
     return marginal_samples_discr.T
 
 
 def univariate_from_quantiles_to_marginal_discr(
-    key: jr.PRNGKey, cdf_levels: Array, n_samples: int, key_mapping: Array
+    key: jr.PRNGKey,
+    cdf_levels: Array,
+    n_samples: int,
+    key_mapping: Array,
+    uni_standard,
 ):
-    uni_standard = jr.uniform(key, shape=(n_samples, 1))
+    # uni_standard = jr.uniform(key, shape=(n_samples, 1))
+    uni_standard = jnp.expand_dims(uni_standard, axis=1)
     comparisons = uni_standard > cdf_levels
     marginal_discr_sample = comparisons.sum(axis=1)
 
