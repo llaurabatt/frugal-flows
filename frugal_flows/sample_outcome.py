@@ -83,7 +83,6 @@ def sample_outcome(
             flow_fake_condition = None
         else:
             flow_fake_condition = jnp.ones((n_samples, frugal_flow.cond_shape[0]))
-        print(flow_fake_condition)
 
         # verify flow has a compatible structure
 
@@ -207,6 +206,14 @@ def causal_cdf_outcome(
     causal_condition: ArrayLike,
     **treatment_kwargs: dict,
 ):
+    if causal_condition is not None:
+        if causal_condition.ndim == 1:
+            # Reshape one-dimensional array to two dimensions with second dim as 1
+            causal_condition = causal_condition.reshape(-1, 1)
+
+    if 'cond_dim' not in treatment_kwargs.keys():
+        treatment_kwargs['cond_dim'] = causal_condition.shape[1]
+        
     causal_cdf_init_params = [
         i
         for i in inspect.signature(causal_cdf.__init__).parameters.keys()
@@ -220,6 +227,7 @@ def causal_cdf_outcome(
             )
 
     causal_cdf_simulate = causal_cdf(**treatment_kwargs)
+    print(causal_cdf_simulate.cond_shape)
     samples = jax.vmap(causal_cdf_simulate.inverse)(u_y, causal_condition)
     return samples, causal_cdf_simulate
 
