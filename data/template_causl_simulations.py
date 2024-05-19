@@ -190,7 +190,6 @@ def run_simulations(data_generating_function: callable, seed: int, num_samples: 
             causal_margin.const,
             causal_margin.scale
         ]))
-        print(results)
     return pd.DataFrame(np.array(results), columns=causal_param_names)
 
 
