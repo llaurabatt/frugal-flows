@@ -235,14 +235,14 @@ def generate_gaussian_samples(N, causal_params, seed=0):
     pars <- list(Zc1 = list(beta = 0, phi=1),
                  Zc2 = list(beta = c(1,1), phi=1),
                  Zc3 = list(beta = c(1,1), phi=1),
-                 Zc4 = list(beta = c(0,1,1,1), phi=0.5),
+                 Zc4 = list(beta = c(-1,1,1,1,1), phi=0.5),
                  X = list(beta = c(0,1,1,1)),
                  Y = list(beta = c({causal_params[0]}, {causal_params[1]}), phi=1),
                  cop = list(beta=matrix(c(2,1,0.5,1,1,1,1,1,1,1), nrow=1)))
     
     set.seed({seed})  # for consistency
     fams <- list(c(1,1,1,1),5,1,1)
-    data_samples <- causalSamp({N}, formulas=list(list(Zc1~1, Zc2~Zc1, Zc3~Zc1, Zc4~Zc3+Zc2+Zc1), X~Zc1+Zc2+Zc3, Y~X, ~1), family=fams, pars=pars)
+    data_samples <- causalSamp({N}, formulas=list(list(Zc1~1, Zc2~Zc1, Zc3~Zc1, Zc4~Zc3+Zc2+Zc1), X~Zc1+Zc2+Zc3+Zc4, Y~X, ~1), family=fams, pars=pars)
     """
     data = generate_data_samples(gaussian_rscript)
     return data
@@ -255,7 +255,7 @@ def generate_mixed_samples(N, causal_params, seed=0):
                  Zc2 = list(beta = c(1), phi=1),
                  Zc3 = list(beta = c(1), phi=1),
                  Zc4 = list(beta = c(1), phi=1),
-                 X = list(beta = c(-3,-1,3,2,1)),
+                 X = list(beta = c(-1,1,1,1,1)),
                  Y = list(beta = c({causal_params[0]}, {causal_params[1]}), phi=1),
                  cop = list(beta=matrix(c(0.1,0.3,0.1,0.5,
                                               0.1,0.1,0.4,

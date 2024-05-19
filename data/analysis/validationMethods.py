@@ -377,18 +377,18 @@ def estimate_ate(outcome: str, treatment: str, data: pd.DataFrame) -> pd.DataFra
     column_headers = ['ate', 'lower_conf', 'upper_conf']
     method_names = pd.DataFrame({'method': [
         # 'Diff. of Mean',
-        'Gradient Boosting Trees DML',
+        # 'Gradient Boosting Trees DML',
         'Linear DML',
-        'Doubly Robust (Linear)',
+        # 'Doubly Robust (Linear)',
         'Linear T Learner',
         'Linear S Learner',
         'Linear X Learner',
-        'Gradient Boosting Trees T Learner',
-        'Gradient Boosting Trees S Learner',
-        'Gradient Boosting Trees X Learner',
+        'GBT T Learner',
+        'GBT S Learner',
+        'GBT X Learner',
         #'Causal BART',
         #'Causal Forest',
-        'Propensity Score Matching',
+        'Prop. Score Matching',
         'TMLE'
     ]})
     #with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
@@ -396,12 +396,12 @@ def estimate_ate(outcome: str, treatment: str, data: pd.DataFrame) -> pd.DataFra
     # Set up logging
 
     # Replace the print statement with logging
-    logging.info(f"Fitting model: {method_names.iloc[0, 0]}")
-    results.append(dml(outcome, treatment, data, method='GBR'))
+    #logging.info(f"Fitting model: {method_names.iloc[0, 0]}")
+    #results.append(dml(outcome, treatment, data, method='GBR'))
     logging.info(f"Fitting model: {method_names.iloc[1, 0]}")
     results.append(dml(outcome, treatment, data, method='linear'))
-    logging.info(f"Fitting model: {method_names.iloc[2, 0]}")
-    results.append(doubleRobust(outcome, treatment, data))
+    #logging.info(f"Fitting model: {method_names.iloc[2, 0]}")
+    #results.append(doubleRobust(outcome, treatment, data))
     logging.info(f"Fitting model: {method_names.iloc[3, 0]}")
     results.append(metalearner(outcome, treatment, data, est='T', method='linear'))
     logging.info(f"Fitting model: {method_names.iloc[4, 0]}")
