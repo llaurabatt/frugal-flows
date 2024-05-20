@@ -227,7 +227,6 @@ def causal_cdf_outcome(
             )
 
     causal_cdf_simulate = causal_cdf(**treatment_kwargs)
-    print(causal_cdf_simulate.cond_shape)
     samples = jax.vmap(causal_cdf_simulate.inverse)(u_y, causal_condition)
     return samples, causal_cdf_simulate
 

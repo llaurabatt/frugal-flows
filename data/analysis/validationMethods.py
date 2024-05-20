@@ -27,7 +27,7 @@ from rpy2.robjects.vectors import StrVector
 import logging
 
 
-logging.basicConfig(format='%(asctime)s %(message)s', level=logging.INFO)
+logging.basicConfig(format='%(asctime)s %(message)s', level=logging.ERROR)
 
 
 pandas2ri.activate()
@@ -235,18 +235,20 @@ def metalearner(outcome: str, treatment: str, data: pd.DataFrame, est: str = 'T'
     # Choose metalearner
     if est=='T':
         learner = TLearner(models=models)
-        learner.fit(data[outcome], data[treatment], X=data.drop(columns=[outcome,treatment]), inference='bootstrap') 
+        learner.fit(data[outcome], data[treatment], X=data.drop(columns=[outcome,treatment]))#, inference='bootstrap') 
     elif est=='S':
         learner = SLearner(overall_model=models)
-        learner.fit(data[outcome], data[treatment], X=data.drop(columns=[outcome,treatment]), inference='bootstrap') 
+        learner.fit(data[outcome], data[treatment], X=data.drop(columns=[outcome,treatment]))#, inference='bootstrap') 
     elif est=='X':
         learner = XLearner(models=models, propensity_model=propensity_model)
-        learner.fit(data[outcome], data[treatment], X=data.drop(columns=[outcome,treatment]), inference='bootstrap') 
+        learner.fit(data[outcome], data[treatment], X=data.drop(columns=[outcome,treatment]))#, inference='bootstrap') 
 
-    results = learner.ate_inference(T0=0, T1=1,  X=data.drop(columns=[outcome, treatment]))
-    ate_point = results.mean_point
-    lower_conf, upper_conf = results.conf_int_mean()
-    return ate_point, (lower_conf, upper_conf)
+    # # Removing full inference as we validate using bootstrap
+    # results = learner.ate_inference(T0=0, T1=1,  X=data.drop(columns=[outcome, treatment]))
+    # lower_conf, upper_conf = results.conf_int_mean()
+    ate_point = learner.ate(X=data.drop(columns=[outcome, treatment]))
+    lower_conf, upper_conf = (None, None)
+    return ate_point, lower_conf, upper_conf
 
 
 def dml(outcome: str, treatment: str, data: pd.DataFrame, method: str = 'GBR') -> float:
@@ -274,7 +276,7 @@ def dml(outcome: str, treatment: str, data: pd.DataFrame, method: str = 'GBR') -
             data[treatment],
             X=data.drop(columns=[outcome, treatment]),
             W=data.drop(columns=[outcome, treatment]),
-            inference='bootstrap'
+            # inference='bootstrap'
         )
     if method == 'linear':
         est = LinearDML(discrete_treatment=True)
@@ -283,12 +285,15 @@ def dml(outcome: str, treatment: str, data: pd.DataFrame, method: str = 'GBR') -
             data[treatment],
             X=data.drop(columns=[outcome, treatment]),
             W=data.drop(columns=[outcome, treatment]),
-            inference='bootstrap'
+            # inference='bootstrap'
         )
-    results = est.ate_inference(T0=0, T1=1,  X=data.drop(columns=[outcome, treatment]))
-    ate_point = results.mean_point
-    lower_conf, upper_conf = results.conf_int_mean()
-    return ate_point, (lower_conf, upper_conf)
+    ## Removing full inference as we validate using bootstrap
+    # results = est.ate_inference(T0=0, T1=1,  X=data.drop(columns=[outcome, treatment]))
+    # ate_point = results.mean_point
+    # lower_conf, upper_conf = results.conf_int_mean()
+    ate_point = est.ate(data.drop(columns=[outcome, treatment]), T0=0, T1=1)
+    lower_conf, upper_conf = (None, None)
+    return ate_point, lower_conf, upper_conf
 
 
 def doubleRobust(outcome: str, treatment: str, data: pd.DataFrame) -> float:
@@ -308,13 +313,15 @@ def doubleRobust(outcome: str, treatment: str, data: pd.DataFrame) -> float:
         data[outcome],
         data[treatment],
         X = data.drop(columns=[outcome, treatment]),
+        # W=data.drop(columns=[outcome, treatment])
         W = None,
-        #W=data.drop(columns=[outcome, treatment])
-        inference='bootstrap'
+        # inference='bootstrap'
     )
-    results = est.ate_inference(T0=0, T1=1,  X=data.drop(columns=[outcome, treatment]))
-    ate = results.mean_point
-    lower_conf, upper_conf = results.conf_int_mean()
+    # results = est.ate_inference(T0=0, T1=1,  X=data.drop(columns=[outcome, treatment]))
+    # ate = results.mean_point
+    # lower_conf, upper_conf = results.conf_int_mean()
+    ate = est.ate(data.drop(columns=[outcome, treatment]), T0=0, T1=1)
+    lower_conf, upper_conf = (None, None)
     return ate, lower_conf, upper_conf
 
 
@@ -388,41 +395,41 @@ def estimate_ate(outcome: str, treatment: str, data: pd.DataFrame) -> pd.DataFra
         'GBT X Learner',
         #'Causal BART',
         #'Causal Forest',
-        'Prop. Score Matching',
-        'TMLE'
+        'TMLE',
+        'Prop. Score Matching'
     ]})
-    #with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
-    #results.append(diff_means(outcome, treatment, data))
-    # Set up logging
-
-    # Replace the print statement with logging
-    #logging.info(f"Fitting model: {method_names.iloc[0, 0]}")
-    #results.append(dml(outcome, treatment, data, method='GBR'))
-    logging.info(f"Fitting model: {method_names.iloc[1, 0]}")
-    results.append(dml(outcome, treatment, data, method='linear'))
-    #logging.info(f"Fitting model: {method_names.iloc[2, 0]}")
-    #results.append(doubleRobust(outcome, treatment, data))
-    logging.info(f"Fitting model: {method_names.iloc[3, 0]}")
-    results.append(metalearner(outcome, treatment, data, est='T', method='linear'))
-    logging.info(f"Fitting model: {method_names.iloc[4, 0]}")
-    results.append(metalearner(outcome, treatment, data, est='S', method='linear'))
-    logging.info(f"Fitting model: {method_names.iloc[5, 0]}")
-    results.append(metalearner(outcome, treatment, data, est='X', method='linear'))
-    logging.info(f"Fitting model: {method_names.iloc[6, 0]}")
-    results.append(metalearner(outcome, treatment, data, est='T', method='GBR'))
-    logging.info(f"Fitting model: {method_names.iloc[7, 0]}")
-    results.append(metalearner(outcome, treatment, data, est='S', method='GBR'))
-    logging.info(f"Fitting model: {method_names.iloc[8, 0]}")
-    results.append(metalearner(outcome, treatment, data, est='X', method='GBR'))
-    # logging.info(f"Fitting model: {method_names.iloc[0, 0]}")
-    # results.append(bart(outcome, treatment, data))
-    # logging.info(f"Fitting model: {method_names.iloc[0, 0]}")
-    # results.append(causalforest(outcome, treatment, data))
-    logging.info(f"Fitting model: {method_names.iloc[9, 0]}")
-    results.append(matchit(outcome, treatment, data, method='full'))
-    logging.info(f"Fitting model: {method_names.iloc[10, 0]}")
     with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
+        #results.append(diff_means(outcome, treatment, data))
+        # Set up logging
+
+        # Replace the print statement with logging
+        #logging.info(f"Fitting model: {method_names.iloc[0, 0]}")
+        #results.append(dml(outcome, treatment, data, method='GBR'))
+        logging.info(f"Fitting model: {method_names.iloc[0, 0]}")
+        results.append(dml(outcome, treatment, data, method='linear'))
+        #logging.info(f"Fitting model: {method_names.iloc[2, 0]}")
+        #results.append(doubleRobust(outcome, treatment, data))
+        logging.info(f"Fitting model: {method_names.iloc[1, 0]}")
+        results.append(metalearner(outcome, treatment, data, est='T', method='linear'))
+        logging.info(f"Fitting model: {method_names.iloc[2, 0]}")
+        results.append(metalearner(outcome, treatment, data, est='S', method='linear'))
+        logging.info(f"Fitting model: {method_names.iloc[3, 0]}")
+        results.append(metalearner(outcome, treatment, data, est='X', method='linear'))
+        logging.info(f"Fitting model: {method_names.iloc[4, 0]}")
+        results.append(metalearner(outcome, treatment, data, est='T', method='GBR'))
+        logging.info(f"Fitting model: {method_names.iloc[5, 0]}")
+        results.append(metalearner(outcome, treatment, data, est='S', method='GBR'))
+        logging.info(f"Fitting model: {method_names.iloc[6, 0]}")
+        results.append(metalearner(outcome, treatment, data, est='X', method='GBR'))
+        # logging.info(f"Fitting model: {method_names.iloc[0, 0]}")
+        # results.append(bart(outcome, treatment, data))
+        # logging.info(f"Fitting model: {method_names.iloc[0, 0]}")
+        # results.append(causalforest(outcome, treatment, data))
+        # logging.info(f"Fitting model: {method_names.iloc[10, 0]}")
+        logging.info(f"Fitting model: {method_names.iloc[7, 0]}")
         results.append(tmle(outcome, treatment, data))
+        logging.info(f"Fitting model: {method_names.iloc[8, 0]}")
+        results.append(matchit(outcome, treatment, data, method='full'))
     results_df = pd.DataFrame(results, columns=column_headers)
     return pd.concat([method_names, results_df], axis=1)
 

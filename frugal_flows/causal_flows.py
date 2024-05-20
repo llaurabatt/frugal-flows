@@ -692,7 +692,7 @@ def get_independent_quantiles(
     return_z_cont_flow=False,
 ):
     assert (z_discr is not None) | (z_cont is not None)
-    res = {}
+    res = {'u_z_cont': None, 'u_z_discr': None}
 
     key, subkey = jr.split(key)
 

@@ -178,6 +178,15 @@ def run_simulations(data_generating_function: callable, seed: int, num_samples: 
     results = []
     for i in range(num_iter):
         Z_disc, Z_cont, X, Y = data_generating_function(num_samples, seed=seed+i, causal_params=causal_params).values()
+
+        # Remove rogue anomalous datapoints
+        inf_idx = ((Y > -1000) & (Y < 1000)).flatten()
+        if Z_disc is not None:
+            Z_disc = Z_disc[inf_idx]
+        if Z_cont is not None:
+            Z_cont = Z_cont[inf_idx]
+        X = X[inf_idx]
+        Y  = Y[inf_idx]
         frugal_fit, losses = causl_py.frugal_fitting(
             X, Y, Z_cont=Z_cont, Z_disc=Z_disc, seed=seed+i,
             frugal_flow_hyperparams=hyperparams_dict,
@@ -234,15 +243,20 @@ def generate_gaussian_samples(N, causal_params, seed=0):
     library(causl)
     pars <- list(Zc1 = list(beta = 0, phi=1),
                  Zc2 = list(beta = c(1,1), phi=1),
-                 Zc3 = list(beta = c(1,1), phi=1),
-                 Zc4 = list(beta = c(-1,1,1,1,1), phi=0.5),
-                 X = list(beta = c(0,1,1,1)),
+                 Zc3 = list(beta = c(1,1,1,1), phi=1),
+                 Zc4 = list(beta = c(1,1,1,1,1,1,1,1), phi=0.5),
+                 X = list(beta = c(0,1,1,1,1)),
                  Y = list(beta = c({causal_params[0]}, {causal_params[1]}), phi=1),
-                 cop = list(beta=matrix(c(2,1,0.5,1,1,1,1,1,1,1), nrow=1)))
-    
+                 cop = list(
+                   Y=list(
+                     Zc1=list(beta=6), Zc2=list(beta=6), Zc3=list(beta=6), Zc4=list(beta=6))
+                   )
+                 )
+    forms <- list(list(Zc1~1, Zc2~Zc1, Zc3~Zc1*Zc2, Zc4~Zc3*Zc2*Zc1), X~Zc1+Zc2+Zc3+Zc4, Y~X, ~1)
+
     set.seed({seed})  # for consistency
     fams <- list(c(1,1,1,1),5,1,1)
-    data_samples <- causalSamp({N}, formulas=list(list(Zc1~1, Zc2~Zc1, Zc3~Zc1, Zc4~Zc3+Zc2+Zc1), X~Zc1+Zc2+Zc3+Zc4, Y~X, ~1), family=fams, pars=pars)
+    data_samples <- rfrugalParam({N}, formulas=forms, family=fams, pars=pars)
     """
     data = generate_data_samples(gaussian_rscript)
     return data
