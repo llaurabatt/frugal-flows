@@ -84,20 +84,36 @@ def from_quantiles_to_marginal_discr(
         key, subkey = jr.split(key)
         unis_standard = jr.uniform(subkey, shape=(n_samples, nvars))
 
-    z_discr_rank_mapping_array = jnp.vstack(
-        [jnp.array(list(d.values())) for d in mappings.values()]
-    )
-    vmapped_from_quantiles_to_marginal_discr = jax.vmap(
-        univariate_from_quantiles_to_marginal_discr, in_axes=(0, 0, None, 0, 0)
-    )
     keys = jr.split(key, nvars)
-    marginal_samples_discr = vmapped_from_quantiles_to_marginal_discr(
-        keys,
-        empirical_cdfs,
-        n_samples,
-        z_discr_rank_mapping_array,
-        unis_standard.T,
-    )
+    try:
+        z_discr_rank_mapping_array = jnp.vstack(
+            [jnp.array(list(d.keys())) for d in mappings.values()]
+        )
+        vmapped_from_quantiles_to_marginal_discr = jax.vmap(
+            univariate_from_quantiles_to_marginal_discr, in_axes=(0, 0, None, 0, 0)
+        )
+
+        marginal_samples_discr = vmapped_from_quantiles_to_marginal_discr(
+            keys,
+            empirical_cdfs,
+            n_samples,
+            z_discr_rank_mapping_array,
+            unis_standard.T,
+        )
+    except Exception:
+        marginal_samples_discr = []
+        for d, mapping_d in enumerate(mappings.values()):
+            z_discr_rank_mapping_array_d = jnp.array(list(mapping_d.keys()))
+
+            marginal_samples_discr_d = univariate_from_quantiles_to_marginal_discr(
+                keys[d],
+                empirical_cdfs[d],
+                n_samples,
+                z_discr_rank_mapping_array_d,
+                unis_standard.T[d],
+            )
+            marginal_samples_discr.append(marginal_samples_discr_d)
+        marginal_samples_discr = jnp.vstack(marginal_samples_discr)
     return marginal_samples_discr.T
 
 
