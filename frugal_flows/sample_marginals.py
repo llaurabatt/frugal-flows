@@ -139,9 +139,7 @@ def from_quantiles_to_marginal_discr(
             z_discr_rank_mapping_array_d = jnp.array(list(mapping_d.keys()))
 
             marginal_samples_discr_d = univariate_from_quantiles_to_marginal_discr(
-                keys[d],
                 empirical_cdfs[d],
-                n_samples,
                 z_discr_rank_mapping_array_d,
                 unis_standard.T[d],
             )
