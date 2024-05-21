@@ -11,9 +11,25 @@ def from_quantiles_to_marginal_cont(
     n_samples: int,
     u_z: Array | None = None,
 ):
+    """
+    Convert quantiles to continuous marginal samples using the specified flow.
+
+    Args:
+        key (jr.PRNGKey): The random key for generating samples.
+        flow (list | AbstractDistribution): The flow or list of flows to use for conversion.
+        n_samples (int): The number of samples to generate.
+        u_z (Array | None, optional): The quantiles to convert. Defaults to None, in which case independent standard uniforms are used.
+
+    Returns:
+        Array: The generated continuous marginal samples.
+
+    Raises:
+        ValueError: If an invalid flow object or list of flow objects is passed.
+    """
+
+    # Reshape one-dimensional array to two dimensions with second dim as 1
     if u_z is not None:
         if u_z.ndim == 1:
-            # Reshape one-dimensional array to two dimensions with second dim as 1
             u_z = u_z.reshape(-1, 1)
 
     if isinstance(flow, list):
@@ -74,6 +90,23 @@ def from_quantiles_to_marginal_discr(
     n_samples: int,
     u_z: Array | None = None,
 ):
+    """
+    Convert quantiles to discrete marginal samples using the specified mappings.
+
+    Args:
+        key (jr.PRNGKey): The random key for generating samples.
+        mappings (dict): Mapping variable categories to indices 0,1,...n_categories-1. It must be of the form {0:dict_0, 1:dict_1,...,nvars-1:dict_nvars-1} where dict_i maps the categories of the i-th variable to index values 0,1,.. n_categories-1.
+        nvars (int): The number of variables.
+        empirical_cdfs (Array): The empirical cumulative distribution functions. It must be of shape (n_vars, max_n_categories), where max_n_categories is the maximum number of categories among all variables. If a variable has fewer categories, a padding of 1.s should be added to the right.
+        n_samples (int): The number of samples to generate.
+        u_z (Array | None, optional): The quantiles to convert, with shape (n_samples, n_vars). Defaults to None, in which case independent standard uniforms are used.
+
+    Returns:
+        Array: The generated discrete marginal samples.
+
+    Raises:
+        ValueError: If an invalid mapping object is passed.
+    """
     if u_z is not None:
         if u_z.ndim == 1:
             # Reshape one-dimensional array to two dimensions with second dim as 1
@@ -118,12 +151,22 @@ def from_quantiles_to_marginal_discr(
 
 
 def univariate_from_quantiles_to_marginal_discr(
-    key: jr.PRNGKey,
     cdf_levels: Array,
-    n_samples: int,
     key_mapping: Array,
     uni_standard,
 ):
+    """
+    Converts a univariate random variable from quantiles to a discrete marginal representation.
+
+    Args:
+        cdf_levels (Array): The cumulative distribution function (CDF) levels.
+        key_mapping (Array): A mapping array of length (n_categories - 1 ) where the entries correspond to the variable categories. The order of the categories should match that in CDF_levels.
+        uni_standard: The univariate random variable in standard uniform distribution.
+
+    Returns:
+        Array: The discrete marginal representation of the univariate random variable.
+    """
+
     # uni_standard = jr.uniform(key, shape=(n_samples, 1))
     uni_standard = jnp.expand_dims(uni_standard, axis=1)
     comparisons = uni_standard > cdf_levels
