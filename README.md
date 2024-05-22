@@ -27,15 +27,17 @@ pip install -e ./
 
 The dependencies of ```frugal-flows``` can be found in the ```pyproject.toml``` file.
 
+# General Structure
+* The main bulk of the frugal flow implementation can be found in [frugal_flows](./frugal_flows/).
+* The script containing functions to generate the simulated data for the inference experiments can be found [here](./data/template_causl_simulations.py).
+* The main class which allows the user to implement Frugal Flows at ease can be found in [benchmarking.py](./frugal_flows/benchmarking.py)
+
 # Reproduce paper experiments
 
-To reproduce Table 1:
-
-To reproduce Figure 3:
-
-To reproduce Figure 4:
-
-To reproduce Table 3 in the Appendix:
+* To reproduce Table 1: [Continous_Frugal_Flows.ipynb](./validation/Continous_Frugal_Flows.ipynb)
+* To reproduce Figure 3: [Lalonde_Data_Pipeline.ipynb](./validation/Lalonde_Data_Pipeline.ipynb)
+* To reproduce Figure 4: [e401k_Data_Pipeline.ipynb](./validation/e401k_Data_Pipeline.ipynb)
+* To reproduce Table 3 in the Appendix: [Logistic_Sampling.ipynb](./validation/Logistic_Sampling.ipynb)
 
 
 # Acknowledgement
