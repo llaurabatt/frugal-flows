@@ -17,6 +17,8 @@ dependencies:
   - distrax
   - seaborn
   - pip
+  - scikit-learn
+  - wandb
   - pip:
     # - pre-commit
     # - flowjax
