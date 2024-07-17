@@ -31,6 +31,27 @@ def sample_outcome(
     u_yx: ArrayLike | None = None,
     **treatment_kwargs: dict,
 ):
+    """
+    Samples outcomes from a given causal model using frugal flows.
+
+    Args:
+        key: The PRNGKey for random number generation.
+        n_samples: The number of outcome samples to generate.
+        causal_model: The causal model to use for outcome generation. Must be one of ["logistic_regression", "causal_cdf", "location_translation"].
+        causal_condition: The causal condition to use for outcome generation. Default is None.
+        frugal_flow: The frugal flow object to use for outcome generation. Default is None. For causal model "location_translation", a frugal flow object is always required, and if u_yx is also provided, the u_yx quantiles will be used to sample from the flow object. For other causal models, either a frugal flow object or u_yx is required.
+        causal_cdf: The causal CDF object to use for outcome generation. Default is UnivariateNormalCDF.
+        u_yx: The input samples for the causal model. Default is None, in which case a frugal flow object is always required.
+        **treatment_kwargs: Additional keyword arguments for the treatment model.
+
+    Returns:
+        outcome_samples: The generated outcome samples.
+
+    Raises:
+        ValueError: If the input arguments are invalid or missing.
+
+    """
+
     valid_causal_models = ["logistic_regression", "causal_cdf", "location_translation"]
 
     if (u_yx is None) & (frugal_flow is None):
@@ -191,6 +212,20 @@ def sample_outcome(
 def logistic_outcome(
     u_y: ArrayLike, ate: float, causal_condition: ArrayLike, const: float
 ):
+    """
+    Computes the logistic outcome based on the given inputs.
+
+    Args:
+        u_y: The input quantiles, of shape (n_samples,)
+        ate: The average treatment effect. Float.
+        causal_condition: The (univariate) causal condition. It is an Array with shape (n_samples, 1) or (n_samples,).
+        const: The constant term. Float.
+
+    Returns:
+        The computed logistic outcome.
+
+    """
+
     def get_y(u_y, ate, x, const):
         p = jax.nn.sigmoid(ate * x + const)
         return (u_y >= (1 - p)).astype(int)
@@ -206,6 +241,7 @@ def causal_cdf_outcome(
     causal_condition: ArrayLike,
     **treatment_kwargs: dict,
 ):
+<<<<<<< HEAD
     if causal_condition is not None:
         if causal_condition.ndim == 1:
             # Reshape one-dimensional array to two dimensions with second dim as 1
@@ -214,6 +250,20 @@ def causal_cdf_outcome(
     if 'cond_dim' not in treatment_kwargs.keys():
         treatment_kwargs['cond_dim'] = causal_condition.shape[1]
         
+=======
+    """
+    Compute the outcome samples and the causal CDF.
+
+    Args:
+        u_y (ArrayLike): The input quantiles, of shape (n_samples,)
+        causal_cdf (AbstractBijection): The causal CDF.
+        causal_condition (ArrayLike): The causal condition.
+        **treatment_kwargs (dict): Additional keyword arguments for the causal CDF.
+
+    Returns:
+        tuple: A tuple containing the outcome samples and the causal CDF.
+    """
+>>>>>>> add comments to sample outcome and cleanup
     causal_cdf_init_params = [
         i
         for i in inspect.signature(causal_cdf.__init__).parameters.keys()
@@ -238,6 +288,21 @@ def location_translation_outcome(
     flow_condition: ArrayLike,
     **treatment_kwargs: dict,
 ):
+    """
+    Compute the outcome samples for the location_translation causal model.
+
+    Args:
+        u_y (ArrayLike): The input quantiles, of shape (n_samples,)
+        frugal_flow (AbstractDistribution): The frugal flow object.
+        causal_condition (ArrayLike): The causal condition.
+        flow_condition (ArrayLike): The flow condition.
+        **treatment_kwargs (dict): Additional keyword arguments for the treatment model.
+
+    Returns:
+        ArrayLike: The generated outcome samples.
+
+    """
+
     causal_minus1_plus1 = jax.vmap(
         frugal_flow.bijection.bijections[3].bijections[0].transform
     )(u_y[:, None], flow_condition)
