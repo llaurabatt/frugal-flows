@@ -27,6 +27,7 @@ def sample_outcome(
     causal_model: str,
     causal_condition: ArrayLike | None = None,
     frugal_flow: AbstractDistribution | None = None,
+    causal_effect_idx_in_flow: int | None = None,
     causal_cdf: AbstractBijection | None = UnivariateNormalCDF,
     u_yx: ArrayLike | None = None,
     **treatment_kwargs: dict,
@@ -154,7 +155,13 @@ def sample_outcome(
         corruni = jax.vmap(frugal_flow.bijection.bijections[2].tree.transform)(
             corruni_minus1_plus1, flow_fake_condition
         )
-        corruni_y = corruni[:, 0]
+
+        if causal_effect_idx_in_flow is None:
+            warnings.warn(
+                "causal_effect_idx_in_flow has not been provided and is therefore set to the default of 0. This assumes no heterogeneous effects were modelled in frugal flow training."
+            )
+            causal_effect_idx_in_flow = 0
+        corruni_y = corruni[:, causal_effect_idx_in_flow]
 
         try:
             # in this case the flow expects the input to be in (-1,1)
@@ -241,29 +248,14 @@ def causal_cdf_outcome(
     causal_condition: ArrayLike,
     **treatment_kwargs: dict,
 ):
-<<<<<<< HEAD
     if causal_condition is not None:
         if causal_condition.ndim == 1:
             # Reshape one-dimensional array to two dimensions with second dim as 1
             causal_condition = causal_condition.reshape(-1, 1)
 
-    if 'cond_dim' not in treatment_kwargs.keys():
-        treatment_kwargs['cond_dim'] = causal_condition.shape[1]
-        
-=======
-    """
-    Compute the outcome samples and the causal CDF.
+    if "cond_dim" not in treatment_kwargs.keys():
+        treatment_kwargs["cond_dim"] = causal_condition.shape[1]
 
-    Args:
-        u_y (ArrayLike): The input quantiles, of shape (n_samples,)
-        causal_cdf (AbstractBijection): The causal CDF.
-        causal_condition (ArrayLike): The causal condition.
-        **treatment_kwargs (dict): Additional keyword arguments for the causal CDF.
-
-    Returns:
-        tuple: A tuple containing the outcome samples and the causal CDF.
-    """
->>>>>>> add comments to sample outcome and cleanup
     causal_cdf_init_params = [
         i
         for i in inspect.signature(causal_cdf.__init__).parameters.keys()

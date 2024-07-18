@@ -25,6 +25,7 @@ from jaxtyping import ArrayLike
 from frugal_flows.basic_flows import (
     masked_autoregressive_bijection_masked_condition,
     masked_autoregressive_flow_first_uniform,
+    masked_autoregressive_flow_heterogeneous,
     masked_independent_flow,
     univariate_marginal_flow,
 )
@@ -373,6 +374,7 @@ def train_frugal_flow_gaussian(
     key: jr.PRNGKey,
     y: ArrayLike,
     u_z: ArrayLike,  # impose discrete
+    u_z_hetero: ArrayLike | None = None,
     optimizer: optax.GradientTransformation | None = None,
     RQS_knots: int = 8,
     nn_depth: int = 1,
@@ -387,8 +389,15 @@ def train_frugal_flow_gaussian(
     mask_condition: bool = True,
     stop_grad_until_active: bool = False,
     causal_model_args: dict | None = None,
+    causal_effect_idx: int = 0,
 ):
-    nvars = u_z.shape[1]
+    # nvars = u_z.shape[1]
+    input_vars = []
+    if u_z_hetero is not None:
+        input_vars.append(u_z_hetero)
+    input_vars += [y, u_z]
+    input_vars = jnp.hstack(input_vars)
+    nvars = input_vars.shape[1]
 
     if condition is None:
         cond_dim = None
@@ -401,17 +410,25 @@ def train_frugal_flow_gaussian(
         cond_dim_mask = None
         cond_dim_nomask = cond_dim
 
-    list_bijections = [
-        UnivariateNormalCDF(
-            ate=causal_model_args["ate"],
-            scale=causal_model_args["scale"],
-            const=causal_model_args["const"],
-            cond_dim=cond_dim,
-        )
-    ] + [Identity(())] * nvars
+    # list_bijections = [
+    #     UnivariateNormalCDF(
+    #         ate=causal_model_args["ate"],
+    #         scale=causal_model_args["scale"],
+    #         const=causal_model_args["const"],
+    #         cond_dim=cond_dim,
+    #     )
+    # ] + [Identity(())] * nvars
+
+    list_bijections = [Identity(())] * (nvars)
+    list_bijections[causal_effect_idx] = UnivariateNormalCDF(
+        ate=causal_model_args["ate"],
+        scale=causal_model_args["scale"],
+        const=causal_model_args["const"],
+        cond_dim=cond_dim,
+    )
 
     marginal_transform = Stack(list_bijections)
-    base_dist = Uniform(-jnp.ones(nvars + 1), jnp.ones(nvars + 1))
+    base_dist = Uniform(-jnp.ones(nvars), jnp.ones(nvars))
 
     transformer = RationalQuadraticSpline(knots=RQS_knots, interval=1)
     if stop_grad_until_active:
@@ -420,7 +437,7 @@ def train_frugal_flow_gaussian(
         stop_grad_until = None
 
     key, subkey = jr.split(key)
-    frugal_flow = masked_autoregressive_flow_first_uniform(
+    frugal_flow = masked_autoregressive_flow_heterogeneous(
         key=subkey,
         base_dist=base_dist,
         transformer=transformer,
@@ -431,11 +448,12 @@ def train_frugal_flow_gaussian(
         nn_width=nn_width,
         flow_layers=flow_layers,
         stop_grad_until=stop_grad_until,
+        causal_effect_idx=causal_effect_idx,
     )  # Support on [-1, 1]
 
     frugal_flow = Transformed(
         frugal_flow,
-        Invert(Affine(loc=-jnp.ones(nvars + 1), scale=jnp.ones(nvars + 1) * 2)),
+        Invert(Affine(loc=-jnp.ones(nvars), scale=jnp.ones(nvars) * 2)),
     )
     frugal_flow = Transformed(
         frugal_flow,
@@ -461,7 +479,7 @@ def train_frugal_flow_gaussian(
     frugal_flow, losses = fit_to_data(
         key=subkey,
         dist=frugal_flow,
-        x=jnp.hstack([y, u_z]),
+        x=input_vars,
         condition=condition,
         optimizer=optimizer,
         show_progress=show_progress,
@@ -478,6 +496,7 @@ def train_frugal_flow(
     key: jr.PRNGKey,
     y: ArrayLike,
     u_z: ArrayLike,  # impose discrete
+    u_z_hetero: ArrayLike | None = None,
     optimizer: optax.GradientTransformation | None = None,
     RQS_knots: int = 8,
     nn_depth: int = 1,
@@ -499,11 +518,24 @@ def train_frugal_flow(
         "flexible_discrete_output",
         "location_translation",
     ]
+
+    if (causal_model != "gaussian") & (u_z_hetero is not None):
+        raise ValueError("Only gaussian causal model supports heterogeneous effects.")
+
+    if u_z_hetero is not None:
+        assert condition.shape[1] == (
+            u_z_hetero.shape[1] + 1
+        ), "Both z_hetero and treatment must be included in the condition."
+        causal_effect_idx = u_z_hetero.shape[1]
+    else:
+        causal_effect_idx = 0
+
     if causal_model == "gaussian":
         frugal_flow, losses = train_frugal_flow_gaussian(
             key=key,
             y=y,
             u_z=u_z,  # impose discrete
+            u_z_hetero=u_z_hetero,
             optimizer=optimizer,
             RQS_knots=RQS_knots,
             nn_depth=nn_depth,
@@ -518,6 +550,7 @@ def train_frugal_flow(
             mask_condition=mask_condition,
             stop_grad_until_active=stop_grad_until_active,
             causal_model_args=causal_model_args,
+            causal_effect_idx=causal_effect_idx,
         )
 
     elif causal_model == "flexible_discrete_output":
@@ -692,7 +725,7 @@ def get_independent_quantiles(
     return_z_cont_flow=False,
 ):
     assert (z_discr is not None) | (z_cont is not None)
-    res = {'u_z_cont': None, 'u_z_discr': None}
+    res = {"u_z_cont": None, "u_z_discr": None}
 
     key, subkey = jr.split(key)
 
