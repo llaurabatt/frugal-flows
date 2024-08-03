@@ -197,19 +197,19 @@ def compare_datasets(real_data, synth_data, alphas, k, n_permutations=1000, seed
     energy_matrix = energy(real_samples_var, synth_samples_var, ret_matrix=True)[1]
     print(f'Energy Calculated in {time.time() - start:.4f} seconds...')
 
-    # start = time.time()
-    # fr_matrix = fr(real_samples_var, synth_samples_var, norm=2, ret_matrix=True)[1]
-    # print(f'FR Calculated in {time.time() - start:.4f} seconds...')
+    start = time.time()
+    fr_matrix = fr(real_samples_var, synth_samples_var, norm=2, ret_matrix=True)[1]
+    print(f'FR Calculated in {time.time() - start:.4f} seconds...')
     
-    # start = time.time()
-    # knn_matrix = knn(real_samples_var, synth_samples_var, norm=2, ret_matrix=True)[1]
-    # print(f'KNN Calculated in {time.time() - start:.4f} seconds...')
-    # print(f'Total Metrics Calculation Time: {time.time() - start_time:.4f} seconds')
+    start = time.time()
+    knn_matrix = knn(real_samples_var, synth_samples_var, norm=2, ret_matrix=True)[1]
+    print(f'KNN Calculated in {time.time() - start:.4f} seconds...')
+    print(f'Total Metrics Calculation Time: {time.time() - start_time:.4f} seconds')
     results = {
         "MMD pval": mmd.pval(mmd_matrix, n_permutations=n_permutations),
         "Energy pval": energy.pval(energy_matrix, n_permutations=n_permutations),
-        # "Friedman-Rafsky pval": fr.pval(fr_matrix, n_permutations=n_permutations),
-        # "kNN pval": knn.pval(knn_matrix, n_permutations=n_permutations)
+        "Friedman-Rafsky pval": fr.pval(fr_matrix, n_permutations=n_permutations),
+        "kNN pval": knn.pval(knn_matrix, n_permutations=n_permutations)
     }
 
     return results
