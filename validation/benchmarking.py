@@ -38,7 +38,8 @@ class FrugalFlowModel:
         self.X = X
         self.Z_disc = Z_disc
         self.Z_cont = Z_cont
-        self.subkeys =         self.res = None
+        self.subkeys = None
+        self.res = None
         self.frugal_flow = None
         self.min_val_loss = None
         self.vmap_frugal_flow = None
