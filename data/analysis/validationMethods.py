@@ -98,7 +98,7 @@ def matchit(outcome: str, treatment: str, data: pd.DataFrame, method: str = 'ful
     psnn = SignatureTranslatedAnonymousPackage(r_code_string, "powerpack")
     ate = psnn.ate
     ate_std = psnn.ate_std
-    lower_conf, upper_conf = (ate_std * -1.96, ate_std * +1.96)
+    lower_conf, upper_conf = (ate - ate_std * 1.96, ate + ate_std * 1.96)
     return ate, lower_conf, upper_conf
 
 

@@ -186,7 +186,7 @@ def run_simulations(data_generating_function: callable, seed: int, num_samples: 
         )
         causal_margin = frugal_fit['causal_margin']
         results.append(np.array([
-            causal_margin.ate,
+            causal_margin.ate[0],
             causal_margin.const,
             causal_margin.scale
         ]))

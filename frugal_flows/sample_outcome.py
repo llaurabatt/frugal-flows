@@ -16,6 +16,7 @@ from jaxtyping import ArrayLike
 
 from frugal_flows.bijections import (
     LocCond,
+    MaskedAutoregressiveHeterogeneous,
     MaskedAutoregressiveFirstUniform,
     UnivariateNormalCDF,
 )
@@ -110,10 +111,13 @@ def sample_outcome(
 
         assert isinstance(frugal_flow.base_dist, _StandardUniform)
         assert isinstance(frugal_flow.bijection.bijections[0].tree, Affine)
-        assert isinstance(
+        assert (isinstance(
             frugal_flow.bijection.bijections[1].bijection.bijection.bijections[0],
             MaskedAutoregressiveFirstUniform,
-        )
+        ))|(isinstance(
+            frugal_flow.bijection.bijections[1].bijection.bijection.bijections[0],
+            MaskedAutoregressiveHeterogeneous,
+        ))
 
         maf_dim = (
             frugal_flow.bijection.bijections[1]

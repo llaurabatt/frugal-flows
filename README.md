@@ -39,6 +39,13 @@ The dependencies of ```frugal-flows``` can be found in the ```pyproject.toml``` 
 * To reproduce Figure 4: [e401k_Data_Pipeline.ipynb](./validation/e401k_Data_Pipeline.ipynb)
 * To reproduce Table 3 in the Appendix: [Logistic_Sampling.ipynb](./validation/Logistic_Sampling.ipynb)
 
+## To reproduce comparisons to Causal Flows
+
+To recover Causal Flows ATE values reported in Table X:
+* Clone our [forked causal-flow repository](https://github.com/llaurabatt/causal-flows.git)
+* Build your environment from the ```environment.yaml``` file
+* Run ```run.sh``` to reproduce experiments
+* Run ```ate_FF_loop.ipynb``` to produce ATE values
 
 # Acknowledgement
 
