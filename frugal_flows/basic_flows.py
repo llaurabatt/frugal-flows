@@ -11,6 +11,7 @@ from flowjax.bijections import (
     Chain,
     Invert,
     Loc,
+    MaskedAutoregressive,
     Permute,
     RationalQuadraticSpline,
     Scan,
@@ -494,4 +495,53 @@ def masked_autoregressive_bijection_masked_condition(
     layers = eqx.filter_vmap(make_layer)(keys)
     maf_bijection = Invert(Scan(layers)) if invert else Scan(layers)
 
+    return maf_bijection
+
+
+def masked_autoregressive_bijection(
+    key: jr.PRNGKey,
+    dim: ArrayLike,
+    condition: ArrayLike,
+    RQS_knots: int = 8,
+    nn_depth: int = 1,
+    nn_width: int = 50,
+    flow_layers: int = 4,
+):
+    """Masked autoregressive flow.
+
+    Parameterises a transformer bijection with an autoregressive neural network.
+    Refs: https://arxiv.org/abs/1606.04934; https://arxiv.org/abs/1705.07057v4.
+
+    Args:
+        key: Random seed.
+        base_dist: Base distribution, with ``base_dist.ndim==1``.
+        transformer: Bijection parameterised by autoregressive network. Defaults to
+            affine.
+        cond_dim: Dimension of the conditioning variable. Defaults to None.
+        flow_layers: Number of flow layers. Defaults to 8.
+        nn_width: Number of hidden layers in neural network. Defaults to 50.
+        nn_depth: Depth of neural network. Defaults to 1.
+        nn_activation: _description_. Defaults to jnn.relu.
+        invert: Whether to invert the bijection. Broadly, True will prioritise a faster
+            inverse, leading to faster `log_prob`, False will prioritise faster forward,
+            leading to faster `sample`. Defaults to True.
+    """
+    invert = True
+    transformer = RationalQuadraticSpline(knots=RQS_knots, interval=1)
+
+    def make_layer(key):  # masked autoregressive layer + permutation
+        bij_key, perm_key = jr.split(key)
+        bijection = MaskedAutoregressive(
+            key=bij_key,
+            transformer=transformer,
+            dim=dim,
+            cond_dim=condition.shape[1],
+            nn_width=nn_width,
+            nn_depth=nn_depth,
+        )
+        return _add_default_permute(bijection, dim, perm_key)
+
+    keys = jr.split(key, flow_layers)
+    layers = eqx.filter_vmap(make_layer)(keys)
+    maf_bijection = Invert(Scan(layers)) if invert else Scan(layers)
     return maf_bijection

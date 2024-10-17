@@ -24,3 +24,5 @@ dependencies:
     # - flowjax
     - --editable ./flowjax/
     - --editable ./
+
+
