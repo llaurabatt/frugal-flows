@@ -327,7 +327,7 @@ def train_frugal_flow_flexible_continuous(
 
     frugal_flow = frugal_flow.merge_transforms()
     frugal_flow = eqx.tree_at(
-        where=lambda frugal_flow: frugal_flow.bijection.bijections[-4],
+        where=lambda frugal_flow: frugal_flow.bijection.bijections[-3],
         pytree=frugal_flow,
         replace_fn=NonTrainable,
     )
@@ -660,7 +660,7 @@ def train_frugal_flow(
         frugal_flow, losses = train_frugal_flow_gaussian(
             key=key,
             y=y,
-            u_z=u_z,  # impose discrete
+            u_z=u_z,
             u_z_hetero=u_z_hetero,
             optimizer=optimizer,
             RQS_knots=RQS_knots,
@@ -684,6 +684,27 @@ def train_frugal_flow(
             key=key,
             y=y,
             u_z=u_z,  # impose discrete
+            optimizer=optimizer,
+            RQS_knots=RQS_knots,
+            nn_depth=nn_depth,
+            nn_width=nn_width,
+            flow_layers=flow_layers,
+            show_progress=show_progress,
+            learning_rate=learning_rate,
+            max_epochs=max_epochs,
+            max_patience=max_patience,
+            batch_size=batch_size,
+            condition=condition,
+            mask_condition=mask_condition,
+            stop_grad_until_active=stop_grad_until_active,
+            causal_model_args=causal_model_args,
+        )
+
+    elif causal_model == "flexible_continuous":
+        frugal_flow, losses = train_frugal_flow_flexible_continuous(
+            key=key,
+            y=y,
+            u_z=u_z,
             optimizer=optimizer,
             RQS_knots=RQS_knots,
             nn_depth=nn_depth,
