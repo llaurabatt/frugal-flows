@@ -41,7 +41,7 @@ The dependencies of ```frugal-flows``` can be found in the ```pyproject.toml``` 
 
 ## To reproduce comparisons to Causal Flows
 
-To recover Causal Flows ATE values reported in Table X:
+To recover Causal Flows ATE values reported in Table 1:
 * Clone our [forked causal-flow repository](https://github.com/llaurabatt/causal-flows.git)
 * Build your environment from the ```environment.yaml``` file
 * Run ```run.sh``` to reproduce experiments
