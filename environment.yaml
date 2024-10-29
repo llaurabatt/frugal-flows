@@ -26,7 +26,7 @@ dependencies:
     # - flowjax
     - torch
     - zepid
-    - --editable ./flowjax/
+    - --editable ./flowjax/ # using version v12.2.0
     - --editable ./torch-two-sample/
     - --editable ./
 
