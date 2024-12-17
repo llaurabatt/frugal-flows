@@ -1,6 +1,6 @@
 # Frugal Flows
 
-This repository is the official implementation of *Marginal Causal Flows for Inference and Validation*, submitted to NeurIPS 2024.
+This repository is the official implementation of *Marginal Causal Flows for Inference and Validation*, accepted at NeurIPS 2024.
 
 # Set-up the environment
 
