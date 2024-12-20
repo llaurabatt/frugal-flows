@@ -5,8 +5,8 @@ description = "Deep copula frugal simulations in JAX."
 readme = "README.md"
 requires-python ="~=3.9"
 authors = [
-  {name = "AUTHOR 1", email = "ANON"},
-  {name = "AUTHOR 2", email = "ANON"},
+  {name = "Laura Battaglia", email = "battaglia@stats.ox.ac.uk"},
+  {name = "Daniel de Vassimon Manela", email = "manela@stats.ox.ac.uk"},
 ]
 keywords = ["jax", "copula", "causal-inference", "deep-learning", "frugal-parametrisation"]
 classifiers = [
