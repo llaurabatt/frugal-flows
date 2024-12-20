@@ -20,7 +20,7 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import scipy.stats as ss
 
-import data.template_causl_simulations as causl_py
+import data_processing_and_simulations.causl_sim_data_generation as causl_py
 
 import rpy2.robjects as ro
 

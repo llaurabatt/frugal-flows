@@ -1,3 +1,5 @@
+import sys
+
 import jax
 import jax.random as jr
 import jax.numpy as jnp
@@ -14,8 +16,8 @@ from rpy2.robjects.packages import SignatureTranslatedAnonymousPackage
 from frugal_flows.causal_flows import independent_continuous_marginal_flow, get_independent_quantiles, train_frugal_flow
 from frugal_flows.bijections import UnivariateNormalCDF
 
-import data.template_causl_simulations as causl_py
-import wandb
+sys.path.append("../") # go to parent dir
+import data_processing_and_simulations.causl_sim_data_generation as causl_py
 
 # Activate automatic conversion of rpy2 objects to pandas objects
 pandas2ri.activate()

@@ -10,7 +10,7 @@ import wandb
 
 sys.path.append("../")  # go to parent dir
 # sys.path.append("../data/analysis/")  # go to parent dir
-import data.template_causl_simulations as causl_py
+# import data.template_causl_simulations as causl_py
 
 
 import jax.random as jr
