@@ -239,7 +239,7 @@ def logistic_outcome(
 
     def get_y(u_y, ate, x, const):
         p = jax.nn.sigmoid(ate * x + const)
-        return (u_y >= (1 - p)).astype(int)
+        return (u_y >= (1 - p)).astype(int).squeeze()
 
     return jax.vmap(get_y, in_axes=(0, None, 0, None))(
         u_y, ate, causal_condition, const
