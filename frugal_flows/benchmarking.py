@@ -185,6 +185,15 @@ class FrugalFlowModel:
                 u_yx=u_yx.flatten(),
                 **outcome_causal_args
             )[:, None]
+        elif outcome_causal_model == 'logistic_regression':
+            Y_samples = sample_outcome(
+                key=subkeys[4],
+                n_samples=sampling_size,
+                causal_model=outcome_causal_model,
+                causal_condition=X_samples,
+                u_yx=u_yx.flatten(),
+                **outcome_causal_args
+            )
         else:
             Y_samples = sample_outcome(
                 key=subkeys[4],
@@ -194,6 +203,9 @@ class FrugalFlowModel:
                 u_yx=u_yx.flatten(),
                 **outcome_causal_args
             )[:, None]
+        print(f"Y shape: {Y_samples.shape}")
+        print(f"X shape: {X_samples.shape}")
+        print(f"Z shape: {full_Z_samples.shape}")
         sim_data = np.hstack([Y_samples, X_samples, full_Z_samples])
         sim_data_df = pd.DataFrame(sim_data, columns=['Y', 'X', *[f"Z_{i+1}" for i in range(full_Z_samples.shape[1])]])
         # model_fits = valMethods.run_model_fits('Y', 'X', sim_data_df, sample_frac=0.8, repeats=1, replace=True)
