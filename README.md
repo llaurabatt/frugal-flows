@@ -4,28 +4,40 @@ This repository is the official implementation of *Marginal Causal Flows for Inf
 
 # Set-up the environment
 
+## Micromamba
+
 Environment requirements to run the paper experiments can be found in the ```environment.yaml``` file. This file can be used to set up an environment with any environment manager e.g., venv, Conda, Mamba, Micromamba. With Micromamba, you can create and activate the environment as follows:
 ```
 micromamba create -f environment.yaml
 
 micromamba activate <name-environment>
 ```
-This will automatically install the Frugal Flows package together with its dependencies and all the other packages required to run the experiments in the paper.
+This will automatically install the Frugal Flows package together with its dependencies and all the Python packages required to run the experiments in the paper. 
 
-# Install Frugal Flows
+Some experiments require additional R packages. To install these, please refer to the section "Rerunning Experiments".
 
-Alternatively, you can solely install the Frugal Flow package:
+## Rerunning Experiments
+Rerunning all the experiments presented in the paper requires the installation of `rpy2` and other relevant R libraries. To install these, please run:
+```
+python install_rpy2_libraries.py
+``` 
+
+## Pip install Frugal Flows
+
+Alternatively, you can solely install the Frugal Flow package using `pip`:
 
 ```
 git clone <URL-repository>
 
-cd deep-copula-frugal
+cd frugal-flows
 
 pip install -e ./
  
 ```
 
 The dependencies of ```frugal-flows``` can be found in the ```pyproject.toml``` file.
+
+
 
 # General Structure
 * The main bulk of the frugal flow implementation can be found in [frugal_flows](./frugal_flows/).
