@@ -185,15 +185,6 @@ class FrugalFlowModel:
                 u_yx=u_yx.flatten(),
                 **outcome_causal_args
             )[:, None]
-        elif outcome_causal_model == 'logistic_regression':
-            Y_samples = sample_outcome(
-                key=subkeys[4],
-                n_samples=sampling_size,
-                causal_model=outcome_causal_model,
-                causal_condition=X_samples,
-                u_yx=u_yx.flatten(),
-                **outcome_causal_args
-            )
         else:
             Y_samples = sample_outcome(
                 key=subkeys[4],

@@ -35,7 +35,7 @@ pandas2ri.activate()
 utils = importr('utils')
 utils = rpy2.robjects.packages.importr('utils')
 utils.chooseCRANmirror(ind=1) # select the first mirror in the list
-packnames = ('dbarts', 'grf', 'marginaleffects')
+packnames = ('dbarts', 'grf', 'marginaleffects', 'MatchIt')
 
 names_to_install = [x for x in packnames if not rpy2.robjects.packages.isinstalled(x)]
 if len(names_to_install) > 0:
