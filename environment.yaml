@@ -13,8 +13,8 @@ dependencies:
   - econml
   - optax
   - pre-commit
-  - r-base=4.2
-  - rpy2=3.5
+  - r-base # =4.2
+  - rpy2 # =3.5
   - notebook
   - distrax
   - seaborn
@@ -26,8 +26,9 @@ dependencies:
     # - flowjax
     - torch
     - zepid
-    - --editable ./flowjax/ # using version v12.2.0
-    - --editable ./torch-two-sample/
+    - flowjax==12.2.0
+    # - --editable ./flowjax/ # using version v12.2.0
+    # - --editable ./torch-two-sample/
     - --editable ./
 
 
