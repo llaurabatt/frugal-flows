@@ -1,4 +1,4 @@
-name: deep-frugal-three
+name: frugal-flows
 channels:
   - conda-forge
   - defaults
