@@ -19,8 +19,8 @@ from frugal_flows.bijections import UnivariateNormalCDF
 sys.path.append("../") # go to parent dir
 import data_processing_and_simulations.causl_sim_data_generation as causl_py
 
-# Activate automatic conversion of rpy2 objects to pandas objects
-pandas2ri.activate()
+# rpy2 3.6 removed pandas2ri.activate(); this is the global-converter equivalent.
+ro.conversion.set_conversion(ro.default_converter + pandas2ri.converter)
 base = importr('base')
 utils = importr('utils')
 

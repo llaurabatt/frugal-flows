@@ -25,7 +25,7 @@ import data_processing_and_simulations.causl_sim_data_generation as causl_py
 import rpy2.robjects as ro
 
 # Activate automatic conversion of rpy2 objects to pandas objects
-pandas2ri.activate()
+ro.conversion.set_conversion(ro.default_converter + pandas2ri.converter)
 
 # Import the R library causl
 try:

@@ -18,10 +18,10 @@ import zepid
 from zepid.causal.doublyrobust import TMLE
 
 import rpy2
+import rpy2.robjects as ro
 from rpy2.robjects.packages import importr
 from rpy2.robjects.packages import SignatureTranslatedAnonymousPackage
 import rpy2.robjects.numpy2ri
-rpy2.robjects.numpy2ri.activate()
 from rpy2.robjects import r, pandas2ri
 from rpy2.robjects.vectors import StrVector
 import logging
@@ -30,7 +30,11 @@ import logging
 logging.basicConfig(format='%(asctime)s %(message)s', level=logging.ERROR)
 
 
-pandas2ri.activate()
+# rpy2 3.6 removed numpy2ri.activate()/pandas2ri.activate(); combine both
+# converters into one global set_conversion to mimic the old "both active" state.
+ro.conversion.set_conversion(
+    ro.default_converter + rpy2.robjects.numpy2ri.converter + pandas2ri.converter
+)
 
 utils = importr('utils')
 utils = rpy2.robjects.packages.importr('utils')

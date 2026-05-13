@@ -6,10 +6,11 @@ dependencies:
   - python >=3.10
   - ipykernel 
   - ipywidgets
-  - jax
+  - jax=0.4.35
+  - jaxlib=0.4.35
   - matplotlib
   - ruff
-  - equinox
+  - equinox=0.11.10
   - econml
   - optax
   - pre-commit
@@ -24,7 +25,7 @@ dependencies:
   - pip:
     # - pre-commit
     # - flowjax
-    - torch
+    # - torch  # removed: no macOS x86_64 wheels after PyTorch 2.3
     - zepid
     - flowjax==12.2.0
     # - --editable ./flowjax/ # using version v12.2.0

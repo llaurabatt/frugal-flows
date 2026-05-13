@@ -1,9 +1,64 @@
+import os
+import platform
+import shutil
+import sys
+
 import rpy2.robjects as ro
 from rpy2.robjects.vectors import StrVector
 from rpy2.robjects.packages import importr
 
 # Toggle this to True if you want detailed output
 VERBOSE = False
+
+
+def check_system_prerequisites():
+    """Verify system-level tools that causl's compile pipeline depends on."""
+    system = platform.system()
+    missing = []
+
+    # gfortran: R's Makeconf on macOS hardcodes /opt/gfortran/bin/gfortran.
+    # On Linux the PATH gfortran is what R uses.
+    if system == "Darwin":
+        if not os.path.exists("/opt/gfortran/bin/gfortran"):
+            missing.append(
+                "gfortran not found at /opt/gfortran/bin/gfortran (where R's Makeconf expects it).\n"
+                "    Fix: download gfortran-12.2-universal.pkg (works on both Intel and Apple Silicon for R 4.3.0–4.4.3) from\n"
+                "         https://github.com/R-macos/gcc-12-branch/releases/tag/12.2-darwin-r0.1\n"
+                "         (also linked from https://mac.r-project.org/tools/)\n"
+                "         then install with: sudo installer -pkg ~/Downloads/gfortran-12.2-universal.pkg -target /"
+            )
+    elif system == "Linux":
+        if shutil.which("gfortran") is None:
+            missing.append(
+                "gfortran not found on PATH.\n"
+                "    Fix: sudo apt-get install gfortran  (or your distro's equivalent)"
+            )
+
+    # System GSL: required by the R 'gsl' package, which is a hard dep of causl.
+    if shutil.which("gsl-config") is None:
+        if system == "Darwin":
+            missing.append(
+                "System GSL (GNU Scientific Library) not found.\n"
+                "    Fix: brew install gsl  (install Homebrew first from https://brew.sh if needed)"
+            )
+        elif system == "Linux":
+            missing.append(
+                "System GSL (GNU Scientific Library) not found.\n"
+                "    Fix: sudo apt-get install libgsl-dev  (or your distro's equivalent)"
+            )
+        else:
+            missing.append("System GSL (GNU Scientific Library) not found on PATH.")
+
+    if missing:
+        print("=" * 72, file=sys.stderr)
+        print("MISSING SYSTEM PREREQUISITES", file=sys.stderr)
+        print("=" * 72, file=sys.stderr)
+        for m in missing:
+            print(f"- {m}\n", file=sys.stderr)
+        print("Install the items above, then re-run this script.", file=sys.stderr)
+        sys.exit(1)
+
+    print("System prerequisites OK: gfortran + GSL detected.")
 
 # Utility functions for suppressing and enabling R output
 def suppress_r_output():
@@ -84,6 +139,9 @@ def install_causl():
             suppress_r_output()
         print("Installing causl package from GitHub...")
         ro.r('remotes::install_github("rje42/causl")')
+        # remotes::install_github does not raise on R-side compile/lazy-load failure;
+        # the only honest way to know it worked is to actually load it.
+        ro.r('library(causl)')
         print("causl package installed successfully.")
     except Exception as e:
         print(f"Error installing causl: {e}")
@@ -146,6 +204,11 @@ def test_causl_methods():
 
 # Main installation script
 def main():
+    # Step 0: System prerequisites (gfortran, system GSL).
+    # causl ships Fortran source (mvt.f) and depends on the R 'gsl' package,
+    # which in turn needs the system GSL library. Both are external to R.
+    check_system_prerequisites()
+
     # Step 1: Set CRAN mirror
     set_cran_mirror()
 
@@ -156,17 +219,28 @@ def main():
     install_specific_version("MASS", "7.3-60")
     install_specific_version("Matrix", "1.6-5")
 
-    # Step 4: Install causl from GitHub
+    # Step 4: Install R 'gsl' explicitly. CRAN's current gsl (2.1-9) requires
+    # R >= 4.5.0; 2.1-8 is the most recent version compatible with R 4.4.x
+    # and still loads cleanly on newer R. Installing it before causl prevents
+    # causl's dep resolution from silently skipping gsl as "not available".
+    install_specific_version("gsl", "2.1-8")
+
+    # Step 5: Install causl from GitHub
     install_causl()
 
-    # Step 5: Verify all packages
-    if is_package_installed("MASS") and is_package_installed("Matrix") and is_package_installed("causl"):
+    # Step 6: Verify all packages
+    if (
+        is_package_installed("MASS")
+        and is_package_installed("Matrix")
+        and is_package_installed("gsl")
+        and is_package_installed("causl")
+    ):
         print("All packages installed and verified successfully.")
     else:
         print("Some packages failed to install or verify.")
         exit(1)
 
-    # Step 6: Test causl methods
+    # Step 7: Test causl methods
     test_causl_methods()
 
 # Run the script
