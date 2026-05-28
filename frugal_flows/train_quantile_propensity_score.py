@@ -1,4 +1,5 @@
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import jax.random as jr
 import optax
@@ -84,16 +85,22 @@ def train_quantile_propensity_score(
 
     assert isinstance(flow.base_dist, _StandardUniform)
 
+    def _freeze_arrays(subtree):
+        return jax.tree.map(
+            lambda leaf: NonTrainable(leaf) if eqx.is_inexact_array(leaf) else leaf,
+            subtree,
+        )
+
     flow = eqx.tree_at(
         where=lambda flow: flow.bijection.bijections[0],
         pytree=flow,
-        replace_fn=NonTrainable,
+        replace_fn=_freeze_arrays,
     )
 
     flow = eqx.tree_at(
         where=lambda flow: flow.bijection.bijections[-1],
         pytree=flow,
-        replace_fn=NonTrainable,
+        replace_fn=_freeze_arrays,
     )
 
     # Train
