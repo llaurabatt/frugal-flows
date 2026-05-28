@@ -1,11 +1,14 @@
 """Tests for ``sample_marginals`` (inverse PIT: quantiles -> marginal samples).
 
-Continuous path is tightly coupled to flowjax flow internals (hardcoded
-bijection indices) and needs a trained flow; that is a Phase-2 fragility, not
-covered here. These tests cover the discrete path: correctness of the
-empirical-CDF inverse, the vmapped fast path (equal category counts across
-variables), and the loop fallback (unequal category counts, when the rank-
-mapping arrays can't be stacked).
+Discrete path: correctness of the empirical-CDF inverse, the vmapped fast
+path (equal category counts across variables), and the loop fallback
+(unequal category counts, when the rank-mapping arrays can't be stacked).
+
+Continuous path: ``from_quantiles_to_marginal_cont`` builds samples by
+walking a trained ``univariate_marginal_flow`` at three hardcoded chain
+positions. Both call shapes (single flow, list of flows) are exercised
+end-to-end on a small trained flow; outputs are asserted finite and
+shape-correct.
 """
 
 from __future__ import annotations
@@ -13,7 +16,9 @@ from __future__ import annotations
 import jax.numpy as jnp
 import jax.random as jr
 
+from frugal_flows.basic_flows import univariate_marginal_flow
 from frugal_flows.sample_marginals import (
+    from_quantiles_to_marginal_cont,
     from_quantiles_to_marginal_discr,
     univariate_from_quantiles_to_marginal_discr,
 )
@@ -104,3 +109,56 @@ def test_loop_fallback_runs_on_unequal_category_counts():
     ).T
     assert out.shape == (3, 2)
     assert jnp.array_equal(out, expected)
+
+
+# --- continuous path ------------------------------------------------------
+
+
+def _make_univariate_flow(key, z_cont):
+    flow, _ = univariate_marginal_flow(
+        key=key,
+        z_cont=z_cont,
+        RQS_knots=4,
+        flow_layers=2,
+        nn_width=4,
+        nn_depth=1,
+        max_epochs=1,
+        max_patience=1,
+        batch_size=16,
+        show_progress=False,
+    )
+    return flow
+
+
+def test_from_quantiles_to_marginal_cont_single_flow_runs():
+    """``from_quantiles_to_marginal_cont`` on a single trained
+    ``univariate_marginal_flow`` produces finite samples of the correct
+    shape. Exercises the hardcoded ``bijections[0|1|2].transform`` chain
+    walk on the AbstractDistribution branch."""
+    k_train, k_u = jr.split(jr.PRNGKey(0))
+    n = 16
+    z_cont = jr.normal(k_train, (32,))
+    flow = _make_univariate_flow(k_train, z_cont)
+    u_z = jr.uniform(k_u, (n, 1))
+    out = from_quantiles_to_marginal_cont(
+        key=jr.PRNGKey(1), flow=flow, n_samples=n, u_z=u_z
+    )
+    assert out.shape == (n, 1)
+    assert bool(jnp.isfinite(out).all())
+
+
+def test_from_quantiles_to_marginal_cont_list_of_flows_runs():
+    """List-of-flows branch: same trained flow reused twice. Output
+    concatenates each per-flow sample column-wise into ``(n_samples,
+    n_flows)``."""
+    k_train, k_u = jr.split(jr.PRNGKey(0))
+    n = 16
+    z_cont = jr.normal(k_train, (32,))
+    flow = _make_univariate_flow(k_train, z_cont)
+    flows = [flow, flow]
+    u_z = jr.uniform(k_u, (n, 2))
+    out = from_quantiles_to_marginal_cont(
+        key=jr.PRNGKey(1), flow=flows, n_samples=n, u_z=u_z
+    )
+    assert out.shape == (n, 2)
+    assert bool(jnp.isfinite(out).all())
