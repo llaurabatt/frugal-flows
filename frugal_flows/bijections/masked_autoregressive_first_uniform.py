@@ -15,8 +15,8 @@ from flowjax.bijections.jax_transforms import Vmap
 from flowjax.bijections.utils import Identity
 from flowjax.masks import rank_based_mask
 from flowjax.utils import get_ravelled_pytree_constructor
-from flowjax.wrappers import Where
 from jax import Array
+from paramax import Parameterize
 from jaxtyping import Array, Int
 
 
@@ -170,9 +170,10 @@ def masked_autoregressive_mlp(
 ) -> eqx.nn.MLP:
     """Returns an equinox multilayer perceptron, with autoregressive masks.
 
-    The weight matrices are wrapped using :class:`~flowjax.wrappers.Where`, which
-    will apply the masking when :class:`~flowjax.wrappers.unwrap` is called on the MLP.
-    For details of how the masks are formed, see https://arxiv.org/pdf/1502.03509.pdf.
+    Masked positions are enforced at network-use time via a parameter wrapper,
+    not at construction. Training updates the underlying weight; masked entries
+    remain 0 in the forward pass. For mask construction details, see
+    https://arxiv.org/pdf/1502.03509.pdf.
 
     Args:
         in_ranks: The ranks of the inputs.
@@ -195,7 +196,9 @@ def masked_autoregressive_mlp(
     for i, linear in enumerate(mlp.layers):
         mask = rank_based_mask(ranks[i], ranks[i + 1], eq=i != len(mlp.layers) - 1)
         masked_linear = eqx.tree_at(
-            lambda linear: linear.weight, linear, Where(mask, linear.weight, 0)
+            lambda linear: linear.weight,
+            linear,
+            Parameterize(jnp.where, mask, linear.weight, 0),
         )
         masked_layers.append(masked_linear)
 
