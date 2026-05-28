@@ -8,6 +8,7 @@ import optax
 from flowjax.bijections import (
     AbstractBijection,
     Affine,
+    Chain,
     Invert,
     MaskedAutoregressive,
     Permute,
