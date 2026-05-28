@@ -1,6 +1,7 @@
 from collections.abc import Callable
 
 import equinox as eqx
+import jax
 import jax.nn as jnn
 import jax.numpy as jnp
 import jax.random as jr
@@ -30,6 +31,13 @@ from frugal_flows.bijections import (
     MaskedAutoregressiveTransformerCond,
     MaskedIndependent,
 )
+
+
+def _freeze_arrays(subtree):
+    return jax.tree.map(
+        lambda leaf: NonTrainable(leaf) if eqx.is_inexact_array(leaf) else leaf,
+        subtree,
+    )
 
 
 def univariate_marginal_flow(
@@ -95,7 +103,7 @@ def univariate_marginal_flow(
     flow = eqx.tree_at(
         where=lambda flow: flow.bijection.bijections[0],
         pytree=flow,
-        replace_fn=NonTrainable,
+        replace_fn=_freeze_arrays,
     )
 
     key, subkey = jr.split(key)
