@@ -14,7 +14,7 @@ from flowjax.bijections.jax_transforms import Vmap
 from flowjax.utils import get_ravelled_pytree_constructor
 from jax import Array
 from jax.typing import ArrayLike
-from paramax import Parameterize
+from paramax import NonTrainable, Parameterize
 
 
 class MaskedIndependent(AbstractBijection):
@@ -64,7 +64,11 @@ class MaskedIndependent(AbstractBijection):
                 "Only unconditional transformers with shape () are supported.",
             )
 
-        constructor, num_params = get_ravelled_pytree_constructor(transformer)
+        constructor, num_params = get_ravelled_pytree_constructor(
+            transformer,
+            filter_spec=eqx.is_inexact_array,
+            is_leaf=lambda leaf: isinstance(leaf, NonTrainable),
+        )
 
         if cond_dim is None:
             self.cond_shape = None

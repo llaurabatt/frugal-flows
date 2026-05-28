@@ -12,6 +12,7 @@ from flowjax.bijections.jax_transforms import Vmap
 from flowjax.bijections.masked_autoregressive import masked_autoregressive_mlp
 from flowjax.utils import get_ravelled_pytree_constructor
 from jax import Array
+from paramax import NonTrainable
 
 
 class MaskedAutoregressiveTransformerCond(AbstractBijection):
@@ -59,7 +60,11 @@ class MaskedAutoregressiveTransformerCond(AbstractBijection):
                 "Only unconditional transformers with shape () are supported.",
             )
 
-        constructor, num_params = get_ravelled_pytree_constructor(transformer)
+        constructor, num_params = get_ravelled_pytree_constructor(
+            transformer,
+            filter_spec=eqx.is_inexact_array,
+            is_leaf=lambda leaf: isinstance(leaf, NonTrainable),
+        )
 
         if cond_dim is None:
             self.cond_shape = None
