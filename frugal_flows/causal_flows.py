@@ -18,7 +18,7 @@ from flowjax.bijections.utils import Identity
 from flowjax.distributions import Transformed, Uniform, _StandardUniform
 from flowjax.flows import masked_autoregressive_flow
 from flowjax.train import fit_to_data
-from flowjax.wrappers import NonTrainable
+from paramax import NonTrainable
 from jaxtyping import ArrayLike
 
 from frugal_flows.basic_flows import (
