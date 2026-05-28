@@ -101,11 +101,10 @@ def train_quantile_propensity_score(
     flow, losses = fit_to_data(
         key=subkey,
         dist=flow,
-        x=u_x[:, None],
+        data=(u_x[:, None], condition),
         learning_rate=learning_rate,
         max_patience=max_patience,
         max_epochs=max_epochs,
-        condition=condition,
         optimizer=optimizer,
         show_progress=show_progress,
         batch_size=batch_size,

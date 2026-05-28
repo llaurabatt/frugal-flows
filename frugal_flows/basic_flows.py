@@ -103,7 +103,7 @@ def univariate_marginal_flow(
     flow, losses = fit_to_data(
         key=subkey,
         dist=flow,
-        x=z_cont,
+        data=z_cont,
         learning_rate=learning_rate,
         max_patience=max_patience,
         max_epochs=max_epochs,

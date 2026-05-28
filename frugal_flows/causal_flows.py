@@ -88,7 +88,7 @@ def train_copula_flow(
     copula_flow, losses = fit_to_data(
         key=subkey,
         dist=copula_flow,
-        x=u_z,
+        data=u_z,
         optimizer=optimizer,
         show_progress=show_progress,
         learning_rate=learning_rate,
@@ -213,8 +213,7 @@ def train_frugal_flow_location_translation(
     frugal_flow, losses = fit_to_data(
         key=subkey,
         dist=frugal_flow,
-        x=jnp.hstack([y, u_z]),
-        condition=condition,
+        data=(jnp.hstack([y, u_z]), condition),
         optimizer=optimizer,
         show_progress=show_progress,
         learning_rate=learning_rate,
@@ -332,8 +331,7 @@ def train_frugal_flow_flexible_continuous(
     frugal_flow, losses = fit_to_data(
         key=subkey,
         dist=frugal_flow,
-        x=jnp.hstack([y, u_z]),
-        condition=condition,
+        data=(jnp.hstack([y, u_z]), condition),
         optimizer=optimizer,
         show_progress=show_progress,
         learning_rate=learning_rate,
@@ -464,8 +462,7 @@ def train_frugal_flow_flexible_discrete(
     frugal_flow, losses = fit_to_data(
         key=subkey,
         dist=frugal_flow,
-        x=jnp.hstack([outcome, u_z]),
-        condition=condition,
+        data=(jnp.hstack([outcome, u_z]), condition),
         optimizer=optimizer,
         show_progress=show_progress,
         learning_rate=learning_rate,
@@ -580,8 +577,7 @@ def train_frugal_flow_gaussian(
     frugal_flow, losses = fit_to_data(
         key=subkey,
         dist=frugal_flow,
-        x=input_vars,
-        condition=condition,
+        data=(input_vars, condition),
         optimizer=optimizer,
         show_progress=show_progress,
         learning_rate=learning_rate,
@@ -767,7 +763,7 @@ def independent_continuous_marginal_flow(
     flow, losses = fit_to_data(
         key=subkey,
         dist=flow,
-        x=z_cont,
+        data=z_cont,
         learning_rate=learning_rate,
         max_patience=max_patience,
         max_epochs=max_epochs,
