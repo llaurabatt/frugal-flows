@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
-from flowjax import wrappers
 from flowjax.bijections.bijection import AbstractBijection
 from flowjax.utils import arraylike_to_array
 from jax import Array
@@ -55,7 +54,7 @@ class UnivariateNormalCDF(AbstractBijection):
     # cond_shape: ClassVar[None] = None
     cond_shape: int | None = None
     ate: Array
-    scale: Array | wrappers.AbstractUnwrappable[Array]
+    scale: Array
     const: Array
 
     def __init__(
@@ -70,7 +69,7 @@ class UnivariateNormalCDF(AbstractBijection):
             *(arraylike_to_array(a, dtype=float) for a in (scale, const)),
         )
         self.shape = scale.shape  # (1,)
-        self.scale = scale  # wrappers.BijectionReparam(scale, SoftPlus()) #why not constraining it to be inputted as positive??
+        self.scale = scale  # Parameterize(lambda x: jnn.softplus(x) + 1e-2, scale) — uncomment to close bug #1b
         if cond_dim is None:
             self.cond_shape = None
         else:
@@ -78,13 +77,6 @@ class UnivariateNormalCDF(AbstractBijection):
             assert (
                 self.cond_shape == self.ate.shape
             ), "ate and condition must have the same shape"
-
-    def transform(self, x, condition=None):
-        if self.cond_shape is None:
-            location_x = self.const
-        else:
-            location_x = (self.ate @ condition) + self.const
-        return jax.scipy.stats.norm.cdf(x, loc=location_x, scale=self.scale)
 
     def transform_and_log_det(self, x, condition=None):
         if self.cond_shape is None:
@@ -94,13 +86,6 @@ class UnivariateNormalCDF(AbstractBijection):
         transformed_x = jax.scipy.stats.norm.cdf(x, loc=location_x, scale=self.scale)
         log_det_x = jax.scipy.stats.norm.logpdf(x, loc=location_x, scale=self.scale)
         return transformed_x, log_det_x
-
-    def inverse(self, y, condition=None):
-        if self.cond_shape is None:
-            location_y = self.const
-        else:
-            location_y = (self.ate @ condition) + self.const
-        return jax.scipy.special.ndtri(y) * self.scale + location_y
 
     def inverse_and_log_det(self, y, condition=None):
         if self.cond_shape is None:
