@@ -54,14 +54,8 @@ class LocCond(AbstractBijection):
         self.shape = self.ate.shape
         self.cond_shape = (cond_dim,)
 
-    def transform(self, x, condition=None):
-        return x + self.ate * condition[0]
-
     def transform_and_log_det(self, x, condition=None):
         return x + self.ate * condition[0], jnp.zeros(())
-
-    def inverse(self, y, condition=None):
-        return y - self.ate * condition[0]
 
     def inverse_and_log_det(self, y, condition=None):
         return (y - self.ate * condition[0]), jnp.zeros(())

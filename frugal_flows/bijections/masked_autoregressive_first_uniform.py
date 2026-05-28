@@ -122,23 +122,11 @@ class MaskedAutoregressiveFirstUniform(AbstractBijection):
         self.transformer_constructor = constructor
         self.shape = (dim,)
 
-    def transform(self, x, condition=None):
-        nn_input = x if condition is None else jnp.hstack((x, condition))
-        transformer_params = self.masked_autoregressive_mlp(nn_input)
-        transformer = self._flat_params_to_transformer(transformer_params)
-        return transformer.transform(x)
-
     def transform_and_log_det(self, x, condition=None):
         nn_input = x if condition is None else jnp.hstack((x, condition))
         transformer_params = self.masked_autoregressive_mlp(nn_input)
         transformer = self._flat_params_to_transformer(transformer_params)
         return transformer.transform_and_log_det(x)
-
-    def inverse(self, y, condition=None):
-        init = (y, 0)
-        fn = partial(self.inv_scan_fn, condition=condition)
-        (x, _), _ = jax.lax.scan(fn, init, None, length=len(y))
-        return x
 
     def inv_scan_fn(self, init, _, condition):
         """One 'step' in computing the inverse."""
@@ -151,7 +139,9 @@ class MaskedAutoregressiveFirstUniform(AbstractBijection):
         return (x, rank + 1), None
 
     def inverse_and_log_det(self, y, condition=None):
-        x = self.inverse(y, condition)
+        init = (y, 0)
+        fn = partial(self.inv_scan_fn, condition=condition)
+        (x, _), _ = jax.lax.scan(fn, init, None, length=len(y))
         log_det = self.transform_and_log_det(x, condition)[1]
         return x, -log_det
 
