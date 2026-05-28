@@ -21,7 +21,7 @@ import jax.numpy as jnp
 import jax.random as jr
 import pytest
 from flowjax.bijections import Affine
-from flowjax.wrappers import unwrap
+from paramax import unwrap
 
 from frugal_flows.bijections import (
     MaskedAutoregressiveHeterogeneous,

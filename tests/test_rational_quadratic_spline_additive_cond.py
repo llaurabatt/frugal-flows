@@ -22,7 +22,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 import pytest
-from flowjax.wrappers import unwrap
+from paramax import unwrap
 
 from frugal_flows.bijections import RationalQuadraticSplineAdditiveCond
 

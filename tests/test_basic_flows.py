@@ -12,7 +12,7 @@ import jax.numpy as jnp
 import jax.random as jr
 import pytest
 from flowjax.distributions import Uniform
-from flowjax.wrappers import unwrap
+from paramax import unwrap
 
 from frugal_flows.basic_flows import (
     masked_autoregressive_flow_first_uniform,
