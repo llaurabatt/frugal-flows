@@ -110,7 +110,7 @@ def sample_outcome(
         # verify flow has a compatible structure
 
         assert isinstance(frugal_flow.base_dist, _StandardUniform)
-        assert isinstance(frugal_flow.bijection.bijections[0].tree, Affine)
+        assert isinstance(frugal_flow.bijection.bijections[0], Affine)
         assert (isinstance(
             frugal_flow.bijection.bijections[1].bijection.bijection.bijections[0],
             MaskedAutoregressiveFirstUniform,
@@ -140,23 +140,23 @@ def sample_outcome(
         )
         try:
             assert isinstance(
-                frugal_flow.bijection.bijections[2].tree.bijections[0], Identity
+                frugal_flow.bijection.bijections[2].bijections[0], Identity
             )
         except Exception:
-            assert (isinstance(frugal_flow.bijection.bijections[2].tree, Invert)) & (
-                isinstance(frugal_flow.bijection.bijections[2].tree.bijection, Affine)
+            assert (isinstance(frugal_flow.bijection.bijections[2], Invert)) & (
+                isinstance(frugal_flow.bijection.bijections[2].bijection, Affine)
             )
 
         # obtain u_y samples from flow
         uni_standard = jr.uniform(key, shape=(n_samples, flow_dim))
-        uni_minus1_plus1 = jax.vmap(frugal_flow.bijection.bijections[0].tree.transform)(
+        uni_minus1_plus1 = jax.vmap(frugal_flow.bijection.bijections[0].transform)(
             uni_standard
         )
 
         corruni_minus1_plus1 = jax.vmap(frugal_flow.bijection.bijections[1].transform)(
             uni_minus1_plus1, flow_fake_condition
         )
-        corruni = jax.vmap(frugal_flow.bijection.bijections[2].tree.transform)(
+        corruni = jax.vmap(frugal_flow.bijection.bijections[2].transform)(
             corruni_minus1_plus1, flow_fake_condition
         )
 
@@ -170,13 +170,13 @@ def sample_outcome(
         try:
             # in this case the flow expects the input to be in (-1,1)
             assert isinstance(
-                frugal_flow.bijection.bijections[2].tree.bijections[0], Identity
+                frugal_flow.bijection.bijections[2].bijections[0], Identity
             )
             corruni_standard = corruni_y
         except Exception:
             # in this case the flow expects the input to be in (0,1)
-            assert (isinstance(frugal_flow.bijection.bijections[2].tree, Invert)) & (
-                isinstance(frugal_flow.bijection.bijections[2].tree.bijection, Affine)
+            assert (isinstance(frugal_flow.bijection.bijections[2], Invert)) & (
+                isinstance(frugal_flow.bijection.bijections[2].bijection, Affine)
             )
             corruni_standard = (corruni_y / 2) + 0.5
 

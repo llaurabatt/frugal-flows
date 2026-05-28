@@ -44,7 +44,7 @@ def from_quantiles_to_marginal_cont(
         for i, flow_i in enumerate(flow):
             flow_dim = 1
             uni_standard = unis_standard[:, i, None]
-            uni_minus1_plus1 = jax.vmap(flow_i.bijection.bijections[0].tree.transform)(
+            uni_minus1_plus1 = jax.vmap(flow_i.bijection.bijections[0].transform)(
                 uni_standard
             )
 
@@ -65,7 +65,7 @@ def from_quantiles_to_marginal_cont(
         else:
             key, subkey = jr.split(key)
             uni_standard = jr.uniform(subkey, shape=(n_samples, flow_dim))
-        uni_minus1_plus1 = jax.vmap(flow.bijection.bijections[0].tree.transform)(
+        uni_minus1_plus1 = jax.vmap(flow.bijection.bijections[0].transform)(
             uni_standard
         )
 
