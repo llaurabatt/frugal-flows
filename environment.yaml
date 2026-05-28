@@ -31,6 +31,9 @@ dependencies:
     - zepid
     - flowjax==19.1.0
     - paramax>=0.0.5
+    # lineax>=0.1.1 requires jax>=0.10, which conda-forge does not ship yet (latest is 0.9.2).
+    # Pinning to 0.1.0 (declared jax>=0.6.1) keeps the install resolvable without --no-deps.
+    - lineax==0.1.0
     # - --editable ./flowjax/
     # - --editable ./torch-two-sample/
     - --editable ./
