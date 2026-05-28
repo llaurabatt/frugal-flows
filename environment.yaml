@@ -3,14 +3,14 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - python >=3.10
-  - ipykernel 
+  - python >=3.11
+  - ipykernel
   - ipywidgets
-  - jax=0.4.35
-  - jaxlib=0.4.35
+  - jax >=0.7
+  - jaxlib >=0.7
   - matplotlib
   - ruff
-  - equinox=0.11.10
+  - equinox >=0.13
   - econml
   - optax
   - pre-commit
@@ -29,8 +29,9 @@ dependencies:
     # - flowjax
     # - torch  # removed: no macOS x86_64 wheels after PyTorch 2.3
     - zepid
-    - flowjax==12.2.0
-    # - --editable ./flowjax/ # using version v12.2.0
+    - flowjax==19.1.0
+    - paramax>=0.0.5
+    # - --editable ./flowjax/
     # - --editable ./torch-two-sample/
     - --editable ./
 
