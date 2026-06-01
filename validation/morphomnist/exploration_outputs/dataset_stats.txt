@@ -1,0 +1,11 @@
+=== train set (60000 samples) ===
+  thickness  : mean=2.503  std=0.632  min=0.876  max=6.256
+  intensity  : mean=158.016  std=48.379  min=66.601  max=254.903
+  digit dist : {0: 5923, 1: 6742, 2: 5958, 3: 6131, 4: 5842, 5: 5421, 6: 5918, 7: 6265, 8: 5851, 9: 5949}
+  image shape: torch.Size([60000, 1, 32, 32])
+
+=== test set (10000 samples) ===
+  thickness  : mean=2.506  std=0.633  min=0.909  max=5.881
+  intensity  : mean=158.527  std=48.504  min=67.869  max=254.873
+  digit dist : {0: 980, 1: 1135, 2: 1032, 3: 1010, 4: 982, 5: 892, 6: 958, 7: 1028, 8: 974, 9: 1009}
+  image shape: torch.Size([10000, 1, 32, 32])
