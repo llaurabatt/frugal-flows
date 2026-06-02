@@ -11,40 +11,95 @@ from rpy2.robjects.packages import importr
 VERBOSE = False
 
 
+def _r_fortran_compiler():
+    """Resolve the Fortran compiler R was actually built with.
+
+    Queries `R CMD config FC` through the already-loaded R session rather than
+    assuming a hardcoded toolchain path. This is correct for both system R
+    (macOS: /opt/gfortran/bin/gfortran) and conda R (its bundled
+    arm64-apple-darwin*-gfortran on $CONDA_PREFIX/bin). Returns the resolved
+    absolute path to the compiler, or None if R reports none / it can't be
+    found on disk.
+    """
+    try:
+        fc_vec = ro.r('''
+            r_bin <- file.path(R.home("bin"), "R")
+            out <- tryCatch(
+                system2(r_bin, c("CMD", "config", "FC"), stdout = TRUE, stderr = FALSE),
+                error = function(e) character(0)
+            )
+            paste(out, collapse = " ")
+        ''')
+        fc = str(fc_vec[0]).strip() if len(fc_vec) else ""
+    except Exception:
+        fc = ""
+
+    if not fc:
+        return None
+
+    # FC may be a bare program name (resolved via PATH — conda puts
+    # $CONDA_PREFIX/bin on PATH) or an absolute path, optionally followed by
+    # flags. Take the first token and resolve it.
+    compiler = fc.split()[0]
+    if os.path.isabs(compiler):
+        return compiler if os.path.exists(compiler) else None
+    return shutil.which(compiler)
+
+
 def check_system_prerequisites():
-    """Verify system-level tools that causl's compile pipeline depends on."""
+    """Verify system-level tools that causl's compile pipeline depends on.
+
+    The Fortran-compiler check trusts R's own build configuration
+    (`R CMD config FC`) instead of a hardcoded path, so it passes on both
+    system R and conda R. See .claude/upstream_causl_patch.md for rationale.
+    """
     system = platform.system()
     missing = []
 
-    # gfortran: R's Makeconf on macOS hardcodes /opt/gfortran/bin/gfortran.
-    # On Linux the PATH gfortran is what R uses.
-    if system == "Darwin":
-        if not os.path.exists("/opt/gfortran/bin/gfortran"):
-            missing.append(
-                "gfortran not found at /opt/gfortran/bin/gfortran (where R's Makeconf expects it).\n"
-                "    Fix: download gfortran-12.2-universal.pkg (works on both Intel and Apple Silicon for R 4.3.0–4.4.3) from\n"
-                "         https://github.com/R-macos/gcc-12-branch/releases/tag/12.2-darwin-r0.1\n"
-                "         (also linked from https://mac.r-project.org/tools/)\n"
-                "         then install with: sudo installer -pkg ~/Downloads/gfortran-12.2-universal.pkg -target /"
-            )
-    elif system == "Linux":
-        if shutil.which("gfortran") is None:
-            missing.append(
-                "gfortran not found on PATH.\n"
-                "    Fix: sudo apt-get install gfortran  (or your distro's equivalent)"
-            )
+    # gfortran: causl ships Fortran source (mvt.f). Ask R which compiler it
+    # will actually use rather than guessing where it lives on disk.
+    fc = _r_fortran_compiler()
+    if fc is None:
+        # Fall back to the legacy hardcoded-path / PATH check only when R
+        # can't report a usable compiler itself.
+        if system == "Darwin":
+            if not os.path.exists("/opt/gfortran/bin/gfortran"):
+                missing.append(
+                    "No Fortran compiler found: R's `R CMD config FC` returned nothing usable\n"
+                    "    and /opt/gfortran/bin/gfortran (where system R's Makeconf expects it) is absent.\n"
+                    "    Fix: download gfortran-12.2-universal.pkg (Intel + Apple Silicon, R 4.3.0–4.4.3) from\n"
+                    "         https://github.com/R-macos/gcc-12-branch/releases/tag/12.2-darwin-r0.1\n"
+                    "         (also linked from https://mac.r-project.org/tools/)\n"
+                    "         then install with: sudo installer -pkg ~/Downloads/gfortran-12.2-universal.pkg -target /"
+                )
+        elif system == "Linux":
+            if shutil.which("gfortran") is None:
+                missing.append(
+                    "No Fortran compiler found (R reported none and gfortran is not on PATH).\n"
+                    "    Fix: sudo apt-get install gfortran  (or your distro's equivalent)"
+                )
+    elif VERBOSE:
+        print(f"R Fortran compiler: {fc}")
 
     # System GSL: required by the R 'gsl' package, which is a hard dep of causl.
-    if shutil.which("gsl-config") is None:
+    # On conda, gsl-config lives in $CONDA_PREFIX/bin (on PATH when the env is
+    # active); look there too before declaring it missing.
+    gsl_config = shutil.which("gsl-config")
+    conda_prefix = os.environ.get("CONDA_PREFIX")
+    if gsl_config is None and conda_prefix:
+        candidate = os.path.join(conda_prefix, "bin", "gsl-config")
+        if os.path.exists(candidate):
+            gsl_config = candidate
+    if gsl_config is None:
         if system == "Darwin":
             missing.append(
                 "System GSL (GNU Scientific Library) not found.\n"
-                "    Fix: brew install gsl  (install Homebrew first from https://brew.sh if needed)"
+                "    Fix: brew install gsl  (or `micromamba install -n <env> gsl` for conda R)"
             )
         elif system == "Linux":
             missing.append(
                 "System GSL (GNU Scientific Library) not found.\n"
-                "    Fix: sudo apt-get install libgsl-dev  (or your distro's equivalent)"
+                "    Fix: sudo apt-get install libgsl-dev  (or `micromamba install -n <env> gsl`)"
             )
         else:
             missing.append("System GSL (GNU Scientific Library) not found on PATH.")
@@ -58,7 +113,7 @@ def check_system_prerequisites():
         print("Install the items above, then re-run this script.", file=sys.stderr)
         sys.exit(1)
 
-    print("System prerequisites OK: gfortran + GSL detected.")
+    print(f"System prerequisites OK: Fortran compiler ({fc or 'gfortran'}) + GSL detected.")
 
 # Utility functions for suppressing and enabling R output
 def suppress_r_output():
@@ -207,6 +262,8 @@ def main():
     # Step 0: System prerequisites (gfortran, system GSL).
     # causl ships Fortran source (mvt.f) and depends on the R 'gsl' package,
     # which in turn needs the system GSL library. Both are external to R.
+    # The check is now conda-aware (trusts `R CMD config FC` + looks in
+    # $CONDA_PREFIX for gsl-config), so it passes on both system and conda R.
     check_system_prerequisites()
 
     # Step 1: Set CRAN mirror
