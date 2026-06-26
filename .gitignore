@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+
+# Tooling
+.ruff_cache/
+.pytest_cache/
+wandb/
+
+# MorphoMNIST data and generated outputs (large / reproducible)
+*.npz

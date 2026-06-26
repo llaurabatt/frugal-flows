@@ -182,7 +182,6 @@ def masked_independent_flow(
     bijection = Invert(Scan(layers)) if invert else Scan(layers)
     return Transformed(base_dist, bijection)
 
-
 def masked_autoregressive_flow_first_uniform(
     key: Array,
     *,
