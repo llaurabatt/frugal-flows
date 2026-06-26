@@ -16,3 +16,6 @@ wandb/
 
 # MorphoMNIST data and generated outputs (large / reproducible)
 *.npz
+
+# Claude context files (personal working files) — never tracked
+.claude/
