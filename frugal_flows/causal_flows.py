@@ -126,6 +126,18 @@ def train_frugal_flow_location_translation(
     causal_model_args: dict | None = None,
 ):
     nvars = u_z.shape[1]
+    dim_y = y.shape[1]
+    # ate may be a scalar / length-1 array (univariate Y, legacy callers) or a
+    # length-K vector (multivariate Y). Normalise to one shift per outcome dim;
+    # a single value is broadcast across all K dims.
+    ate = jnp.atleast_1d(jnp.asarray(causal_model_args["ate"]))
+    if ate.shape != (dim_y,):
+        if ate.shape == (1,):
+            ate = jnp.broadcast_to(ate, (dim_y,))
+        else:
+            raise ValueError(
+                f"ate has length {ate.shape[0]} but y has {dim_y} column(s)."
+            )
 
     if condition is None:
         cond_dim = None
@@ -138,7 +150,7 @@ def train_frugal_flow_location_translation(
         cond_dim_mask = None
         cond_dim_nomask = cond_dim
 
-    list_bijections_affine = [Identity((1,))] + [
+    list_bijections_affine = [Identity((dim_y,))] + [
         Invert(Affine(loc=-jnp.ones(nvars), scale=jnp.ones(nvars) * 2))
     ]
     bijections_affine = Concatenate(list_bijections_affine)
@@ -146,7 +158,7 @@ def train_frugal_flow_location_translation(
     key, subkey = jr.split(key)
     ate_maf_bijection = masked_autoregressive_bijection_masked_condition(
         key=subkey,
-        dim=1,
+        dim=dim_y,
         condition=condition,
         RQS_knots=causal_model_args["RQS_knots"],
         nn_depth=causal_model_args["nn_depth"],
@@ -157,15 +169,15 @@ def train_frugal_flow_location_translation(
     list_bijections_ate_maf = [ate_maf_bijection] + [Identity((1,))] * nvars
     bijections_ate_maf = Concatenate(list_bijections_ate_maf)
 
-    list_bijections_tanh = [Invert(Tanh(()))] + [Identity(())] * nvars
+    list_bijections_tanh = [Invert(Tanh(()))] * dim_y + [Identity(())] * nvars
     bijections_tanh = Stack(list_bijections_tanh)
 
-    list_bijections_loccond = [LocCond(ate=causal_model_args["ate"])] + [
+    list_bijections_loccond = [LocCond(ate=ate[k]) for k in range(dim_y)] + [
         Identity(())
     ] * nvars
     bijections_loccond = Stack(list_bijections_loccond)
 
-    base_dist = Uniform(-jnp.ones(nvars + 1), jnp.ones(nvars + 1))
+    base_dist = Uniform(-jnp.ones(nvars + dim_y), jnp.ones(nvars + dim_y))
 
     transformer = RationalQuadraticSpline(knots=RQS_knots, interval=1)
 
@@ -180,6 +192,7 @@ def train_frugal_flow_location_translation(
         nn_depth=nn_depth,
         nn_width=nn_width,
         flow_layers=flow_layers,
+        cond_u_y_dim=dim_y,
     )  # Support on [-1, 1]
 
     frugal_flow = Transformed(
