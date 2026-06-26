@@ -57,6 +57,7 @@ class MaskedAutoregressiveFirstUniform(AbstractBijection):
     cond_shape: tuple[int, ...] | None
     transformer_constructor: Callable
     masked_autoregressive_mlp: eqx.nn.MLP
+    cond_u_y_dim: int = eqx.field(static=True)
 
     def __init__(
         self,
@@ -69,6 +70,7 @@ class MaskedAutoregressiveFirstUniform(AbstractBijection):
         nn_width: int,
         nn_depth: int,
         nn_activation: Callable = jnn.relu,
+        cond_u_y_dim: int = 1,
     ) -> None:
         if transformer.shape != () or transformer.cond_shape is not None:
             raise ValueError(
@@ -121,6 +123,7 @@ class MaskedAutoregressiveFirstUniform(AbstractBijection):
 
         self.transformer_constructor = constructor
         self.shape = (dim,)
+        self.cond_u_y_dim = cond_u_y_dim
 
     def transform_and_log_det(self, x, condition=None):
         nn_input = x if condition is None else jnp.hstack((x, condition))
@@ -145,8 +148,14 @@ class MaskedAutoregressiveFirstUniform(AbstractBijection):
         log_det = self.transform_and_log_det(x, condition)[1]
         return x, -log_det
 
-    def _flat_params_to_transformer(self, params: Array, cond_u_y_dim=1):
-        """Reshape to dim X params_per_dim, then vmap."""
+    def _flat_params_to_transformer(self, params: Array):
+        """Reshape to dim X params_per_dim, then vmap.
+
+        The first ``cond_u_y_dim`` coordinates are held fixed (Identity) so they
+        stay marginally uniform; the remaining coordinates are transformed by the
+        autoregressive-network-parameterised ``transformer``.
+        """
+        cond_u_y_dim = self.cond_u_y_dim
         dim = self.shape[-1]
         transformer_params = jnp.reshape(params, (dim, -1))
         transformer_params = transformer_params[cond_u_y_dim:, :]

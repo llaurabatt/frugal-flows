@@ -232,19 +232,16 @@ def masked_autoregressive_flow_first_uniform(
         MAF_bijection = MaskedAutoregressiveFirstUniform(
             key=bij_key,
             transformer=transformer,
-            dim=dim,  # dim - cond_u_y_dim,
-            # cond_dim=cond_dim,
+            dim=dim,
             cond_dim_mask=cond_dim_mask,
             cond_dim_nomask=cond_dim_nomask,
-            # cond_dim=cond_dim,
             nn_width=nn_width,
             nn_depth=nn_depth,
             nn_activation=nn_activation,
+            cond_u_y_dim=cond_u_y_dim,
         )
-        # list_bijections.append(MAF_bijection)
-        # bijection = Concatenate(list_bijections)
         bijection = MAF_bijection
-        return _add_default_permute_but_first(bijection, dim, perm_key)
+        return _add_default_permute_but_first(bijection, dim, perm_key, cond_u_y_dim)
 
     keys = jr.split(key, flow_layers)
     layers = eqx.filter_vmap(make_layer)(keys)
@@ -252,13 +249,21 @@ def masked_autoregressive_flow_first_uniform(
     return Transformed(base_dist, bijection)
 
 
-def _add_default_permute_but_first(bijection: AbstractBijection, dim: int, key: Array):
-    if (dim == 1) or (dim == 2):
+def _add_default_permute_but_first(
+    bijection: AbstractBijection, dim: int, key: Array, cond_u_y_dim: int = 1
+):
+    # Permute only the trailing (covariate) dims; the first ``cond_u_y_dim`` dims
+    # are held in place so they stay marginally uniform. A single permutable dim
+    # (or none) is a no-op.
+    if dim - cond_u_y_dim <= 1:
         return bijection
 
     perm = Permute(
         jnp.hstack(
-            [jnp.expand_dims(0, axis=-1), jr.permutation(key, jnp.arange(1, dim))]
+            [
+                jnp.arange(cond_u_y_dim),
+                cond_u_y_dim + jr.permutation(key, jnp.arange(dim - cond_u_y_dim)),
+            ]
         )
     )
     return Chain([bijection, perm]).merge_chains()
