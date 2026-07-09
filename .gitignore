@@ -17,5 +17,10 @@ wandb/
 # MorphoMNIST data and generated outputs (large / reproducible)
 *.npz
 
+# MorphoMNIST / imaging-extension work — parked for now, do not track
+validation/morphomnist/
+validation/exploring_morphomnist.ipynb
+*morphomnist*
+
 # Claude context files (personal working files) — never tracked
 .claude/
