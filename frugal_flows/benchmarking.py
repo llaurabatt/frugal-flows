@@ -3,6 +3,7 @@ import jax
 import numpy as np
 import pandas as pd
 from frugal_flows.causal_flows import get_independent_quantiles, train_frugal_flow
+from frugal_flows.outcome_transforms import as_outcome_transform
 from frugal_flows.sample_outcome import sample_outcome
 from frugal_flows.sample_marginals import from_quantiles_to_marginal_cont, from_quantiles_to_marginal_discr
 from frugal_flows.train_quantile_propensity_score import train_quantile_propensity_score
@@ -43,11 +44,20 @@ class FrugalFlowModel:
         Z_cont: Continuous confounders, shape (n, n_cont), or None.
         confounding_copula: Callable ``(key, N, rho) -> (u_yx, u_xz)``;
             defaults to a bivariate Gaussian copula.
+        outcome_transform: ``None`` / kind-string / ``OutcomeTransform`` applied to
+            ``Y`` before fitting the causal margin and inverted on sampled outcomes
+            (see ``frugal_flows.outcome_transforms``). ``None`` -> identity (no-op,
+            fully backward compatible). For a skewed / heavy-tailed outcome that would
+            otherwise saturate the spline margin, pass an explicit
+            ``OutcomeTransform("log", floor=b)`` or ``OutcomeTransform("asinh", floor=b)``
+            (the bare ``"log"``/``"asinh"`` strings are rejected -- ``floor`` must be given).
     """
 
-    def __init__(self, Y, X, Z_disc=None, Z_cont=None, confounding_copula=None):
+    def __init__(self, Y, X, Z_disc=None, Z_cont=None, confounding_copula=None,
+                 outcome_transform=None):
         self.Y = Y
         self.X = X
+        self.outcome_transform = as_outcome_transform(outcome_transform)
         self.Z_disc = Z_disc
         self.Z_cont = Z_cont
         self.conf_shape = 0
@@ -105,9 +115,13 @@ class FrugalFlowModel:
             uz_full_samples = self.res['u_z_cont']
         else:
             uz_full_samples = jnp.hstack([self.res['u_z_cont'], self.res['u_z_discr']])
+        # Fit the causal margin on the (optionally) transformed outcome. inverse is
+        # applied to sampled outcomes in generate_samples so the estimand stays on
+        # the original Y scale. identity (default) leaves y == self.Y unchanged.
+        y_fit = self.outcome_transform.fit(self.Y).forward(self.Y)
         self.frugal_flow, losses = train_frugal_flow(
             key=key,
-            y=self.Y,
+            y=y_fit,
             u_z=uz_full_samples,
             condition=self.X,
             causal_model=causal_model,
@@ -211,6 +225,9 @@ class FrugalFlowModel:
                 u_yx=u_yx.flatten(),
                 **outcome_causal_args
             )[:, None]
+        # Invert the outcome transform so sampled Y (and any downstream ATE) is on
+        # the ORIGINAL scale; no-op for the identity default.
+        Y_samples = np.asarray(self.outcome_transform.inverse(Y_samples))
         print(f"Y shape: {Y_samples.shape}")
         print(f"X shape: {X_samples.shape}")
         print(f"Z shape: {full_Z_samples.shape}")
