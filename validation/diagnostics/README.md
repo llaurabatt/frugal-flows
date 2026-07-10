@@ -60,6 +60,37 @@ factorial behind `fig8`). Regenerate the figures with:
 cd validation && micromamba run -n frugal-flows-flowjax python -m diagnostics.plot_te_bias_findings
 ```
 
+### 10-D complex-copula HP check
+
+`copula10d_hp.py` (runner) + `plot_copula10d_hp.py` (analysis) ask **which frugal-flow
+HP settings recover the ATE when the confounder copula is genuinely high-dimensional**.
+The DGP is a **10 continuous confounders + Gamma outcome** model with a 55-param
+(C(11,2)) Gaussian Y–Z copula and overlap-preserving propensity (X.mean ≈ 0.5,
+true ATE 1.7634), across three dependence regimes: **weak** (ρ≈0.12), **mixed/complex**
+(a PD single-factor copula, heterogeneous ρ≈0.1–0.7), **strong** (ρ≈0.68). At n=2000,
+log+standardize, it sweeps 8 HP configs (all perturbing the **copula** flow; the margin
+spline is held at default) × 8 seeds = 192 fits, parallelised by shard.
+
+> **Note on the copula:** a flat *random* beta vector is generally **not** a valid
+> (positive-definite) correlation matrix — R/causl rejects it. The heterogeneous
+> `mixed` regime is therefore built in *correlation* space (single-factor PD matrix)
+> and mapped to causl's beta via `atanh`. See `_factor_copula` in `copula10d_hp.py`.
+
+| Figure | Shows |
+|---|---|
+| `fig9_copula10d_hp.png` | One panel per dependence regime, mean ATE ±SEM per HP config against truth. Consistent across all three regimes: **widening the copula conditioner** (`cop_wide` 100, `cop_wider` 200) is best or near-best; **deepening it** (`cop_deep`) is worst and destabilises under strong dependence; extra **knots** (`cop_knots`) and the all-big config buy nothing. Bias is largest in the heterogeneous `mixed` regime and no config removes it — the ceiling is finite-sample deconfounding, not capacity. |
+
+Committed source: `outputs/flexible_te/copula10d_hp/results.csv` (192 rows, consolidated
+from the parallel shards). Regenerate:
+
+```bash
+cd validation
+for i in 0 1 2 3 4; do OMP_NUM_THREADS=2 micromamba run -n frugal-flows-flowjax \
+  python -m diagnostics.copula10d_hp --shard $i --nshards 5 \
+  --out outputs/flexible_te/copula10d_hp/shard${i}.csv & done; wait
+micromamba run -n frugal-flows-flowjax python -m diagnostics.plot_copula10d_hp
+```
+
 ## Margin shape (small vs big data)
 
 | Script | Question | Output |
