@@ -47,11 +47,14 @@ figures that record what the multi-seed Gamma runs settled:
 | `fig5_small_n_ate_bias.png` | The log-cold ATE is unbiased at `n≥2000` but biased **upward**, growing as `n` shrinks (Panel A). Standardizing the fitting scale (log / +center / +scale / +standardize) is a **no-op** — all four coincide within SEM (Panel B). |
 | `fig6_confounding_location.png` | That small-`n` bias is **confounding**: it collapses on the unconfounded DGP (`gamma_b0`, Panel A), and it is a **location** effect — under confounding the fitted control mean `E[log Y \| do(0)]` is pulled below the truth while the treated mean is not (Panel B). It is **not** fixable by any outcome transform. |
 | `fig7_mean_ate_forest.png` | Forest plot of the **mean ATE estimate** (dot = mean, thick = ±SEM, thin = ±SD, faint = per-seed) for *every* study condition against the true-ATE line — the whole study at a glance: n-sweep means descend onto truth by `n≥2000`, the four standardize arms cluster indistinguishably, and the confounding pair straddles truth at `n=500` then converges. |
+| `fig8_model_confound_nsweep.png` | The clean **model × confounding × n** factorial — one panel per model (**raw** / **log** / **log-then-standardize**), `x = n`, a line each for unconfounded vs confounded. Reads as: **raw** is badly biased (tanh saturation) and recovers only slowly from below; **log** puts the unconfounded arm flat on truth while the confounded arm carries the decaying small-`n` upward bias; **log-then-standardize** is indistinguishable from **log**. |
 
 Source CSVs (committed, one row per fit): `nsweep_logcold.csv` (log-cold ATE vs
 `n`, 5 seeds), `std_decompose.csv` (log / center / scale / standardize × {500, 2000}
 × 15 seeds), `confound_test.csv` (`gamma_b0` vs `gamma_b1` × {500, 2000} × 15 seeds,
-with fitted interventional log-means). Regenerate the figures with:
+with fitted interventional log-means), and `factorial_model_confound.csv` (the full
+`model {raw, log, logstd}` × `dgp {gamma_b0, gamma_b1}` × `n {200..4000}` × 10-seed
+factorial behind `fig8`). Regenerate the figures with:
 
 ```bash
 cd validation && micromamba run -n frugal-flows-flowjax python -m diagnostics.plot_te_bias_findings

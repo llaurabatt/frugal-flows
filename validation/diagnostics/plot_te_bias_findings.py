@@ -189,7 +189,53 @@ def fig7():
     return p
 
 
+# ------------------------------------------------------------------ fig8
+def fig8():
+    """Factorial ATE recovery: one panel per model (raw / log / log-standardize),
+    x = n, a line each for unconfounded vs confounded, mean ATE +/- SEM + per-seed dots.
+    Reads factorial_model_confound.csv; returns None (skips) if it is not present."""
+    path = os.path.join(DATA, "factorial_model_confound.csv")
+    if not os.path.exists(path):
+        return None
+    df = pd.read_csv(path)
+    df = df[df["ate"].notna()]
+    models = [m for m in ("raw", "log", "logstd") if m in set(df["model"])]
+    mtitle = {"raw": "raw Y  (no transform)", "log": "log Y", "logstd": "log Y, then standardize"}
+    dgps = {"gamma_b0": ("unconfounded", "C2"), "gamma_b1": ("confounded", "C3")}
+    fig, axes = plt.subplots(1, len(models), figsize=(5.0 * len(models), 4.6), sharey=True)
+    if len(models) == 1:
+        axes = [axes]
+    for ax, model in zip(axes, models):
+        ax.axhline(TRUE_ATE, ls="--", color="k", lw=1.2, label=f"true = {TRUE_ATE}")
+        dm = df[df["model"] == model]
+        for dgp, (lbl, col) in dgps.items():
+            d = dm[dm["dgp"] == dgp]
+            if d.empty:
+                continue
+            g = d.groupby("n")["ate"].agg(["mean", "std", "count"]).reset_index().sort_values("n")
+            g["sem"] = g["std"] / np.sqrt(g["count"])
+            ax.scatter(d["n"] * (1 + (0.02 if dgp == "gamma_b1" else -0.02)), d["ate"],
+                       s=12, color=col, alpha=0.25, zorder=1)
+            ax.errorbar(g["n"], g["mean"], yerr=g["sem"], fmt="o-", capsize=3, color=col,
+                        lw=1.8, label=lbl, zorder=3)
+        ax.set_xscale("log")
+        ax.set_xlabel("n (log scale)")
+        ax.set_title(mtitle.get(model, model))
+        ax.legend(fontsize=8)
+    axes[0].set_ylabel("estimated ATE")
+    fig.suptitle("ATE recovery by model × confounding × n\n"
+                 "(Gamma DGP, flexible_continuous spline; dot = mean ±SEM, faint = per-seed)",
+                 y=1.02)
+    fig.tight_layout()
+    p = os.path.join(OUT, "fig8_model_confound_nsweep.png")
+    fig.savefig(p, bbox_inches="tight")
+    plt.close(fig)
+    return p
+
+
 if __name__ == "__main__":
     print("wrote:", fig5())
     print("wrote:", fig6())
     print("wrote:", fig7())
+    p8 = fig8()
+    print("wrote:", p8) if p8 else print("skipped fig8 (factorial_model_confound.csv not present)")
