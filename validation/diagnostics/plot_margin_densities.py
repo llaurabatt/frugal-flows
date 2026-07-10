@@ -18,14 +18,13 @@ margin is misspecified for a multiplicative/log-link DGP and can even put mass
 at Y<0 (impossible under the true support).
 
 Panel B (n=2,000): the spline arm re-fit from THREE random restarts on the
-SAME dataset (spline_stability.py convention: keys 70000/71000/72000), showing
-that the density SHAPE is stable across restarts even though the restart-level
-ATE wobbles (see SPLINE_BIAS_FINDINGS.md).
+SAME dataset (restart keys 70000/71000/72000), showing that the density SHAPE is
+stable across restarts even though the restart-level ATE wobbles.
 
-Key convention notes (see diagnostics/h1_matrix.py `robust_moments`): the
-spline margin composes an RQS on [-1,1] with atanh (Invert(Tanh)), so a base
-draw landing at the tanh boundary maps to +/-inf. We finite-filter each sample
-array before KDE'ing it and print the drop count -- never silent.
+Key convention note: the spline margin composes an RQS on [-1,1] with atanh
+(Invert(Tanh)), so a base draw landing at the tanh boundary maps to +/-inf. We
+finite-filter each sample array before KDE'ing it and print the drop count --
+never silent.
 
 Usage (from validation/, in the frugal-flows-flowjax env, on a shared 2-core box):
   env OMP_NUM_THREADS=2 ~/.local/bin/micromamba run -n frugal-flows-flowjax \\
@@ -62,7 +61,7 @@ from diagnostics.outcome_families import FAMILIES, GAMMA_PHI  # noqa: E402
 from diagnostics.quick_sense_check import base_hyperparams, fit_model  # noqa: E402
 
 # ----------------------------------------------------------------------------
-# Style: replicated from diagnostics/plot_spline_findings.py so this figure
+# Style: shared phone-friendly matplotlib rcParams so this figure
 # matches figs 1-3 (Okabe-Ito palette, despine, panel letters, 200 dpi).
 # ----------------------------------------------------------------------------
 ADDITIVE_COLOR = "#0072B2"  # blue
@@ -129,7 +128,7 @@ def finite_filter(arr, label: str) -> np.ndarray:
 
 
 def finite_ate(y0, y1) -> tuple[float, int, int]:
-    """Paired finite-filtered ATE (mirrors h1_matrix.robust_moments)."""
+    """Paired finite-filtered ATE: drop non-finite (boundary +/-inf) pairs, then average."""
     y0 = np.asarray(y0)
     y1 = np.asarray(y1)
     finite = np.isfinite(y0) & np.isfinite(y1)
@@ -159,9 +158,8 @@ def main():
     uz20 = causl_py.generate_uz_samples(Zd20, Zc20, False, 0, base_hyperparams(1500))["uz_samples"]
     print(f"data20k: X{tuple(X20.shape)} Y{tuple(Y20.shape)} u_z{tuple(uz20.shape)}\n")
 
-    # h1_matrix convention: key = jr.key(1000*seed+7); fold_in(1) for fit, fold_in(2)
-    # for intervene. We reuse the SAME base key for both arms (as h1_matrix does --
-    # the key is redefined per-arm from the same seed-derived value), noted here.
+    # key = jr.key(1000*seed+7); fold_in(1) for the fit, fold_in(2) for the
+    # interventional read-out. The same base key is reused for both arms.
     key20 = jr.key(1000 * 0 + 7)
 
     print("--- fitting SPLINE (flexible_continuous), n=20000, epochs=1500 ---")
@@ -208,7 +206,7 @@ def main():
     uz2 = causl_py.generate_uz_samples(Zd2, Zc2, False, 0, base_hyperparams(600))["uz_samples"]
     print(f"data2k: X{tuple(X2.shape)} Y{tuple(Y2.shape)} u_z{tuple(uz2.shape)}\n")
 
-    restart_seeds = [70000, 71000, 72000]  # spline_stability.py convention
+    restart_seeds = [70000, 71000, 72000]  # three fixed restart seeds
     restart_y0, restart_y1, restart_ates = [], [], []
     for i, rseed in enumerate(restart_seeds):
         print(f"--- spline restart {i} (key=jr.key({rseed})), n=2000, epochs=600 ---")

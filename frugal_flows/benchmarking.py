@@ -3,6 +3,7 @@ import jax
 import numpy as np
 import pandas as pd
 from frugal_flows.causal_flows import get_independent_quantiles, train_frugal_flow
+from frugal_flows.interventions import interventional_samples
 from frugal_flows.outcome_transforms import as_outcome_transform
 from frugal_flows.sample_outcome import sample_outcome
 from frugal_flows.sample_marginals import from_quantiles_to_marginal_cont, from_quantiles_to_marginal_discr
@@ -130,6 +131,40 @@ class FrugalFlowModel:
         )
         self.min_val_loss = jnp.min(jnp.array(losses['val']))
         self.vmap_frugal_flow = jax.vmap(fun=self.frugal_flow.bijection.transform, in_axes=(0))
+
+    def sample_do(self, key, t, n_mc):
+        """Draw ``n_mc`` samples of ``Y | do(T = t)`` on the ORIGINAL outcome scale.
+
+        Samples the fitted frugal flow's causal margin (output dim 0) at the fixed
+        treatment level ``t`` (broadcast to all treatment columns) and inverts the
+        outcome transform. ``key`` must be a typed key (``jax.random.key(...)``).
+        """
+        if self.frugal_flow is None:
+            raise RuntimeError("sample_do requires a fitted flow; call train_frugal_flow first")
+        cond = jnp.full((n_mc, self.X.shape[1]), float(t))
+        y = self.frugal_flow.sample(key, condition=cond)[:, 0]
+        return np.asarray(self.outcome_transform.inverse(y))
+
+    def estimate_ate(self, key, n_mc=20000):
+        """Model-agnostic ATE = ``E[Y|do(1)] - E[Y|do(0)]`` from the fitted causal margin.
+
+        Paired common-random-number interventional read-out (see
+        ``frugal_flows.interventions.interventional_samples``): samples the fitted
+        flow at do(0) and do(1) with the SAME base key, inverts the outcome
+        transform, and differences -- so the estimand is always on the original
+        ``Y`` scale, whatever ``outcome_transform`` was used at fit time. ``key``
+        must be a typed key (``jax.random.key(...)``). Requires ``train_frugal_flow``
+        to have been run.
+
+        Returns the full read-out dict (``ate``, ``tau_sd``, ``y0``/``y1``,
+        means/vars, ...).
+        """
+        if self.frugal_flow is None:
+            raise RuntimeError("estimate_ate requires a fitted flow; call train_frugal_flow first")
+        return interventional_samples(
+            key, self.frugal_flow, self.X.shape[1], n_mc,
+            outcome_transform=self.outcome_transform,
+        )
 
     def train_propensity_flow(self, key, hyperparam_dict):
         if self.Z_disc is None:

@@ -1,90 +1,53 @@
-# Identification diagnostics
+# Frugal-flow diagnostics
 
-Scripts that reproduce the **identification** findings of
-`validation/Continous_Frugal_Flows.ipynb` — *does the frugal flow recover the
-causal-margin parameters it was trained to identify?* — as runnable, sense-checkable
-scripts instead of notebook cells.
+A small, script-based suite (no notebooks) for the two questions that matter when
+sanity-checking a frugal-flow causal-margin fit:
 
-**This folder is purely additive.** Every script only *imports and calls* existing
-code in `frugal_flows/` and `validation/`. Nothing in the core package or the
-existing `validation/*.py` modules is modified — `git diff` outside this folder is
-empty.
+1. **Treatment-effect estimation** — does the flow recover the true ATE, and how
+   does that recovery behave from small `n` to large `n`?
+2. **Margin shape** — not just the scalar ATE, but *what the learned
+   interventional outcome distribution looks like*, in the small-data and
+   large-data regimes.
 
-## Environment
+Everything here is a **consumer of the `frugal_flows` package** — it never
+reimplements model logic. The interventional read-out itself
+(`do(0)` / `do(1)` common-random-number sampling → invert the outcome transform →
+difference) lives in the package as `frugal_flows.interventions` /
+`FrugalFlowModel.estimate_ate`; these scripts just wrap it around causl-generated
+ground-truth DGPs so the estimate can be scored against a known truth.
 
-Everything runs in the one working env (see project memory `project-working-env`):
+Run everything in the one working env:
 
 ```bash
-micromamba run -n frugal-flows-flowjax python -m diagnostics.<script> [flags]
+cd validation
+micromamba run -n frugal-flows-flowjax python -m diagnostics.<script> --help
 ```
 
-Run from the `validation/` directory (so the `diagnostics` package and the existing
-`data_processing_and_simulations` package are both importable). Ground-truth data
-comes from the R `causl` package via rpy2 — already installed in that env.
+## Treatment-effect estimation
 
-## The three diagnostics
-
-| Script | Question | Output (`outputs/`) |
+| Script | Question | Output |
 |---|---|---|
-| `d1_ate_recovery.py` | **Does it identify `(ate, const, scale)`?** Fit over N seeds, extract the learned causal margin, compare to truth. | `d1_<gen>_recovery.csv`, bias table (printed), `d1_<gen>_recovery.pdf` (boxplot vs truth) |
-| `d2_margin_shape.py` | **What does the causal margin look like?** Interventional outcome quantile functions / densities for `do(X=0)` vs `do(X=1)`; the gap is the ATE. | `d2_<gen>_margin.pdf`, sense-checks (printed) |
-| `d3_moment_match.py` | **Are the treatment/covariate moments what causl intended?** Per-variable mean/var vs a causl ground-truth reference. | `d3_<gen>_moments.csv`, table (printed), `d3_<gen>_moments.pdf` (histograms) |
+| `d1_ate_recovery.py` | **Does the flow identify the causal-margin parameters?** Generate data with a known `(ate, const, scale)`, fit over several seeds, recover the params, compare to truth. | `outputs/d1_<gen>_recovery.csv` + boxplot PDF + printed bias table |
+| `ate_sweep.py` | **How does ATE recovery scale with sample size?** Grid of (family × arm × `n` × seed); one CSV row per fit; model-agnostic paired-CRN ATE. Shardable over disjoint `--seeds`. | `outputs/sweep_*.csv` (one shard per run) |
+| `ate_sweep_plot.py` | Aggregate the `sweep_*.csv` shards. | `outputs/ate_sweep_recovery.png` (ATE ± SD vs `n`), `ate_sweep_relerr.png` |
 
-Run them individually, or all three with one config:
+`ate_extraction_suite.py` is the single-shot scorecard version: fit every
+(family × arm) once, score ATE / interventional-mean recovery, render a margin
+grid + ATE scorecard. It also re-exports `intervene` / `tau_curve` from
+`frugal_flows.interventions` under their historical names.
 
-```bash
-# fast feedback (small n, few seeds, short training) — sanity check the pipeline
-micromamba run -n frugal-flows-flowjax python -m diagnostics.run_diagnostics --smoke
+## Margin shape (small vs big data)
 
-# notebook-scale identification run on the mixed (Gaussian+Gamma) generator
-micromamba run -n frugal-flows-flowjax python -m diagnostics.run_diagnostics \
-    --generator mixed --const 1 --ate 1 --n-samples 20000 --n-iter 25
-```
+| Script | Question | Output |
+|---|---|---|
+| `d2_margin_shape.py` | **What does the learned margin look like?** Plot the interventional quantile functions `Q_0(u)` vs `Q_1(u)`; the treatment effect is the gap between the curves. | `outputs/d2_<gen>_margin.csv` + margin PDF |
+| `plot_margin_densities.py` | **Fitted vs true interventional densities** on the Gamma DGP. Panel A (`n=20,000`): spline vs additive margin against the analytic truth. Panel B (`n=2,000`): three restarts — density *shape* is stable even when the restart-level ATE wobbles. | interventional-density figure |
 
-Key flags (shared): `--generator {gaussian,mixed,discrete,many_discrete}`,
-`--const` / `--ate` (the generator's `causal_params = [const, ate]`),
-`--n-samples`, `--seed`, `--smoke`. `d1`/`run` also take `--n-iter`; `d3`/`run`
-take `--ref-n` (causl reference size).
+## Shared library modules (imported, not run)
 
-## How the truth is defined
-
-The causl generators encode the ground truth as **`causal_params = [const, ate]`**:
-the outcome formula is `Y ~ X` with linear predictor `const + ate * X` and a Gaussian
-family at `phi = 1`, so the causal-margin truth is `{ate, const, scale=1}`.
-`_harness.true_params_from_causal_params` derives this.
-
-> The notebook sets `TRUE_PARAMS = {ate:1, const:0, scale:1}` while generating with
-> `CAUSAL_PARAMS = [2, 5]` — an internal inconsistency. These scripts derive the truth
-> from `causal_params` so the comparison is always correct.
-
-## causl conventions used by d3
-
-d3's ground truth comes from causl itself. Primary route: a large `causalSamp` draw
-(Monte-Carlo population reference) — works for every variable including the treatment
-`X`, which is binomial *conditional* on `Z` and has no closed-form marginal. For
-intercept-only covariates the closed forms cross-check it (verified — see project
-memory `reference-causl-conventions`):
-
-| causl family | code | link | mean | variance |
-|---|---|---|---|---|
-| Gamma | 3 | log | `exp(beta)` | `phi * exp(beta)^2` |
-| binomial | 0/5 | logit | `expit(beta)` | `p(1-p)` |
-| gaussian | 1 | identity | `beta` | `phi` |
-
-(e.g. the `mixed` generator's `Zc~1, beta=1, phi=1` Gammas have true mean `e=2.718`,
-var `7.389` — which the causl reference reproduces.)
-
-## Design notes
-
-- **The shared step is `_harness.fit_once`**, a thin wrapper over the existing
-  `causl_sim_data_generation.frugal_fitting`. It returns the recovered params (d1),
-  the fitted margin object + flow (d2), and the input data (d3).
-- We deliberately bypass the notebook's `run_simulations` (it hardcodes
-  `causal_model='gaussian'`, prints intermediate state, and self-references
-  `causl_py.`) and loop `frugal_fitting` directly — same finding, plus we keep the
-  fitted-flow object d2/d3 need. This is a *choice not to call* that function, not a
-  modification of it.
-- **d3 mode 2 (deferred):** compare causl truth against the *model's reconstruction*
-  of X/Z (does the flow distort the covariates?). That needs the `FrugalFlowModel`
-  sampler and will be added as a second mode — still without touching core code.
-- `outputs/` holds regenerated artefacts (CSVs + PDFs); safe to delete.
+- `outcome_families.py` — causl ground-truth generators keyed by outcome family
+  (Gaussian, Gamma, …), each exposing `true_ate` / `mean_do` / `sample_truth`.
+- `quick_sense_check.py` — `fit_model`, `base_hyperparams`, `model_args`: fit one
+  frugal flow for a given (family, arm).
+- `_harness.py` — path handling (makes `data_processing_and_simulations`
+  importable) + the fit-once plumbing used by `d1` / `d2`.

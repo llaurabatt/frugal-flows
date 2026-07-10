@@ -56,57 +56,22 @@ from diagnostics.quick_sense_check import (  # noqa: E402
     model_args,  # noqa: F401  (kept for parity / external reuse)
 )
 
+# The interventional ATE read-out now lives in the package (single source of
+# truth) so it is usable without any diagnostics code; re-exported here under the
+# historical names so `from diagnostics.ate_extraction_suite import intervene`
+# keeps working. `intervene(key, ff, cond_dim, n_mc)` == interventional_samples
+# with the identity transform (these diagnostics fit on the raw outcome).
+from frugal_flows.interventions import (  # noqa: E402,F401
+    TAU_CURVE_BINS,
+    interventional_samples as intervene,
+    tau_curve,
+)
+
 ARM_LABEL = {
     "gaussian": "additive shift",
     "flexible_continuous": "spline",
     "location_translation": "loc-translation",
 }
-
-
-def intervene(key, ff, cond_dim, n_mc):
-    """Paired-CRN interventional readout. Returns the do(0)/do(1) Y samples + summaries.
-
-    Same base draw (same `key`) pushed through T=0 and T=1, so tau(u)=Q_1(u)-Q_0(u)
-    is paired. ATE = mean(tau); tau_sd = std(tau) = effect heterogeneity across
-    quantiles (~0 for a pure location shift, >0 for a genuine spline effect).
-    """
-    y0 = np.asarray(ff.sample(key, condition=jnp.zeros((n_mc, cond_dim)))[:, 0])
-    y1 = np.asarray(ff.sample(key, condition=jnp.ones((n_mc, cond_dim)))[:, 0])
-    tau = y1 - y0
-    return {
-        "y0": y0, "y1": y1,
-        "mean0": float(np.mean(y0)), "mean1": float(np.mean(y1)),
-        "var0": float(np.var(y0)), "var1": float(np.var(y1)),
-        "ate": float(np.mean(tau)), "tau_sd": float(np.std(tau)),
-        "frac_neg": float(np.mean(np.concatenate([y0, y1]) <= 0)),
-        "anynan": bool(np.any(np.isnan(y0)) or np.any(np.isnan(y1))),
-    }
-
-
-TAU_CURVE_BINS = 40  # fixed => identical u-grid across seeds (stackable curves)
-
-
-def tau_curve(y0, y1, n_bins=TAU_CURVE_BINS):
-    """Quantile-resolved paired effect tau(u) = Q_1(u) - Q_0(u) on a fixed u-grid.
-
-    Pairs are aligned by base draw (same key in `intervene`), so tau[i]=y1[i]-y0[i]
-    is the effect at draw i's latent quantile. The causal margin is monotone, so
-    ranking by the control outcome y0 recovers that quantile; binning tau by y0-rank
-    then gives tau as a function of u in (0,1). A FIXED n_bins yields an identical
-    u-grid across seeds, so per-seed curves stack directly for a bias (seed-mean)
-    vs variance (seed-SD) decomposition.
-
-    For a pure location shift the truth is flat at the ATE; any slope/curvature the
-    spline shows on such a DGP is spurious. Returns (u_centers[n_bins], tau_of_u[n_bins]).
-    """
-    y0 = np.asarray(y0); y1 = np.asarray(y1)
-    tau = (y1 - y0)[np.argsort(np.asarray(y0), kind="stable")]
-    n = len(tau)
-    edges = np.linspace(0, n, n_bins + 1).astype(int)
-    tau_of_u = np.array([tau[a:b].mean() if b > a else np.nan
-                         for a, b in zip(edges[:-1], edges[1:])])
-    u_centers = (np.arange(n_bins) + 0.5) / n_bins
-    return u_centers, tau_of_u
 
 
 def run_cell(key, fam, arm, Y, u_z, X, args):
