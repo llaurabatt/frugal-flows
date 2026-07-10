@@ -65,10 +65,16 @@ class OutcomeTransform:
             ``floor=0.0`` explicitly for strictly-positive data with no artificial floor.
             Ignored for ``identity`` / ``standardize``.
         asinh_scale: ``s`` for ``asinh``; ``None`` -> robust ``median(|Y - b|)`` at fit.
+        post_standardize: after the base transform, additionally centre+scale the
+            transformed values to mean 0 / sd 1 ("transform, then standardize"). Default
+            ``None`` -> **True for log/asinh, False for identity/standardize**: the model
+            always wants a well-conditioned fitting target, so a chosen base transform is
+            standardized after by default. Pass ``False`` for the raw base transform
+            (e.g. plain ``log Y``). Rejected for identity/standardize.
     """
 
     def __init__(self, kind: str = "identity", floor: float | None = None, asinh_scale: float | None = None,
-                 post_standardize: bool = False):
+                 post_standardize: bool | None = None):
         kind = "identity" if kind in ("identity", "raw", None) else kind
         if kind not in KINDS:
             raise ValueError(f"unknown outcome transform {kind!r}; choose from {KINDS}")
@@ -79,8 +85,18 @@ class OutcomeTransform:
                 f"non-zero floor is never applied by accident. Pass floor=0.0 for "
                 f"strictly-positive data with no artificial floor."
             )
-        if post_standardize and kind == "standardize":
-            raise ValueError("post_standardize is redundant with kind='standardize'")
+        # Default policy: a base transform (log/asinh) is ALWAYS followed by a
+        # standardize of the transformed values -- the model wants a well-conditioned
+        # mean-0/sd-1 fitting target ("transform, then standardize, then fit"). Pass
+        # post_standardize=False for the raw base transform (e.g. plain log). identity
+        # (true no-op) and standardize (already standardizing) never post-standardize.
+        if post_standardize is None:
+            post_standardize = kind in ("log", "asinh")
+        if post_standardize and kind in ("identity", "standardize"):
+            raise ValueError(
+                f"post_standardize does not apply to kind={kind!r} "
+                f"(identity is a no-op; 'standardize' already standardizes)"
+            )
         self.kind = kind
         self.floor = 0.0 if floor is None else float(floor)  # unused for identity/standardize
         self.asinh_scale = None if asinh_scale is None else float(asinh_scale)

@@ -52,8 +52,10 @@ class FrugalFlowModel:
             default; estimand-preserving). Pass ``"identity"`` / ``"raw"`` for a true
             no-op (raw ``Y``). For a skewed / heavy-tailed outcome that would otherwise
             saturate the spline margin, pass an explicit ``OutcomeTransform("log", floor=b)``
-            or ``OutcomeTransform("asinh", floor=b)`` (optionally with ``post_standardize=True``;
-            the bare ``"log"``/``"asinh"`` strings are rejected -- ``floor`` must be given).
+            or ``OutcomeTransform("asinh", floor=b)`` -- these standardize the transformed
+            scale after the base transform by default ("transform, then standardize"; pass
+            ``post_standardize=False`` to opt out). The bare ``"log"``/``"asinh"`` strings
+            are rejected -- ``floor`` must be given.
     """
 
     def __init__(self, Y, X, Z_disc=None, Z_cont=None, confounding_copula=None,

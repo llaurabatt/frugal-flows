@@ -74,7 +74,7 @@ def test_identity_ate_is_the_additive_shift():
 def test_nonlinear_transform_is_inverted_before_differencing():
     """log-scale additive shift => original-scale ATE = mean(exp z)*(e^shift - 1)."""
     flow = FakeFlow(Z, SHIFT)  # z, z+shift are on the LOG (fitting) scale
-    t = OutcomeTransform("log", floor=0.0)  # inverse = exp; needs no fit
+    t = OutcomeTransform("log", floor=0.0, post_standardize=False)  # inverse = exp; needs no fit
     out = interventional_samples(jr.key(0), flow, cond_dim=1, n_mc=N_MC, outcome_transform=t)
 
     expected = float(np.mean(np.exp(Z)) * (np.exp(SHIFT) - 1.0))
@@ -87,8 +87,8 @@ def test_nonlinear_transform_is_inverted_before_differencing():
 def test_floor_shifts_level_but_not_the_contrast():
     """b cancels in the contrast: exp(z)+b differenced drops b, ATE is floor-invariant."""
     flow = FakeFlow(Z, SHIFT)
-    a = interventional_samples(jr.key(0), flow, 1, N_MC, outcome_transform=OutcomeTransform("log", floor=0.0))
-    b = interventional_samples(jr.key(0), flow, 1, N_MC, outcome_transform=OutcomeTransform("log", floor=3.5))
+    a = interventional_samples(jr.key(0), flow, 1, N_MC, outcome_transform=OutcomeTransform("log", floor=0.0, post_standardize=False))
+    b = interventional_samples(jr.key(0), flow, 1, N_MC, outcome_transform=OutcomeTransform("log", floor=3.5, post_standardize=False))
     assert a["ate"] == pytest.approx(b["ate"], rel=1e-9)
     assert b["mean0"] == pytest.approx(a["mean0"] + 3.5, rel=1e-9)  # level shifts by b
 
@@ -114,7 +114,7 @@ def _model_with_fake_flow(transform, shift=SHIFT):
 
 
 def test_estimate_ate_matches_package_function_and_inverts_transform():
-    t = OutcomeTransform("log", floor=0.0)
+    t = OutcomeTransform("log", floor=0.0, post_standardize=False)
     model = _model_with_fake_flow(t)
     got = model.estimate_ate(jr.key(0), n_mc=N_MC)
     ref = interventional_samples(jr.key(0), model.frugal_flow, 1, N_MC, outcome_transform=model.outcome_transform)
@@ -124,7 +124,7 @@ def test_estimate_ate_matches_package_function_and_inverts_transform():
 
 
 def test_sample_do_returns_inverted_samples():
-    model = _model_with_fake_flow(OutcomeTransform("log", floor=0.0))
+    model = _model_with_fake_flow(OutcomeTransform("log", floor=0.0, post_standardize=False))
     y1 = model.sample_do(jr.key(0), t=1, n_mc=N_MC)
     assert np.allclose(y1, np.exp(Z + SHIFT), rtol=1e-6)
 

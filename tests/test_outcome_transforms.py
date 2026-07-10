@@ -68,8 +68,28 @@ def test_use_before_fit_raises():
         OutcomeTransform("standardize").forward(np.array([1.0, 2.0]))     # needs mean/sd
     with pytest.raises(RuntimeError):
         OutcomeTransform("asinh", floor=0.0).forward(np.array([1.0, 2.0]))  # needs scale
-    # an explicit scale means asinh needs no fit:
-    OutcomeTransform("asinh", floor=0.0, asinh_scale=2.0).forward(np.array([1.0, 2.0]))
+    # an explicit scale means asinh needs no fit (plain asinh, no post-standardize):
+    OutcomeTransform("asinh", floor=0.0, asinh_scale=2.0, post_standardize=False).forward(np.array([1.0, 2.0]))
+
+
+def test_log_asinh_standardize_after_by_default():
+    """A chosen base transform standardizes the fitting scale by default ('transform,
+    then standardize'); identity/standardize never do; opt out with post_standardize=False."""
+    assert OutcomeTransform("log", floor=0.0).post_standardize is True
+    assert OutcomeTransform("asinh", floor=0.0).post_standardize is True
+    assert OutcomeTransform("identity").post_standardize is False
+    assert OutcomeTransform("standardize").post_standardize is False
+    for k in ("identity", "standardize"):
+        with pytest.raises(ValueError, match="post_standardize does not apply"):
+            OutcomeTransform(k, post_standardize=True)
+    # default log => standardized fitting scale (mean 0 / sd 1), still round-trips
+    t = OutcomeTransform("log", floor=0.0).fit(Y_POS)
+    z = np.asarray(t.forward(Y_POS))
+    assert abs(float(z.mean())) < 1e-9 and abs(float(z.std()) - 1.0) < 1e-9
+    assert np.allclose(np.asarray(t.inverse(z)), Y_POS.ravel().reshape(z.shape))
+    # explicit opt-out recovers plain log
+    plain = np.asarray(OutcomeTransform("log", floor=0.0, post_standardize=False).forward(Y_POS))
+    assert np.allclose(plain, np.log(Y_POS))
 
 
 # --------------------------------------------------------------------------- #
@@ -189,7 +209,7 @@ def test_transform_is_not_estimand_preserving():
     y0 = np.array([1.0, 2.0, 3.0, 4.0])
     y1 = np.array([2.0, 4.0, 6.0, 8.0])                # multiplicative, so nonlinear matters
     true_ate = float(np.mean(y1 - y0))
-    t = OutcomeTransform("log", floor=0.0).fit(np.concatenate([y0, y1])[:, None])
+    t = OutcomeTransform("log", floor=0.0, post_standardize=False).fit(np.concatenate([y0, y1])[:, None])
     z0, z1 = np.asarray(t.forward(y0)), np.asarray(t.forward(y1))
     wrong = float(np.exp(np.mean(z1)) - np.exp(np.mean(z0)))          # difference-then-map-back
     right = float(np.mean(np.asarray(t.inverse(z1)) - np.asarray(t.inverse(z0))))
@@ -211,7 +231,7 @@ def test_ate_estimator_unbiased_over_iterations_within_sd_band():
     """
     mu, sigma, delta = 0.5, 0.7, 0.8
     true_ate = float(np.exp(mu + delta + 0.5 * sigma**2) - np.exp(mu + 0.5 * sigma**2))
-    t = OutcomeTransform("log", floor=0.0)  # inverse = exp(.), no fit needed
+    t = OutcomeTransform("log", floor=0.0, post_standardize=False)  # plain log; inverse = exp(.), no fit needed
     n_mc = 20_000
     ates = []
     for seed in range(10):  # a few iterations
@@ -282,7 +302,7 @@ def test_generate_samples_inverts_outcome(monkeypatch):
     Y = np.array([[1.0], [2.0], [3.0], [4.0], [5.0]])
     X = np.array([[0.0], [1.0], [0.0], [1.0], [0.0]])
     Zc = np.zeros((n, 1))
-    t = OutcomeTransform("log", floor=0.0).fit(Y)
+    t = OutcomeTransform("log", floor=0.0, post_standardize=False).fit(Y)  # plain log: inverse = exp
     model = benchmarking.FrugalFlowModel(Y=Y, X=X, Z_cont=Zc, outcome_transform=t)
     model.conf_shape = 1
     model.res = {"z_cont_flows": None}  # read as an arg into the stubbed marginal sampler
