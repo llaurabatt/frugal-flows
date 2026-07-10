@@ -67,7 +67,8 @@ class OutcomeTransform:
         asinh_scale: ``s`` for ``asinh``; ``None`` -> robust ``median(|Y - b|)`` at fit.
     """
 
-    def __init__(self, kind: str = "identity", floor: float | None = None, asinh_scale: float | None = None):
+    def __init__(self, kind: str = "identity", floor: float | None = None, asinh_scale: float | None = None,
+                 post_standardize: bool = False):
         kind = "identity" if kind in ("identity", "raw", None) else kind
         if kind not in KINDS:
             raise ValueError(f"unknown outcome transform {kind!r}; choose from {KINDS}")
@@ -78,11 +79,21 @@ class OutcomeTransform:
                 f"non-zero floor is never applied by accident. Pass floor=0.0 for "
                 f"strictly-positive data with no artificial floor."
             )
+        if post_standardize and kind == "standardize":
+            raise ValueError("post_standardize is redundant with kind='standardize'")
         self.kind = kind
         self.floor = 0.0 if floor is None else float(floor)  # unused for identity/standardize
         self.asinh_scale = None if asinh_scale is None else float(asinh_scale)
+        # post_standardize: after the base transform, additionally centre+scale the
+        # TRANSFORMED values to mean 0 / sd 1. This is what lands e.g. log Y in the
+        # spline margin's fixed-`tanh` linear region instead of hugging the +/-1
+        # boundary (where atanh's exploding derivative amplifies small-n tail error).
+        # b/scale/mean cancel in the inverse, so the estimand is unchanged.
+        self.post_standardize = bool(post_standardize)
         self._mean: float | None = None
         self._sd: float | None = None
+        self._post_mean: float | None = None
+        self._post_sd: float | None = None
         self.fitted = False
 
     def fit(self, Y) -> "OutcomeTransform":
@@ -101,11 +112,17 @@ class OutcomeTransform:
             self._mean = float(jnp.mean(Y))
             sd = float(jnp.std(Y))
             self._sd = sd if sd > 0 else 1.0
+        # post-transform standardize params are fit on the base-transformed values
+        if self.post_standardize:
+            z = self._base_forward(Y)
+            self._post_mean = float(jnp.mean(z))
+            psd = float(jnp.std(z))
+            self._post_sd = psd if psd > 0 else 1.0
         self.fitted = True
         return self
 
-    def forward(self, Y):
-        """Map original-scale ``Y`` to the fitting scale ``Z``."""
+    def _base_forward(self, Y):
+        """The base transform (before any post-standardize)."""
         Y = jnp.asarray(Y, dtype=float)
         b = self.floor
         if self.kind == "identity":
@@ -116,8 +133,8 @@ class OutcomeTransform:
             return jnp.arcsinh((Y - b) / self._require_scale())
         return (Y - self._require("_mean")) / self._require("_sd")  # standardize
 
-    def inverse(self, Z):
-        """Map fitting-scale samples ``Z`` back to the original ``Y`` scale."""
+    def _base_inverse(self, Z):
+        """Inverse of the base transform (after any post-standardize has been undone)."""
         Z = jnp.asarray(Z, dtype=float)
         b = self.floor
         if self.kind == "identity":
@@ -127,6 +144,20 @@ class OutcomeTransform:
         if self.kind == "asinh":
             return jnp.sinh(Z) * self._require_scale() + b
         return Z * self._require("_sd") + self._require("_mean")  # standardize
+
+    def forward(self, Y):
+        """Map original-scale ``Y`` to the fitting scale ``Z`` (base transform, then post-standardize)."""
+        z = self._base_forward(Y)
+        if self.post_standardize:
+            return (z - self._require("_post_mean")) / self._require("_post_sd")
+        return z
+
+    def inverse(self, Z):
+        """Map fitting-scale samples ``Z`` back to the original ``Y`` scale (undo post-standardize, then base)."""
+        Z = jnp.asarray(Z, dtype=float)
+        if self.post_standardize:
+            Z = Z * self._require("_post_sd") + self._require("_post_mean")
+        return self._base_inverse(Z)
 
     def _require_scale(self) -> float:
         if self.asinh_scale is None:
@@ -143,9 +174,13 @@ class OutcomeTransform:
 def as_outcome_transform(spec) -> OutcomeTransform:
     """Coerce ``None`` / a kind-string / an OutcomeTransform into an OutcomeTransform.
 
-    ``None`` -> identity (the backward-compatible no-op). Bare ``"log"`` / ``"asinh"``
-    strings are rejected: they need an explicit ``floor``, so construct
-    ``OutcomeTransform("log", floor=...)`` yourself.
+    ``None`` -> identity (a true no-op: nothing to invert). This is the low-level
+    coercion; the *pipeline* default (what ``FrugalFlowModel`` does when no transform
+    is chosen) is standardize, applied in ``FrugalFlowModel.__init__`` where the data
+    is available to fit -- not here, because callers like ``interventional_samples``
+    pass ``None`` to mean "the samples are already on the target scale, don't touch
+    them". Bare ``"log"`` / ``"asinh"`` strings are rejected: they need an explicit
+    ``floor``, so construct ``OutcomeTransform("log", floor=...)`` yourself.
     """
     if spec is None:
         return OutcomeTransform("identity")

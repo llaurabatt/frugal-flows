@@ -85,8 +85,8 @@ def test_bare_log_asinh_strings_rejected_others_ok():
     for s in ("log", "asinh"):
         with pytest.raises(ValueError, match="floor"):
             as_outcome_transform(s)  # needs an explicit floor -> construct object
-    assert as_outcome_transform(None).kind == "identity"       # backward-compatible default
-    assert as_outcome_transform("raw").kind == "identity"
+    assert as_outcome_transform(None).kind == "identity"       # helper-level no-op (nothing to invert)
+    assert as_outcome_transform("raw").kind == "identity"      # explicit raw is a true no-op
     assert as_outcome_transform("standardize").kind == "standardize"
 
 
@@ -96,9 +96,20 @@ def test_log_floor_assertion_fires_when_data_below_floor():
 
 
 def test_identity_forward_is_a_true_noop():
-    t = as_outcome_transform(None).fit(Y_POS)
+    t = as_outcome_transform("raw").fit(Y_POS)  # explicit raw/identity is the true no-op
     assert t.kind == "identity"
     assert np.array_equal(np.asarray(t.forward(Y_POS)), Y_POS.astype(float))
+
+
+def test_helper_none_is_identity_but_model_default_standardizes():
+    """as_outcome_transform(None) is a no-op (nothing to invert), but the MODEL default
+    (no transform chosen) standardizes -- the default lives in FrugalFlowModel."""
+    assert as_outcome_transform(None).kind == "identity"
+    bench = pytest.importorskip("frugal_flows.benchmarking")  # imports wandb
+    m = bench.FrugalFlowModel(Y=Y_POS, X=np.ones((Y_POS.shape[0], 1)))  # no outcome_transform
+    assert m.outcome_transform.kind == "standardize"
+    m2 = bench.FrugalFlowModel(Y=Y_POS, X=np.ones((Y_POS.shape[0], 1)), outcome_transform="raw")
+    assert m2.outcome_transform.kind == "identity"  # explicit escape hatch
 
 
 # --------------------------------------------------------------------------- #
@@ -219,10 +230,10 @@ def test_ate_estimator_unbiased_over_iterations_within_sd_band():
 # --------------------------------------------------------------------------- #
 # 4. FrugalFlowModel wiring: forward at fit, inverse at sample (monkeypatched)
 # --------------------------------------------------------------------------- #
-def test_model_default_transform_is_identity():
+def test_model_default_transform_is_standardize():
     benchmarking = pytest.importorskip("frugal_flows.benchmarking")
-    model = benchmarking.FrugalFlowModel(Y=np.zeros((4, 1)), X=np.zeros((4, 1)))
-    assert model.outcome_transform.kind == "identity"
+    model = benchmarking.FrugalFlowModel(Y=np.array([[1.0], [2.0], [4.0], [8.0]]), X=np.zeros((4, 1)))
+    assert model.outcome_transform.kind == "standardize"  # no transform chosen -> standardize
 
 
 def test_fit_trains_on_forward_transformed_Y(monkeypatch):

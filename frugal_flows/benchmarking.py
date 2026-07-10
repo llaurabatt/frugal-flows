@@ -47,18 +47,24 @@ class FrugalFlowModel:
             defaults to a bivariate Gaussian copula.
         outcome_transform: ``None`` / kind-string / ``OutcomeTransform`` applied to
             ``Y`` before fitting the causal margin and inverted on sampled outcomes
-            (see ``frugal_flows.outcome_transforms``). ``None`` -> identity (no-op,
-            fully backward compatible). For a skewed / heavy-tailed outcome that would
-            otherwise saturate the spline margin, pass an explicit
-            ``OutcomeTransform("log", floor=b)`` or ``OutcomeTransform("asinh", floor=b)``
-            (the bare ``"log"``/``"asinh"`` strings are rejected -- ``floor`` must be given).
+            (see ``frugal_flows.outcome_transforms``). ``None`` (the default: no
+            transform chosen) -> **standardize** the outcome (a harmless, well-conditioned
+            default; estimand-preserving). Pass ``"identity"`` / ``"raw"`` for a true
+            no-op (raw ``Y``). For a skewed / heavy-tailed outcome that would otherwise
+            saturate the spline margin, pass an explicit ``OutcomeTransform("log", floor=b)``
+            or ``OutcomeTransform("asinh", floor=b)`` (optionally with ``post_standardize=True``;
+            the bare ``"log"``/``"asinh"`` strings are rejected -- ``floor`` must be given).
     """
 
     def __init__(self, Y, X, Z_disc=None, Z_cont=None, confounding_copula=None,
                  outcome_transform=None):
         self.Y = Y
         self.X = X
-        self.outcome_transform = as_outcome_transform(outcome_transform)
+        # Default: no transform chosen -> standardize the outcome (harmless, well-
+        # conditioned, estimand-preserving). Pass "identity"/"raw" for a true no-op.
+        self.outcome_transform = as_outcome_transform(
+            "standardize" if outcome_transform is None else outcome_transform
+        )
         self.Z_disc = Z_disc
         self.Z_cont = Z_cont
         self.conf_shape = 0
