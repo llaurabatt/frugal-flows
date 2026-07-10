@@ -249,6 +249,7 @@ def train_frugal_flow_flexible_continuous(
     condition: ArrayLike | None = None,
     mask_condition: bool = True,
     causal_model_args: dict | None = None,
+    pretrained_margin=None,  # AbstractBijection | None: warm-start graft (see below)
 ):
     nvars = u_z.shape[1]
 
@@ -319,6 +320,40 @@ def train_frugal_flow_flexible_continuous(
     )
 
     frugal_flow = frugal_flow.merge_transforms()
+
+    # Optional warm-start: graft a pre-fitted causal margin into the flow before the
+    # joint fit. The causal margin is the treatment-conditioned autoregressive
+    # bijection at bijections[-2].bijections[0] (Concatenate([causal_maf, Identity...]));
+    # it is left trainable (the freezing below only touches [-3] and [0]), so the
+    # grafted margin co-adapts with the copula during fit_to_data. `pretrained_margin`
+    # must have been built by masked_autoregressive_bijection at IDENTICAL
+    # hyperparameters, else its pytree structure will not match the graft site.
+    if pretrained_margin is not None:
+        # Validate BEFORE replacing: eqx.tree_at(replace=...) swaps subtrees with NO
+        # structure check, so a wrong object (e.g. a base distribution's unconditional
+        # Affine) would graft silently and only fail statistically (ate == 0, ~50%
+        # non-finite samples). Two guards catch that whole bug class up front:
+        # (1) the pretrained margin must be conditional on exactly the same cond_shape
+        #     as the causal-margin slot; (2) its array pytree structure must match the
+        #     slot's, so the graft is weight-for-weight.
+        original = frugal_flow.bijection.bijections[-2].bijections[0]
+        assert pretrained_margin.cond_shape == original.cond_shape, (
+            f"pretrained_margin.cond_shape {pretrained_margin.cond_shape} != "
+            f"causal-margin slot cond_shape {original.cond_shape}"
+        )
+        assert jax.tree_util.tree_structure(
+            eqx.filter(pretrained_margin, eqx.is_array)
+        ) == jax.tree_util.tree_structure(eqx.filter(original, eqx.is_array)), (
+            "pretrained_margin pytree structure does not match the causal-margin slot "
+            "(was it built by masked_autoregressive_bijection with identical "
+            "hyperparameters?)"
+        )
+        frugal_flow = eqx.tree_at(
+            where=lambda f: f.bijection.bijections[-2].bijections[0],
+            pytree=frugal_flow,
+            replace=pretrained_margin,
+        )
+
     frugal_flow = eqx.tree_at(
         where=lambda frugal_flow: frugal_flow.bijection.bijections[-3],
         pytree=frugal_flow,
@@ -615,6 +650,7 @@ def train_frugal_flow(
     mask_condition: bool = True,
     causal_model="gaussian",
     causal_model_args: dict | None = None,
+    pretrained_margin=None,  # AbstractBijection | None: warm-start graft (flexible_continuous only)
 ):
     valid_causal_models = [
         "gaussian",
@@ -693,6 +729,7 @@ def train_frugal_flow(
             condition=condition,
             mask_condition=mask_condition,
             causal_model_args=causal_model_args,
+            pretrained_margin=pretrained_margin,
         )
 
     elif causal_model == "location_translation":
