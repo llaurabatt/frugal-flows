@@ -5,8 +5,9 @@ fixed ``tanh`` into a rational-quadratic spline on ``[-1, 1]``. A skewed /
 heavy-tailed outcome saturates that ``tanh`` -- its mass collapses into a thin
 sliver of the spline's domain -- which biases and destabilises the fitted causal
 margin. Transforming ``Y`` onto a friendlier scale before fitting fixes this
-(empirically: on a Gamma outcome, ``log`` removes the level bias and halves the
-restart-to-restart ATE noise; see ``validation/diagnostics/SPLINE_HP_FINDINGS.md``).
+(empirically, on a Gamma outcome, ``log`` removes the tanh-saturation level bias).
+Note the residual small-``n`` ATE bias is **confounding**, not saturation, and is
+NOT fixable by any outcome transform -- it needs more data / better deconfounding.
 
 A nonlinear transform is **not** estimand-preserving --
 ``E[f(Y1)] - E[f(Y0)] != f(E[Y1]) - f(E[Y0])`` -- so the transform must be
@@ -15,23 +16,42 @@ taken. This module owns both directions, and ``FrugalFlowModel`` applies it
 around fit/sample, so the ATE (and any quantile effect) is always computed on
 the ORIGINAL ``Y`` scale.
 
-Available kinds (``b = floor``, the artificial lower bound / "bottom skew min value"):
+STANDARDIZATION POLICY -- the flow's fitting target is **always standardized**
+(mean 0 / sd 1), because a well-conditioned target is uniformly safe (a 15-seed
+Gamma study found it neither helps nor hurts recovery) and never a saturation risk:
 
-======================  ================================  ==============================
-kind                    forward  ``Z = T(Y)``              inverse  ``Y = T^{-1}(Z)``
-======================  ================================  ==============================
-``identity`` (default)  ``Y``                             ``Z``
-``log``                 ``log(Y - b)``   (requires Y>b)   ``exp(Z) + b``
-``asinh``               ``asinh((Y - b) / s)``            ``sinh(Z) * s + b``
-``standardize``         ``(Y - mean) / sd``               ``Z * sd + mean``
-======================  ================================  ==============================
+  * no transform chosen (``FrugalFlowModel(outcome_transform=None)``) -> ``standardize``;
+  * a base transform (``log`` / ``asinh``) -> the transformed values are standardized
+    **after** the transform by default ("transform, then standardize"; controlled by
+    ``post_standardize``, which defaults to ``True`` for ``log`` / ``asinh``);
+  * ``"identity"`` / ``"raw"`` -> a true no-op (raw ``Y`` straight into the flow), the
+    explicit escape hatch. Pass ``post_standardize=False`` for a raw base transform
+    (e.g. plain ``log Y``).
+
+Standardization is estimand-preserving: its inverse (``* sd + mean``) is undone on
+the sampled outcomes -- and, for a ``log`` / ``asinh`` base, undone *before* the
+base inverse -- so the contrast is always on the original ``Y`` scale.
+
+Available kinds (``b = floor``, the artificial lower bound / "bottom skew min value";
+``standardize`` here means the post-transform centre+scale of the ``Z`` values):
+
+======================  ===================================  ==================================
+kind                    forward  ``Z = T(Y)``                 inverse  ``Y = T^{-1}(Z)``
+======================  ===================================  ==================================
+``identity``            ``Y``                                ``Z``
+``log``                 ``standardize(log(Y - b))``          ``exp(unstd(Z)) + b``
+``asinh``               ``standardize(asinh((Y - b)/s))``    ``sinh(unstd(Z)) * s + b``
+``standardize``         ``(Y - mean) / sd``                  ``Z * sd + mean``
+======================  ===================================  ==================================
+
+(with ``post_standardize=False`` the ``log`` / ``asinh`` rows drop the ``standardize``
+/ ``unstd`` wrapper, giving plain ``log(Y - b)`` / ``asinh((Y - b)/s)``.)
 
 ``b`` is a REQUIRED argument for ``log`` / ``asinh`` -- it is deliberately not
 defaulted, so a wrong floor is never applied silently to floored data. Pass
-``floor=0.0`` for strictly-positive data with no artificial floor (``log`` -> plain
-``log Y``, ``asinh`` -> ``asinh(Y/s)``); pass the known lower bound for bottom-coded
-/ detection-limit / clamped data. ``b`` cancels in any contrast but anchors where
-the skew compression starts. ``asinh`` is the
+``floor=0.0`` for strictly-positive data with no artificial floor; pass the known
+lower bound for bottom-coded / detection-limit / clamped data. ``b`` cancels in any
+contrast but anchors where the skew compression starts. ``asinh`` is the
 signed / zero-safe ``log``: defined for all ``Y`` (no positivity requirement),
 linear near ``b``, log-like in the tail, with the crossover set by the scale
 ``s = asinh_scale`` (``None`` -> a robust data-driven default ``median(|Y - b|)``).
