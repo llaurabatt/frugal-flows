@@ -19,14 +19,35 @@ import jax.random as jr
 import jax.numpy as jnp
 jax.config.update("jax_enable_x64", True)
 
+# Copula-flow hyperparameters. nn_width=200 (was 50): a 10-D complex-copula HP
+# search found the copula conditioner WIDTH is the lever for ATE recovery under
+# high-dimensional confounder dependence (wider markedly reduces bias in mixed/
+# strong regimes), while copula DEPTH hurts (keep low, 2-4) and flow_layers/
+# RQS_knots and the causal-margin capacity are effectively non-knobs. width 200
+# with depth 4 / layers 4 gave ~0 bias pooled across dependence regimes.
 hyperparam_dict = {
     "RQS_knots": 8,
     "nn_depth": 4,
-    "nn_width": 50,
+    "nn_width": 200,
     "flow_layers": 4,
     "learning_rate": 5e-3,
     "max_epochs": 1000,
     "max_patience": 100,
+}
+
+# Causal-margin (spline) hyperparameters, for causal_model="flexible_continuous".
+# Deliberately MODEST and left small: both the 10-D copula HP search and the earlier
+# capacity study found the spline margin's capacity is a NON-KNOB -- more knots, a
+# wider/deeper conditioner, or more layers does NOT improve ATE recovery. The margin's
+# real levers are NOT architecture but (i) the OUTCOME TRANSFORM (log + standardize for
+# skewed/heavy-tailed Y; see outcome_transforms.py, already the default) and
+# (ii) RESTART-AVERAGING (fit K>=5, average the level). So keep these small and spend
+# capacity on the copula (hyperparam_dict) instead.
+causal_margin_hyperparam_dict = {
+    "RQS_knots": 8,
+    "nn_depth": 4,
+    "nn_width": 50,
+    "flow_layers": 4,
 }
 
 class FrugalFlowModel:
