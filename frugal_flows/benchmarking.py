@@ -8,7 +8,6 @@ from frugal_flows.outcome_transforms import as_outcome_transform
 from frugal_flows.sample_outcome import sample_outcome
 from frugal_flows.sample_marginals import from_quantiles_to_marginal_cont, from_quantiles_to_marginal_discr
 from frugal_flows.train_quantile_propensity_score import train_quantile_propensity_score
-import wandb
 
 sys.path.append("../")  # go to parent dir
 # sys.path.append("../data/analysis/")  # go to parent dir
