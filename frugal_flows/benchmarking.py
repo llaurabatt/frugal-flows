@@ -88,7 +88,12 @@ class FrugalFlowModel:
             "standardize" if outcome_transform is None else outcome_transform
         )
         self.Z_disc = Z_disc
-        self.Z_cont = Z_cont
+        # x64 is enabled at import, so the flows build float64 params. A float32
+        # Z_cont (e.g. image/MNIST features) fed bare into the Scan-wrapped
+        # marginal flow raises a lax.scan carry-dtype mismatch. Cast to float64
+        # here so callers can pass float32 arrays. Z_disc is left as-is (integer;
+        # it feeds the empirical-CDF path, not a scan carry).
+        self.Z_cont = None if Z_cont is None else jnp.asarray(Z_cont, dtype=jnp.float64)
         self.conf_shape = 0
         if Z_disc is not None:
             self.conf_shape += self.Z_disc.shape[1]
@@ -147,7 +152,12 @@ class FrugalFlowModel:
         # Fit the causal margin on the (optionally) transformed outcome. inverse is
         # applied to sampled outcomes in generate_samples so the estimand stays on
         # the original Y scale. identity (default) leaves y == self.Y unchanged.
-        y_fit = self.outcome_transform.fit(self.Y).forward(self.Y)
+        # Cast Y to float64 for the same x64 scan-carry reason as Z_cont, but guard
+        # it: flexible_discrete_output needs an INTEGER Y (asserted in
+        # univariate_discrete_cdf), so leave that arm's Y untouched. Stateless --
+        # self.Y is not mutated, so re-training with another arm still works.
+        y_in = self.Y if causal_model == "flexible_discrete_output" else jnp.asarray(self.Y, dtype=jnp.float64)
+        y_fit = self.outcome_transform.fit(y_in).forward(y_in)
         self.frugal_flow, losses = train_frugal_flow(
             key=key,
             y=y_fit,

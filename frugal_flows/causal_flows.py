@@ -1069,6 +1069,11 @@ def univariate_marginal_cdf(
     batch_size: int = 100,
     val_prop: float = 0.1,
 ):
+    # Defensive: x64 is enabled globally, so the flow builds float64 params. A
+    # float32 z_cont (e.g. image features passed straight into
+    # get_independent_quantiles) would raise a lax.scan carry-dtype mismatch.
+    # No-op for float64 callers.
+    z_cont = jnp.asarray(z_cont, dtype=float)
     if z_cont.ndim == 1:
         # Reshape one-dimensional array to two dimensions with second dim as 1
         z_cont = z_cont.reshape(-1, 1)
