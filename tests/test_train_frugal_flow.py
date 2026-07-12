@@ -87,3 +87,22 @@ def test_train_frugal_flow_dispatcher_runs(
     assert isinstance(losses, dict)
     assert "train" in losses and "val" in losses
     assert len(losses["train"]) >= 1
+
+
+def test_train_frugal_flow_rejects_unknown_model_lists_flexible_continuous(key):
+    """An unknown causal_model raises before any fitting, and the message names
+    the supported arms -- including ``flexible_continuous``, which the dispatcher
+    handles but the error list previously omitted (Bug D)."""
+    data_key, train_key = jr.split(key)
+    y, u_z, condition = _make_data(data_key)
+
+    with pytest.raises(ValueError, match="flexible_continuous"):
+        train_frugal_flow(
+            key=train_key,
+            y=y,
+            u_z=u_z,
+            condition=condition,
+            causal_model="does_not_exist",
+            causal_model_args=MAF_HYPERS,
+            **DISPATCHER_KWARGS,
+        )
