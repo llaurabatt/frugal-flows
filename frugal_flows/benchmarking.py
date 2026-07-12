@@ -215,7 +215,10 @@ class FrugalFlowModel:
         self.vmap_prop_flow = jax.vmap(prop_flow_cdf, in_axes=(0,))
 
     def generate_samples(self, key, sampling_size, copula_param, outcome_causal_model, outcome_causal_args, with_confounding=True):
-        subkeys = jr.split(key, 4)
+        # 5 subkeys: copula (0), baseline u_z (1), Z_cont (2), Z_disc (3), outcome (4).
+        # Was split into 4, so subkeys[4] (the outcome draw) indexed out of bounds
+        # and JAX clamped it to subkeys[3] -- reusing the Z_disc key for outcomes.
+        subkeys = jr.split(key, 5)
 
         # Generate U*_y|x and U_x|z quantiles
         u_yx, u_xz = self.confounding_copula(subkeys[0], sampling_size, copula_param)
