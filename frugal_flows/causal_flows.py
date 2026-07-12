@@ -734,6 +734,7 @@ def train_frugal_flow(
 ):
     valid_causal_models = [
         "gaussian",
+        "flexible_continuous",
         "flexible_discrete_output",
         "location_translation",
     ]
