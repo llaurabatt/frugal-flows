@@ -224,3 +224,25 @@ def test_propensity_condition_is_cont_then_disc(monkeypatch):
     np.testing.assert_array_equal(np.asarray(captured["condition"]), expected)
     # Guard the assertion is meaningful: the two orders genuinely differ.
     assert not np.array_equal(expected, transposed)
+
+
+def test_z_cont_cast_to_float64_z_disc_left_integer():
+    """Bug A: Z_cont is stored as float64 (x64 requirement), Z_disc stays integer."""
+    Y, X, Z_cont, Z_disc = _tiny_data(seed=0, dtype=np.float32)
+    model = benchmarking.FrugalFlowModel(Y=Y, X=X, Z_cont=Z_cont, Z_disc=Z_disc)
+    assert model.Z_cont.dtype == np.float64
+    assert np.issubdtype(model.Z_disc.dtype, np.integer)
+
+
+def test_pipeline_runs_on_float32_inputs():
+    """Bug A: float32 Y/X/Z_cont must not crash the pipeline.
+
+    x64 is enabled at import, so the flows build float64 params; before the fix a
+    bare float32 Z_cont fed into the Scan-wrapped marginal flow raised a lax.scan
+    carry-dtype TypeError in train_marginal_cdfs. The constructor now casts Z_cont
+    (and train_frugal_flow casts Y) to float64, so the pipeline runs to a finite
+    ATE on float32 inputs.
+    """
+    model = _fit_model(seed=0, dtype=np.float32)
+    out = model.estimate_ate(jax.random.key(1), n_mc=2000)
+    assert np.isfinite(float(out["ate"]))
