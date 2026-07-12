@@ -51,3 +51,16 @@ def causl_gaussian_known_ate():
     scale, n, seed). Known ATE = meta['ate'] = 1.0.
     """
     return _load_npz("gaussian_known_ate")
+
+
+@pytest.fixture(scope="session")
+def causl_mixed_known_ate():
+    """Causl-simulated dataset with MIXED confounders: 2 continuous (Gamma) Zc +
+    2 discrete (binary) Zd, binary X, continuous Y.
+
+    Returns a dict with keys Z_cont (n, 2), Z_disc (n, 2), X, Y, and meta. Known
+    ATE = meta['ate'] = 1.0, with strong positive confounding (the naive
+    difference-in-means is ~2.0). This is the both-Z-blocks configuration that
+    exercises the propensity path (Bug B) and the mixed marginal-CDF path.
+    """
+    return _load_npz("mixed_known_ate")

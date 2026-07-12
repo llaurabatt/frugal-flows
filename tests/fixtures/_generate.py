@@ -45,5 +45,22 @@ def gaussian_known_ate():
     _save("gaussian_known_ate", data, ate=1.0, const=1.0, scale=1.0, n=2000, seed=0)
 
 
+def mixed_known_ate():
+    """MIXED confounders (2 continuous Zc + 2 discrete Zd), binary X, Gaussian Y,
+    known ATE=1.
+
+    Y = ate*X + const + ε,  ate=1, const=1, ε ~ N(0, 1). The frugal parametrisation
+    fixes the interventional margin p(Y|do(X)) at these betas regardless of the
+    confounding copula, so the true ATE is exactly causal_params[1] = 1.
+
+    This is the configuration the propensity column-order bug (Bug B) corrupts --
+    both Z blocks present -- so it is the natural fixture for a mixed-confounder
+    recovery + synthetic-data round-trip test.
+    """
+    data = causl_py.generate_discrete_samples(N=2000, causal_params=[1.0, 1.0], seed=0)
+    _save("mixed_known_ate", data, ate=1.0, const=1.0, scale=1.0, n=2000, seed=0)
+
+
 if __name__ == "__main__":
     gaussian_known_ate()
+    mixed_known_ate()
