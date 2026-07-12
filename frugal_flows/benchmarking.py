@@ -200,7 +200,11 @@ class FrugalFlowModel:
         elif self.Z_cont is None:
             condition = self.Z_disc
         else:
-            condition = jnp.hstack([self.Z_disc, self.Z_cont])
+            # CONT-then-DISC to match generate_samples, which feeds the
+            # propensity flow full_Z_samples = hstack([Z_cont, Z_disc]).
+            # (Was DISC-then-CONT, silently transposing the propensity
+            # condition columns when both Z blocks are present.)
+            condition = jnp.hstack([self.Z_cont, self.Z_disc])
         self.prop_flow, _ = train_quantile_propensity_score(
             key=key,
             x=self.X.astype(int),

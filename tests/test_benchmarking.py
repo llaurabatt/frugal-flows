@@ -187,3 +187,40 @@ def test_generate_samples_is_deterministic(trained_model):
     df1 = trained_model.generate_samples(jax.random.key(7), **kwargs)
     df2 = trained_model.generate_samples(jax.random.key(7), **kwargs)
     np.testing.assert_array_equal(df1.values, df2.values)
+
+
+def test_propensity_condition_is_cont_then_disc(monkeypatch):
+    """Bug B: the propensity flow must be conditioned on ``[Z_cont, Z_disc]``.
+
+    ``generate_samples`` feeds the propensity flow ``full_Z_samples =
+    hstack([Z_cont, Z_disc])``, so ``train_propensity_flow`` must fit on the same
+    column order. Previously it fitted on ``hstack([Z_disc, Z_cont])`` -- silently
+    transposing the condition columns when both Z blocks are present. Recorded via
+    a stubbed trainer so no fitting is needed.
+    """
+    import jax.numpy as jnp
+
+    Y, X, Z_cont, Z_disc = _tiny_data(seed=0)
+    model = benchmarking.FrugalFlowModel(Y=Y, X=X, Z_cont=Z_cont, Z_disc=Z_disc)
+
+    captured = {}
+
+    class _DummyBijection:
+        def transform(self, u, condition=None):
+            return u
+
+    class _DummyFlow:
+        bijection = _DummyBijection()
+
+    def _recorder(*, key, x, condition, **kwargs):
+        captured["condition"] = condition
+        return _DummyFlow(), None
+
+    monkeypatch.setattr(benchmarking, "train_quantile_propensity_score", _recorder)
+    model.train_propensity_flow(jax.random.key(0), _PROP_HP)
+
+    expected = np.asarray(jnp.hstack([model.Z_cont, model.Z_disc]))
+    transposed = np.asarray(jnp.hstack([model.Z_disc, model.Z_cont]))
+    np.testing.assert_array_equal(np.asarray(captured["condition"]), expected)
+    # Guard the assertion is meaningful: the two orders genuinely differ.
+    assert not np.array_equal(expected, transposed)
