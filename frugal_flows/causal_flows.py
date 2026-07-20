@@ -249,6 +249,7 @@ def train_frugal_flow_flexible_continuous(
     condition: ArrayLike | None = None,
     mask_condition: bool = True,
     causal_model_args: dict | None = None,
+    pretrained_margin=None,  # AbstractBijection | None: warm-start graft (see below)
 ):
     nvars = u_z.shape[1]
 
@@ -319,6 +320,40 @@ def train_frugal_flow_flexible_continuous(
     )
 
     frugal_flow = frugal_flow.merge_transforms()
+
+    # Optional warm-start: graft a pre-fitted causal margin into the flow before the
+    # joint fit. The causal margin is the treatment-conditioned autoregressive
+    # bijection at bijections[-2].bijections[0] (Concatenate([causal_maf, Identity...]));
+    # it is left trainable (the freezing below only touches [-3] and [0]), so the
+    # grafted margin co-adapts with the copula during fit_to_data. `pretrained_margin`
+    # must have been built by masked_autoregressive_bijection at IDENTICAL
+    # hyperparameters, else its pytree structure will not match the graft site.
+    if pretrained_margin is not None:
+        # Validate BEFORE replacing: eqx.tree_at(replace=...) swaps subtrees with NO
+        # structure check, so a wrong object (e.g. a base distribution's unconditional
+        # Affine) would graft silently and only fail statistically (ate == 0, ~50%
+        # non-finite samples). Two guards catch that whole bug class up front:
+        # (1) the pretrained margin must be conditional on exactly the same cond_shape
+        #     as the causal-margin slot; (2) its array pytree structure must match the
+        #     slot's, so the graft is weight-for-weight.
+        original = frugal_flow.bijection.bijections[-2].bijections[0]
+        assert pretrained_margin.cond_shape == original.cond_shape, (
+            f"pretrained_margin.cond_shape {pretrained_margin.cond_shape} != "
+            f"causal-margin slot cond_shape {original.cond_shape}"
+        )
+        assert jax.tree_util.tree_structure(
+            eqx.filter(pretrained_margin, eqx.is_array)
+        ) == jax.tree_util.tree_structure(eqx.filter(original, eqx.is_array)), (
+            "pretrained_margin pytree structure does not match the causal-margin slot "
+            "(was it built by masked_autoregressive_bijection with identical "
+            "hyperparameters?)"
+        )
+        frugal_flow = eqx.tree_at(
+            where=lambda f: f.bijection.bijections[-2].bijections[0],
+            pytree=frugal_flow,
+            replace=pretrained_margin,
+        )
+
     frugal_flow = eqx.tree_at(
         where=lambda frugal_flow: frugal_flow.bijection.bijections[-3],
         pytree=frugal_flow,
@@ -348,6 +383,86 @@ def train_frugal_flow_flexible_continuous(
     )
 
     return frugal_flow, losses
+
+
+def pretrain_causal_margin(
+    key,
+    y: ArrayLike,
+    condition: ArrayLike,
+    causal_model_args: dict,
+    learning_rate: float = 5e-3,
+    max_epochs: int = 100,
+    max_patience: int = 10,
+    batch_size: int = 100,
+    show_progress: bool = False,
+):
+    """Warm-start builder for the ``flexible_continuous`` causal margin.
+
+    Fits the causal margin ALONE -- ``Uniform[-1, 1] -> causal_maf(RQS | T) ->
+    atanh -> Y`` -- by maximum likelihood on ``(y, condition)``, and returns the
+    fitted treatment-conditioned bijection ready to graft into a full frugal flow
+    via ``train_frugal_flow(..., pretrained_margin=...)``. Because the margin term
+    moment-matches the interventional outcome by construction, pretraining it lands
+    the ATE *level* at the identified point before the copula is introduced, which
+    empirically removes the small-``n`` level bias of a cold spline fit.
+
+    The margin is built by the SAME ``masked_autoregressive_bijection`` call
+    (identical hyperparameters, read from ``causal_model_args``) that
+    ``train_frugal_flow_flexible_continuous`` uses, so the returned bijection's
+    pytree matches the graft site exactly (the graft re-validates ``cond_shape`` +
+    structure before replacing).
+
+    Args:
+        key: a JAX PRNG key.
+        y: outcome to fit the margin on, shape ``(n, 1)`` (already on the fitting
+            scale, i.e. after any ``outcome_transform``).
+        condition: treatment, shape ``(n, cond_dim)``.
+        causal_model_args: dict with ``nn_depth``/``nn_width``/``RQS_knots``/
+            ``flow_layers`` (as produced for the ``flexible_continuous`` arm).
+        learning_rate, max_epochs, max_patience, batch_size, show_progress: passed
+            through to ``fit_to_data``.
+
+    Returns:
+        The fitted causal-margin bijection (``cond_shape == (condition.shape[1],)``).
+    """
+    cond_dim = condition.shape[1]
+    key, subkey = jr.split(key)
+    causal_maf = masked_autoregressive_bijection(
+        key=subkey,
+        dim=1,
+        condition=condition,
+        nn_depth=causal_model_args["nn_depth"],
+        nn_width=causal_model_args["nn_width"],
+        RQS_knots=causal_model_args["RQS_knots"],
+        flow_layers=causal_model_args["flow_layers"],
+    )
+    # base Uniform[-1, 1] -> causal_maf ([-1, 1]) -> Invert(Tanh) = atanh -> Y scale
+    margin_flow = Transformed(Uniform(-jnp.ones(1), jnp.ones(1)), causal_maf)
+    margin_flow = Transformed(margin_flow, Invert(Tanh((1,))))
+    margin_flow = margin_flow.merge_transforms()
+    key, subkey = jr.split(key)
+    trained, _ = fit_to_data(
+        key=subkey,
+        dist=margin_flow,
+        data=(jnp.asarray(y), jnp.asarray(condition)),
+        learning_rate=learning_rate,
+        max_epochs=max_epochs,
+        max_patience=max_patience,
+        batch_size=batch_size,
+        show_progress=show_progress,
+    )
+    # Extract the causal_maf by its cond_shape, NOT by position: flowjax's
+    # Uniform(-1, 1) is itself Transformed(_StandardUniform, NonTrainable(Affine)),
+    # so after merge_transforms() the chain is [Affine, causal_maf, Invert(Tanh)]
+    # and bijections[0] is the base's UNCONDITIONAL Affine -- grafting that would
+    # give ate == 0 exactly and ~50% non-finite samples. Exactly one element is
+    # conditional; select it by cond_shape.
+    conditional = [b for b in trained.bijection.bijections if b.cond_shape is not None]
+    assert len(conditional) == 1 and conditional[0].cond_shape == (cond_dim,), (
+        f"expected exactly one conditional bijection with cond_shape ({cond_dim},); "
+        f"got {[b.cond_shape for b in trained.bijection.bijections]}"
+    )
+    return conditional[0]
 
 
 def train_frugal_flow_flexible_discrete(
@@ -615,9 +730,11 @@ def train_frugal_flow(
     mask_condition: bool = True,
     causal_model="gaussian",
     causal_model_args: dict | None = None,
+    pretrained_margin=None,  # AbstractBijection | None: warm-start graft (flexible_continuous only)
 ):
     valid_causal_models = [
         "gaussian",
+        "flexible_continuous",
         "flexible_discrete_output",
         "location_translation",
     ]
@@ -693,6 +810,7 @@ def train_frugal_flow(
             condition=condition,
             mask_condition=mask_condition,
             causal_model_args=causal_model_args,
+            pretrained_margin=pretrained_margin,
         )
 
     elif causal_model == "location_translation":
@@ -951,6 +1069,11 @@ def univariate_marginal_cdf(
     batch_size: int = 100,
     val_prop: float = 0.1,
 ):
+    # Defensive: x64 is enabled globally, so the flow builds float64 params. A
+    # float32 z_cont (e.g. image features passed straight into
+    # get_independent_quantiles) would raise a lax.scan carry-dtype mismatch.
+    # No-op for float64 callers.
+    z_cont = jnp.asarray(z_cont, dtype=float)
     if z_cont.ndim == 1:
         # Reshape one-dimensional array to two dimensions with second dim as 1
         z_cont = z_cont.reshape(-1, 1)

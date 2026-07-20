@@ -3,10 +3,11 @@ import jax
 import numpy as np
 import pandas as pd
 from frugal_flows.causal_flows import get_independent_quantiles, train_frugal_flow
+from frugal_flows.interventions import interventional_samples
+from frugal_flows.outcome_transforms import as_outcome_transform
 from frugal_flows.sample_outcome import sample_outcome
 from frugal_flows.sample_marginals import from_quantiles_to_marginal_cont, from_quantiles_to_marginal_discr
 from frugal_flows.train_quantile_propensity_score import train_quantile_propensity_score
-import wandb
 
 sys.path.append("../")  # go to parent dir
 # sys.path.append("../data/analysis/")  # go to parent dir
@@ -17,14 +18,35 @@ import jax.random as jr
 import jax.numpy as jnp
 jax.config.update("jax_enable_x64", True)
 
+# Copula-flow hyperparameters. nn_width=200 (was 50): a 10-D complex-copula HP
+# search found the copula conditioner WIDTH is the lever for ATE recovery under
+# high-dimensional confounder dependence (wider markedly reduces bias in mixed/
+# strong regimes), while copula DEPTH hurts (keep low, 2-4) and flow_layers/
+# RQS_knots and the causal-margin capacity are effectively non-knobs. width 200
+# with depth 4 / layers 4 gave ~0 bias pooled across dependence regimes.
 hyperparam_dict = {
     "RQS_knots": 8,
     "nn_depth": 4,
-    "nn_width": 50,
+    "nn_width": 200,
     "flow_layers": 4,
     "learning_rate": 5e-3,
     "max_epochs": 1000,
     "max_patience": 100,
+}
+
+# Causal-margin (spline) hyperparameters, for causal_model="flexible_continuous".
+# Deliberately MODEST and left small: both the 10-D copula HP search and the earlier
+# capacity study found the spline margin's capacity is a NON-KNOB -- more knots, a
+# wider/deeper conditioner, or more layers does NOT improve ATE recovery. The margin's
+# real levers are NOT architecture but (i) the OUTCOME TRANSFORM (log + standardize for
+# skewed/heavy-tailed Y; see outcome_transforms.py, already the default) and
+# (ii) RESTART-AVERAGING (fit K>=5, average the level). So keep these small and spend
+# capacity on the copula (hyperparam_dict) instead.
+causal_margin_hyperparam_dict = {
+    "RQS_knots": 8,
+    "nn_depth": 4,
+    "nn_width": 50,
+    "flow_layers": 4,
 }
 
 class FrugalFlowModel:
@@ -43,13 +65,35 @@ class FrugalFlowModel:
         Z_cont: Continuous confounders, shape (n, n_cont), or None.
         confounding_copula: Callable ``(key, N, rho) -> (u_yx, u_xz)``;
             defaults to a bivariate Gaussian copula.
+        outcome_transform: ``None`` / kind-string / ``OutcomeTransform`` applied to
+            ``Y`` before fitting the causal margin and inverted on sampled outcomes
+            (see ``frugal_flows.outcome_transforms``). ``None`` (the default: no
+            transform chosen) -> **standardize** the outcome (a harmless, well-conditioned
+            default; estimand-preserving). Pass ``"identity"`` / ``"raw"`` for a true
+            no-op (raw ``Y``). For a skewed / heavy-tailed outcome that would otherwise
+            saturate the spline margin, pass an explicit ``OutcomeTransform("log", floor=b)``
+            or ``OutcomeTransform("asinh", floor=b)`` -- these standardize the transformed
+            scale after the base transform by default ("transform, then standardize"; pass
+            ``post_standardize=False`` to opt out). The bare ``"log"``/``"asinh"`` strings
+            are rejected -- ``floor`` must be given.
     """
 
-    def __init__(self, Y, X, Z_disc=None, Z_cont=None, confounding_copula=None):
+    def __init__(self, Y, X, Z_disc=None, Z_cont=None, confounding_copula=None,
+                 outcome_transform=None):
         self.Y = Y
         self.X = X
+        # Default: no transform chosen -> standardize the outcome (harmless, well-
+        # conditioned, estimand-preserving). Pass "identity"/"raw" for a true no-op.
+        self.outcome_transform = as_outcome_transform(
+            "standardize" if outcome_transform is None else outcome_transform
+        )
         self.Z_disc = Z_disc
-        self.Z_cont = Z_cont
+        # x64 is enabled at import, so the flows build float64 params. A float32
+        # Z_cont (e.g. image/MNIST features) fed bare into the Scan-wrapped
+        # marginal flow raises a lax.scan carry-dtype mismatch. Cast to float64
+        # here so callers can pass float32 arrays. Z_disc is left as-is (integer;
+        # it feeds the empirical-CDF path, not a scan carry).
+        self.Z_cont = None if Z_cont is None else jnp.asarray(Z_cont, dtype=jnp.float64)
         self.conf_shape = 0
         if Z_disc is not None:
             self.conf_shape += self.Z_disc.shape[1]
@@ -105,9 +149,18 @@ class FrugalFlowModel:
             uz_full_samples = self.res['u_z_cont']
         else:
             uz_full_samples = jnp.hstack([self.res['u_z_cont'], self.res['u_z_discr']])
+        # Fit the causal margin on the (optionally) transformed outcome. inverse is
+        # applied to sampled outcomes in generate_samples so the estimand stays on
+        # the original Y scale. identity (default) leaves y == self.Y unchanged.
+        # Cast Y to float64 for the same x64 scan-carry reason as Z_cont, but guard
+        # it: flexible_discrete_output needs an INTEGER Y (asserted in
+        # univariate_discrete_cdf), so leave that arm's Y untouched. Stateless --
+        # self.Y is not mutated, so re-training with another arm still works.
+        y_in = self.Y if causal_model == "flexible_discrete_output" else jnp.asarray(self.Y, dtype=jnp.float64)
+        y_fit = self.outcome_transform.fit(y_in).forward(y_in)
         self.frugal_flow, losses = train_frugal_flow(
             key=key,
-            y=self.Y,
+            y=y_fit,
             u_z=uz_full_samples,
             condition=self.X,
             causal_model=causal_model,
@@ -117,13 +170,51 @@ class FrugalFlowModel:
         self.min_val_loss = jnp.min(jnp.array(losses['val']))
         self.vmap_frugal_flow = jax.vmap(fun=self.frugal_flow.bijection.transform, in_axes=(0))
 
+    def sample_do(self, key, t, n_mc):
+        """Draw ``n_mc`` samples of ``Y | do(T = t)`` on the ORIGINAL outcome scale.
+
+        Samples the fitted frugal flow's causal margin (output dim 0) at the fixed
+        treatment level ``t`` (broadcast to all treatment columns) and inverts the
+        outcome transform. ``key`` must be a typed key (``jax.random.key(...)``).
+        """
+        if self.frugal_flow is None:
+            raise RuntimeError("sample_do requires a fitted flow; call train_frugal_flow first")
+        cond = jnp.full((n_mc, self.X.shape[1]), float(t))
+        y = self.frugal_flow.sample(key, condition=cond)[:, 0]
+        return np.asarray(self.outcome_transform.inverse(y))
+
+    def estimate_ate(self, key, n_mc=20000):
+        """Model-agnostic ATE = ``E[Y|do(1)] - E[Y|do(0)]`` from the fitted causal margin.
+
+        Paired common-random-number interventional read-out (see
+        ``frugal_flows.interventions.interventional_samples``): samples the fitted
+        flow at do(0) and do(1) with the SAME base key, inverts the outcome
+        transform, and differences -- so the estimand is always on the original
+        ``Y`` scale, whatever ``outcome_transform`` was used at fit time. ``key``
+        must be a typed key (``jax.random.key(...)``). Requires ``train_frugal_flow``
+        to have been run.
+
+        Returns the full read-out dict (``ate``, ``tau_sd``, ``y0``/``y1``,
+        means/vars, ...).
+        """
+        if self.frugal_flow is None:
+            raise RuntimeError("estimate_ate requires a fitted flow; call train_frugal_flow first")
+        return interventional_samples(
+            key, self.frugal_flow, self.X.shape[1], n_mc,
+            outcome_transform=self.outcome_transform,
+        )
+
     def train_propensity_flow(self, key, hyperparam_dict):
         if self.Z_disc is None:
             condition = self.Z_cont
         elif self.Z_cont is None:
             condition = self.Z_disc
         else:
-            condition = jnp.hstack([self.Z_disc, self.Z_cont])
+            # CONT-then-DISC to match generate_samples, which feeds the
+            # propensity flow full_Z_samples = hstack([Z_cont, Z_disc]).
+            # (Was DISC-then-CONT, silently transposing the propensity
+            # condition columns when both Z blocks are present.)
+            condition = jnp.hstack([self.Z_cont, self.Z_disc])
         self.prop_flow, _ = train_quantile_propensity_score(
             key=key,
             x=self.X.astype(int),
@@ -134,7 +225,10 @@ class FrugalFlowModel:
         self.vmap_prop_flow = jax.vmap(prop_flow_cdf, in_axes=(0,))
 
     def generate_samples(self, key, sampling_size, copula_param, outcome_causal_model, outcome_causal_args, with_confounding=True):
-        subkeys = jr.split(key, 4)
+        # 5 subkeys: copula (0), baseline u_z (1), Z_cont (2), Z_disc (3), outcome (4).
+        # Was split into 4, so subkeys[4] (the outcome draw) indexed out of bounds
+        # and JAX clamped it to subkeys[3] -- reusing the Z_disc key for outcomes.
+        subkeys = jr.split(key, 5)
 
         # Generate U*_y|x and U_x|z quantiles
         u_yx, u_xz = self.confounding_copula(subkeys[0], sampling_size, copula_param)
@@ -211,6 +305,9 @@ class FrugalFlowModel:
                 u_yx=u_yx.flatten(),
                 **outcome_causal_args
             )[:, None]
+        # Invert the outcome transform so sampled Y (and any downstream ATE) is on
+        # the ORIGINAL scale; no-op for the identity default.
+        Y_samples = np.asarray(self.outcome_transform.inverse(Y_samples))
         print(f"Y shape: {Y_samples.shape}")
         print(f"X shape: {X_samples.shape}")
         print(f"Z shape: {full_Z_samples.shape}")
