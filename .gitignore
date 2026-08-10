@@ -16,6 +16,7 @@ wandb/
 
 # MorphoMNIST data and generated outputs (large / reproducible)
 *.npz
+validation/morphomnist/runs/
 # ...but the small cached causl test fixtures ARE tracked (needed by the
 # gated ATE-recovery tests; regenerated via tests/fixtures/_generate.py).
 !tests/fixtures/*.npz
