@@ -27,7 +27,8 @@ dependencies:
   - pip:
     # - pre-commit
     # - flowjax
-    # - torch  # removed: no macOS x86_64 wheels after PyTorch 2.3
+    - torch  # recall: no macOS x86_64 wheels after PyTorch 2.3
+    - torchvision
     - zepid
     - flowjax==19.1.0
     - paramax>=0.0.5
