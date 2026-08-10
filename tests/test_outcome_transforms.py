@@ -386,3 +386,24 @@ def test_pipeline_recovers_known_ate_within_sd_band():
     se = ates.std(ddof=1) / np.sqrt(len(ates))
     # +0.05 guards the degenerate se->0 edge; the real signal is |mean - true| ~ 0.01.
     assert abs(ates.mean() - true_ate) <= 4.0 * se + 0.05, f"ATE recovery off: {ates} (true {true_ate})"
+
+
+# --------------------------------------------------------------------------- #
+# 6. multivariate outcome: statistics are per column
+# --------------------------------------------------------------------------- #
+def test_standardize_is_per_column_for_multivariate_Y():
+    """Each column of a multivariate Y is standardized on ITS OWN location and
+    scale, so one wide-range dimension cannot flatten the others; and the
+    transform still round-trips exactly."""
+    rng = np.random.default_rng(0)
+    Y = np.column_stack([
+        rng.normal(0.0, 1.0, 200),        # unit scale
+        rng.normal(50.0, 10.0, 200),      # shifted, wider
+        rng.normal(-3.0, 0.01, 200),      # tiny scale
+    ])
+    t = OutcomeTransform("standardize").fit(Y)
+    z = np.asarray(t.forward(Y))
+    assert z.shape == Y.shape
+    assert np.allclose(z.mean(axis=0), 0.0, atol=1e-8)
+    assert np.allclose(z.std(axis=0), 1.0, atol=1e-8)
+    assert np.allclose(np.asarray(t.inverse(z)), Y)

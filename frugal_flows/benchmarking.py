@@ -202,6 +202,7 @@ class FrugalFlowModel:
         return interventional_samples(
             key, self.frugal_flow, self.X.shape[1], n_mc,
             outcome_transform=self.outcome_transform,
+            dim_y=self.Y.shape[1],
         )
 
     def train_propensity_flow(self, key, hyperparam_dict):

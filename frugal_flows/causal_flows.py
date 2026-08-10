@@ -265,6 +265,7 @@ def train_frugal_flow_flexible_continuous(
     pretrained_margin=None,  # AbstractBijection | None: warm-start graft (see below)
 ):
     nvars = u_z.shape[1]
+    dim_y = y.shape[1]
 
     if condition is None:
         cond_dim = None
@@ -277,7 +278,7 @@ def train_frugal_flow_flexible_continuous(
         cond_dim_mask = None
         cond_dim_nomask = cond_dim
 
-    list_bijections_affine = [Identity((1,))] + [
+    list_bijections_affine = [Identity((dim_y,))] + [
         Invert(Affine(loc=-jnp.ones(nvars), scale=jnp.ones(nvars) * 2))
     ]
     bijections_affine = Concatenate(list_bijections_affine)
@@ -286,7 +287,7 @@ def train_frugal_flow_flexible_continuous(
     # condition is unmasked here
     causal_maf_bijection = masked_autoregressive_bijection(
         key=subkey,
-        dim=1,
+        dim=dim_y,
         condition=condition,
         nn_depth=causal_model_args["nn_depth"],
         nn_width=causal_model_args["nn_width"],
@@ -297,10 +298,10 @@ def train_frugal_flow_flexible_continuous(
     list_bijections_ate_maf = [causal_maf_bijection] + [Identity((1,))] * nvars
     bijections_ate_maf = Concatenate(list_bijections_ate_maf)
 
-    list_bijections_tanh = [Invert(Tanh(()))] + [Identity(())] * nvars
+    list_bijections_tanh = [Invert(Tanh(()))] * dim_y + [Identity(())] * nvars
     bijections_tanh = Stack(list_bijections_tanh)
 
-    base_dist = Uniform(-jnp.ones(nvars + 1), jnp.ones(nvars + 1))
+    base_dist = Uniform(-jnp.ones(nvars + dim_y), jnp.ones(nvars + dim_y))
 
     transformer = RationalQuadraticSpline(knots=RQS_knots, interval=1)
 
@@ -315,6 +316,7 @@ def train_frugal_flow_flexible_continuous(
         nn_depth=nn_depth,
         nn_width=nn_width,
         flow_layers=flow_layers,
+        cond_u_y_dim=dim_y,
     )  # Support on [-1, 1]
 
     frugal_flow = Transformed(
@@ -423,11 +425,12 @@ def pretrain_causal_margin(
     (identical hyperparameters, read from ``causal_model_args``) that
     ``train_frugal_flow_flexible_continuous`` uses, so the returned bijection's
     pytree matches the graft site exactly (the graft re-validates ``cond_shape`` +
-    structure before replacing).
+    structure before replacing). The outcome dimension is read from ``y``, so the
+    same ``y`` must be passed here and to the full frugal-flow fit.
 
     Args:
         key: a JAX PRNG key.
-        y: outcome to fit the margin on, shape ``(n, 1)`` (already on the fitting
+        y: outcome to fit the margin on, shape ``(n, K)`` (already on the fitting
             scale, i.e. after any ``outcome_transform``).
         condition: treatment, shape ``(n, cond_dim)``.
         causal_model_args: dict with ``nn_depth``/``nn_width``/``RQS_knots``/
@@ -439,10 +442,11 @@ def pretrain_causal_margin(
         The fitted causal-margin bijection (``cond_shape == (condition.shape[1],)``).
     """
     cond_dim = condition.shape[1]
+    dim_y = jnp.asarray(y).shape[1]
     key, subkey = jr.split(key)
     causal_maf = masked_autoregressive_bijection(
         key=subkey,
-        dim=1,
+        dim=dim_y,
         condition=condition,
         nn_depth=causal_model_args["nn_depth"],
         nn_width=causal_model_args["nn_width"],
@@ -450,8 +454,8 @@ def pretrain_causal_margin(
         flow_layers=causal_model_args["flow_layers"],
     )
     # base Uniform[-1, 1] -> causal_maf ([-1, 1]) -> Invert(Tanh) = atanh -> Y scale
-    margin_flow = Transformed(Uniform(-jnp.ones(1), jnp.ones(1)), causal_maf)
-    margin_flow = Transformed(margin_flow, Invert(Tanh((1,))))
+    margin_flow = Transformed(Uniform(-jnp.ones(dim_y), jnp.ones(dim_y)), causal_maf)
+    margin_flow = Transformed(margin_flow, Invert(Tanh((dim_y,))))
     margin_flow = margin_flow.merge_transforms()
     key, subkey = jr.split(key)
     trained, _ = fit_to_data(

@@ -18,7 +18,9 @@ the ORIGINAL ``Y`` scale.
 
 STANDARDIZATION POLICY -- the flow's fitting target is **always standardized**
 (mean 0 / sd 1), because a well-conditioned target is uniformly safe (a 15-seed
-Gamma study found it neither helps nor hurts recovery) and never a saturation risk:
+Gamma study found it neither helps nor hurts recovery) and never a saturation risk.
+All fitted statistics (mean/sd, asinh scale) are computed PER OUTCOME COLUMN, so
+each dimension of a multivariate ``Y`` is standardized on its own scale:
 
   * no transform chosen (``FrugalFlowModel(outcome_transform=None)``) -> ``standardize``;
   * a base transform (``log`` / ``asinh``) -> the transformed values are standardized
@@ -83,8 +85,11 @@ class OutcomeTransform:
             REQUIRED for ``log`` / ``asinh`` -- deliberately not defaulted, so a wrong
             (or accidental zero) floor is never applied silently to floored data. Pass
             ``floor=0.0`` explicitly for strictly-positive data with no artificial floor.
-            Ignored for ``identity`` / ``standardize``.
-        asinh_scale: ``s`` for ``asinh``; ``None`` -> robust ``median(|Y - b|)`` at fit.
+            A scalar applies to every outcome column; a length-K array gives each of a
+            multivariate outcome's columns its own bound. Ignored for ``identity`` /
+            ``standardize``.
+        asinh_scale: ``s`` for ``asinh``, scalar or one value per outcome column;
+            ``None`` -> robust per-column ``median(|Y - b|)`` at fit.
         post_standardize: after the base transform, additionally centre+scale the
             transformed values to mean 0 / sd 1 ("transform, then standardize"). Default
             ``None`` -> **True for log/asinh, False for identity/standardize**: the model
@@ -118,42 +123,48 @@ class OutcomeTransform:
                 f"(identity is a no-op; 'standardize' already standardizes)"
             )
         self.kind = kind
-        self.floor = 0.0 if floor is None else float(floor)  # unused for identity/standardize
-        self.asinh_scale = None if asinh_scale is None else float(asinh_scale)
+        # floor/asinh_scale: a scalar applies to every outcome column; a length-K
+        # array gives each column its own value. Unused for identity/standardize.
+        self.floor = 0.0 if floor is None else jnp.asarray(floor, dtype=float)
+        self.asinh_scale = None if asinh_scale is None else jnp.asarray(asinh_scale, dtype=float)
         # post_standardize: after the base transform, additionally centre+scale the
         # TRANSFORMED values to mean 0 / sd 1. This is what lands e.g. log Y in the
         # spline margin's fixed-`tanh` linear region instead of hugging the +/-1
         # boundary (where atanh's exploding derivative amplifies small-n tail error).
         # b/scale/mean cancel in the inverse, so the estimand is unchanged.
         self.post_standardize = bool(post_standardize)
-        self._mean: float | None = None
-        self._sd: float | None = None
-        self._post_mean: float | None = None
-        self._post_sd: float | None = None
+        # Fitted statistics: one value per outcome column (a scalar for 1-D Y).
+        self._mean = None
+        self._sd = None
+        self._post_mean = None
+        self._post_sd = None
         self.fitted = False
 
     def fit(self, Y) -> "OutcomeTransform":
         """Learn data-dependent params (asinh scale, standardize mean/sd) and validate."""
         Y = jnp.asarray(Y, dtype=float)
         b = self.floor
+        # All statistics are per outcome column (axis 0), so a multivariate Y is
+        # standardized / scaled on each dimension's own location and scale. For a
+        # 1-D or single-column Y this reduces to the pooled statistics.
         if self.kind == "log":
-            ymin = float(jnp.min(Y))
-            if not ymin > b:
-                raise ValueError(f"log transform requires Y > floor (b={b}); min(Y)={ymin:.6g}")
+            ymin = jnp.min(Y, axis=0)
+            if not bool(jnp.all(ymin > b)):
+                raise ValueError(f"log transform requires Y > floor per column (b={b}); min(Y)={ymin}")
         elif self.kind == "asinh":
             if self.asinh_scale is None:
-                s = float(jnp.median(jnp.abs(Y - b)))
-                self.asinh_scale = s if s > 0 else 1.0
+                s = jnp.median(jnp.abs(Y - b), axis=0)
+                self.asinh_scale = jnp.where(s > 0, s, 1.0)
         elif self.kind == "standardize":
-            self._mean = float(jnp.mean(Y))
-            sd = float(jnp.std(Y))
-            self._sd = sd if sd > 0 else 1.0
+            self._mean = jnp.mean(Y, axis=0)
+            sd = jnp.std(Y, axis=0)
+            self._sd = jnp.where(sd > 0, sd, 1.0)
         # post-transform standardize params are fit on the base-transformed values
         if self.post_standardize:
             z = self._base_forward(Y)
-            self._post_mean = float(jnp.mean(z))
-            psd = float(jnp.std(z))
-            self._post_sd = psd if psd > 0 else 1.0
+            self._post_mean = jnp.mean(z, axis=0)
+            psd = jnp.std(z, axis=0)
+            self._post_sd = jnp.where(psd > 0, psd, 1.0)
         self.fitted = True
         return self
 
@@ -195,7 +206,7 @@ class OutcomeTransform:
             Z = Z * self._require("_post_sd") + self._require("_post_mean")
         return self._base_inverse(Z)
 
-    def _require_scale(self) -> float:
+    def _require_scale(self):
         if self.asinh_scale is None:
             raise RuntimeError("asinh transform used before fit(); call fit(Y) first")
         return self.asinh_scale

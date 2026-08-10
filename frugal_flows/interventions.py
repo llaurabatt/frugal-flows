@@ -1,12 +1,14 @@
 """Interventional read-out of a fitted frugal flow's causal margin.
 
-The frugal flow stores the causal margin in **dimension 0** of its output, so
-sampling the fitted flow at a fixed treatment ``T = t`` and reading dim 0 gives
-draws from the interventional outcome ``Y | do(T = t)``. Differencing the do(1)
-and do(0) draws under COMMON RANDOM NUMBERS (the same base ``key``) yields the
-paired quantile effect ``tau(u) = Q_1(u) - Q_0(u)``; its mean is the ATE and its
-spread is genuine effect heterogeneity across quantiles (~0 for a pure location
-shift, > 0 for a real treatment-conditioned spline effect).
+The frugal flow stores the causal margin in the **leading output dimensions**
+(dim 0 for a scalar outcome, dims ``0..K-1`` for a K-dimensional outcome), so
+sampling the fitted flow at a fixed treatment ``T = t`` and reading those dims
+gives draws from the interventional outcome ``Y | do(T = t)``. Differencing the
+do(1) and do(0) draws under COMMON RANDOM NUMBERS (the same base ``key``) yields
+the paired quantile effect ``tau(u) = Q_1(u) - Q_0(u)`` per outcome dimension;
+its mean is the ATE and its spread is genuine effect heterogeneity across
+quantiles (~0 for a pure location shift, > 0 for a real treatment-conditioned
+spline effect).
 
 This read-out is **model-agnostic**: it works for every ``causal_model`` arm
 (``gaussian``, ``flexible_continuous``, ...), unlike reading a parametric ``.ate``
@@ -29,14 +31,16 @@ from frugal_flows.outcome_transforms import as_outcome_transform
 Y_INDEX = 0  # the frugal flow stores the causal margin (Y) in output dim 0
 
 
-def interventional_samples(key, flow, cond_dim, n_mc, outcome_transform=None, y_index=Y_INDEX):
+def interventional_samples(
+    key, flow, cond_dim, n_mc, outcome_transform=None, y_index=Y_INDEX, dim_y=1
+):
     """Paired common-random-number draws of ``Y | do(T=0)`` and ``Y | do(T=1)``.
 
     Args:
         key: a **typed** JAX PRNG key (``jax.random.key(...)``, not the legacy
             ``PRNGKey``) -- flowjax's ``.sample`` requires the new-style key.
         flow: a fitted frugal flow (a flowjax distribution) with the causal margin
-            in output dim ``y_index``.
+            in output dims ``y_index .. y_index + dim_y - 1``.
         cond_dim: treatment / condition dimensionality; ``T`` is set to all-zeros
             for do(0) and all-ones for do(1).
         n_mc: number of Monte-Carlo base draws, shared across do(0)/do(1) so the
@@ -44,7 +48,11 @@ def interventional_samples(key, flow, cond_dim, n_mc, outcome_transform=None, y_
         outcome_transform: ``None`` / kind-string / ``OutcomeTransform`` used at fit
             time; its inverse maps the sampled margin back to the original ``Y``
             scale before differencing. ``None`` -> identity (no-op).
-        y_index: output dim holding the causal margin (default 0).
+        y_index: first output dim holding the causal margin (default 0).
+        dim_y: outcome dimensionality K (default 1). With ``dim_y == 1`` the
+            samples are 1-D and every statistic a float; with ``dim_y > 1`` the
+            samples are ``(n_mc, K)`` and every statistic a length-K vector, one
+            entry per outcome dimension (still paired draws from the joint margin).
 
     Returns:
         dict with ``y0``/``y1`` sample arrays, their ``mean``/``var``,
@@ -52,15 +60,19 @@ def interventional_samples(key, flow, cond_dim, n_mc, outcome_transform=None, y_
         of pooled draws <= 0), and ``anynan``.
     """
     t = as_outcome_transform(outcome_transform)
-    y0 = np.asarray(t.inverse(flow.sample(key, condition=jnp.zeros((n_mc, cond_dim)))[:, y_index]))
-    y1 = np.asarray(t.inverse(flow.sample(key, condition=jnp.ones((n_mc, cond_dim)))[:, y_index]))
+    cols = slice(y_index, y_index + dim_y)
+    y0 = np.asarray(t.inverse(flow.sample(key, condition=jnp.zeros((n_mc, cond_dim)))[:, cols]))
+    y1 = np.asarray(t.inverse(flow.sample(key, condition=jnp.ones((n_mc, cond_dim)))[:, cols]))
+    if dim_y == 1:
+        y0, y1 = y0[:, 0], y1[:, 0]
     tau = y1 - y0
+    stat = float if dim_y == 1 else (lambda a: np.asarray(a))
     return {
         "y0": y0, "y1": y1,
-        "mean0": float(np.mean(y0)), "mean1": float(np.mean(y1)),
-        "var0": float(np.var(y0)), "var1": float(np.var(y1)),
-        "ate": float(np.mean(tau)), "tau_sd": float(np.std(tau)),
-        "frac_neg": float(np.mean(np.concatenate([y0, y1]) <= 0)),
+        "mean0": stat(np.mean(y0, axis=0)), "mean1": stat(np.mean(y1, axis=0)),
+        "var0": stat(np.var(y0, axis=0)), "var1": stat(np.var(y1, axis=0)),
+        "ate": stat(np.mean(tau, axis=0)), "tau_sd": stat(np.std(tau, axis=0)),
+        "frac_neg": stat(np.mean(np.concatenate([y0, y1]) <= 0, axis=0)),
         "anynan": bool(np.any(np.isnan(y0)) or np.any(np.isnan(y1))),
     }
 
@@ -80,10 +92,19 @@ def tau_curve(y0, y1, n_bins=TAU_CURVE_BINS):
     decomposition. For a pure location shift the truth is flat at the ATE; any
     slope/curvature the spline shows on such a DGP is spurious.
 
-    Returns ``(u_centers[n_bins], tau_of_u[n_bins])``.
+    Accepts ``(n,)`` samples (scalar outcome) or ``(n, K)`` samples (multivariate
+    outcome); in the K-dim case each dimension is ranked by ITS OWN ``y0`` column
+    (each margin is monotone in its own latent quantile) and the curves share one
+    u-grid.
+
+    Returns ``(u_centers[n_bins], tau_of_u[n_bins])``, with ``tau_of_u`` of shape
+    ``(n_bins, K)`` for K-dim input.
     """
     y0 = np.asarray(y0)
     y1 = np.asarray(y1)
+    if y0.ndim == 2:
+        curves = [tau_curve(y0[:, k], y1[:, k], n_bins) for k in range(y0.shape[1])]
+        return curves[0][0], np.column_stack([c[1] for c in curves])
     tau = (y1 - y0)[np.argsort(np.asarray(y0), kind="stable")]
     n = len(tau)
     edges = np.linspace(0, n, n_bins + 1).astype(int)
