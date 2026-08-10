@@ -7,8 +7,8 @@ multivariate ``location_translation`` frugal flow, reads the per-pixel
 
 Every run writes a self-contained folder under ``runs/toy_ate_recovery/``:
 
-    <UTC-stamp>_s<seed_fit>_k<K>/
-        config.json    every knob + git commit/dirty flag + library versions
+    <UTC-stamp>_s<seed_fit>_k<K>_<random-suffix>/     # the folder name is the run_id
+        config.json    run_id + every knob + git commit/dirty flag + library versions
         log.txt        live training output (`tail -f` it to watch progress)
         metrics.json   recovery scores (MAE/RMSE/corr vs truth) + best val loss
         arrays.npz     raw arrays: tau_hat, truth, data, losses (replottable)
@@ -32,6 +32,7 @@ import argparse
 import contextlib
 import json
 import os
+import secrets
 import subprocess
 import sys
 import time
@@ -313,10 +314,15 @@ class _Tee:
         self._file.flush()
 
 
-def write_config(cfg: Config, run_dir: str):
-    """Create the run folder and record the full configuration at launch."""
-    os.makedirs(run_dir, exist_ok=True)
+def write_config(cfg: Config, run_id: str, run_dir: str):
+    """Create the run folder and record the full configuration at launch.
+
+    Refuses an existing folder: a run-id collision must fail at launch rather
+    than let two runs silently write into the same directory.
+    """
+    os.makedirs(run_dir, exist_ok=False)
     config_record = {
+        "run_id": run_id,
         "config": asdict(cfg),
         "git": _git_info(),
         "versions": {
@@ -335,6 +341,7 @@ def write_config(cfg: Config, run_dir: str):
 
 def save_run(cfg: Config, toy: dict, losses: dict, tau_hat: np.ndarray, u_z: np.ndarray,
              metrics: dict, run_dir: str):
+    metrics = {"run_id": os.path.basename(run_dir), **metrics}
     with open(os.path.join(run_dir, "metrics.json"), "w") as f:
         json.dump(metrics, f, indent=2)
     np.savez(
@@ -395,10 +402,9 @@ def main(argv=None):
     jax.config.update("jax_enable_x64", cfg.x64)
 
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
-    run_dir = os.path.join(
-        SCRIPT_DIR, "runs", "toy_ate_recovery", f"{stamp}_s{cfg.seed_fit}_k{cfg.size**2}"
-    )
-    write_config(cfg, run_dir)
+    run_id = f"{stamp}_s{cfg.seed_fit}_k{cfg.size**2}_{secrets.token_hex(3)}"
+    run_dir = os.path.join(SCRIPT_DIR, "runs", "toy_ate_recovery", run_id)
+    write_config(cfg, run_id, run_dir)
     print(f"run dir: {run_dir}")
 
     with open(os.path.join(run_dir, "log.txt"), "w") as lf:
