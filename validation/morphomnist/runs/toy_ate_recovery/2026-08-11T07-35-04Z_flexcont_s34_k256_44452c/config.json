@@ -1,0 +1,42 @@
+{
+  "run_id": "2026-08-11T07-35-04Z_flexcont_s34_k256_44452c",
+  "config": {
+    "size": 16,
+    "digit": 0,
+    "n": null,
+    "seed_prepare": 0,
+    "seed_data": 123,
+    "data_dir": "data",
+    "radius": 2,
+    "base_shift": 1.0,
+    "arm": "flexible_continuous",
+    "ate_init": 0.5,
+    "rqs_knots": 8,
+    "nn_depth": 1,
+    "nn_width": 50,
+    "flow_layers": 4,
+    "learning_rate": 0.01,
+    "max_epochs": 100,
+    "max_patience": 30,
+    "batch_size": 100,
+    "marginal_max_epochs": 70,
+    "marginal_max_patience": 10,
+    "seed_fit": 34,
+    "x64": false,
+    "n_mc": 5000,
+    "seed_mc": 0
+  },
+  "git": {
+    "commit": "e4408bf0c798785899857151cbfb0688a5eda198",
+    "dirty": true
+  },
+  "versions": {
+    "jax": "0.9.2",
+    "flowjax": "19.1.0",
+    "equinox": "0.13.7",
+    "numpy": "2.4.6",
+    "frugal_flows": "unversioned"
+  },
+  "x64_active": false,
+  "started_utc": "2026-08-11T07:35:05.027087+00:00"
+}
