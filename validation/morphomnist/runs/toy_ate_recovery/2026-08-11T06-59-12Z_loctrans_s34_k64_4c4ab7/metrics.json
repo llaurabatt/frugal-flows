@@ -1,0 +1,16 @@
+{
+  "run_id": "2026-08-11T06-59-12Z_loctrans_s34_k64_4c4ab7",
+  "arm": "location_translation",
+  "ate_mae": 0.18976529702194966,
+  "ate_rmse": 0.21509190370549117,
+  "ate_corr": 0.9176809861074582,
+  "ate_max_abs_err": 0.7334213852882385,
+  "tau_hat_mean_inside_circle": 0.7614575872818629,
+  "tau_hat_mean_outside_circle": 0.1785090395535987,
+  "true_effect_inside_circle": 1.0,
+  "best_val_loss": -50.983253479003906,
+  "n_epochs_run": 69,
+  "n_units": 5923,
+  "n_pixels": 64,
+  "wall_time_s": 430.01053312500153
+}

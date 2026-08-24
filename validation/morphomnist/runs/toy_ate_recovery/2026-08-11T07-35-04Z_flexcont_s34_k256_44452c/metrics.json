@@ -1,0 +1,20 @@
+{
+  "run_id": "2026-08-11T07-35-04Z_flexcont_s34_k256_44452c",
+  "arm": "flexible_continuous",
+  "ate_mae": 0.018434227116927104,
+  "ate_rmse": 0.031114135391213823,
+  "ate_corr": 0.9894676072782457,
+  "ate_max_abs_err": 0.15140032768249512,
+  "tau_hat_mean_inside_circle": 0.9650239944458008,
+  "tau_hat_mean_outside_circle": -0.0037412000820040703,
+  "true_effect_inside_circle": 1.0,
+  "best_val_loss": -262.0752868652344,
+  "n_epochs_run": 100,
+  "n_units": 5923,
+  "n_pixels": 256,
+  "wall_time_s": 1534.205374709003,
+  "mc_n": 5000,
+  "mc_anynan": false,
+  "tau_u_sd_inside_circle": 0.16564923524856567,
+  "tau_u_sd_outside_circle": 0.029101114720106125
+}

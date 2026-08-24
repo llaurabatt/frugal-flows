@@ -1,17 +1,38 @@
 """Toy MorphoMNIST ATE-map recovery: known circle effect on digit images.
 
 Builds the toy dataset (a single digit class, randomly assigned treatment, a
-fixed circle-shaped per-pixel effect painted in logit space), fits the
-multivariate ``location_translation`` frugal flow, reads the per-pixel
-``tau_hat`` off the ``LocCond`` blocks, and scores it against the known truth.
+fixed circle-shaped per-pixel effect painted in logit space), fits a multivariate
+frugal flow, recovers the per-pixel ``tau_hat``, and scores it against the known
+truth.
+
+Two causal-margin arms are supported via ``--arm``; both produce a ``(K,)``
+``tau_hat`` scored identically, so their run folders stay directly comparable:
+
+    location_translation   treatment is MASKED from the margin flow, so the whole
+                           effect rides on the per-pixel ``LocCond`` shift.
+                           ``tau_hat`` is an exact model PARAMETER, read off the
+                           fitted chain. Restricts the effect to a pure location
+                           shift -- which is exactly this toy's truth.
+
+    flexible_continuous    treatment enters the K-dimensional spline margin
+                           itself (unmasked), so there is no ``LocCond`` block
+                           and no tau parameter. ``tau_hat`` is ESTIMATED by
+                           paired common-random-number interventional sampling.
+                           Strictly more general than the toy DGP needs, so it
+                           measures what the extra flexibility costs.
+
+The spline arm additionally records the quantile-resolved effect ``tau(u)``: the
+toy effect is a pure location shift, so the truth is FLAT in ``u`` for every
+pixel, and any slope is spline curvature the data does not support.
 
 Every run writes a self-contained folder under ``runs/toy_ate_recovery/``:
 
-    <UTC-stamp>_s<seed_fit>_k<K>_<random-suffix>/     # the folder name is the run_id
+    <UTC-stamp>_<arm>_s<seed_fit>_k<K>_<random-suffix>/   # the folder name is the run_id
         config.json    run_id + every knob + git commit/dirty flag + library versions
         log.txt        live training output (`tail -f` it to watch progress)
-        metrics.json   recovery scores (MAE/RMSE/corr vs truth) + best val loss
-        arrays.npz     raw arrays: tau_hat, truth, data, losses (replottable)
+        metrics.json   arm + recovery scores (MAE/RMSE/corr vs truth) + best val loss
+        arrays.npz     raw arrays: tau_hat, truth, data, losses (replottable);
+                       the spline arm adds the tau(u) curves and MC moments
         plots/         every figure, saved as PNG
 
     config.json and log.txt are written at launch, so the folder existing with
@@ -21,6 +42,7 @@ Every run writes a self-contained folder under ``runs/toy_ate_recovery/``:
 Usage:
     python toy_ate_recovery.py                      # notebook-equivalent defaults
     python toy_ate_recovery.py --size 8 --seed-fit 7 --max-epochs 200
+    python toy_ate_recovery.py --arm flexible_continuous --n-mc 5000
     python toy_ate_recovery.py --replot runs/toy_ate_recovery/<run-id>
 
 The default configuration reproduces ``validation/ff_morphomnist_toy.ipynb``.
@@ -56,7 +78,15 @@ import jax.numpy as jnp
 import jax.random as jr
 import paramax
 from frugal_flows.causal_flows import get_independent_quantiles, train_frugal_flow
+from frugal_flows.interventions import interventional_samples, tau_curve
 from prepare_data import inverse_logit, prepare_flow_data, unflatten
+
+ARMS = ("location_translation", "flexible_continuous")
+ARM_SHORT = {"location_translation": "loctrans", "flexible_continuous": "flexcont"}
+# Expected bijection-chain length per arm. Asserted before the parametric read-out
+# so a future change to the chain layout fails loudly instead of silently reading
+# the wrong block as the LocCond stack.
+ARM_CHAIN_LEN = {"location_translation": 6, "flexible_continuous": 5}
 
 
 @dataclass
@@ -72,7 +102,9 @@ class Config:
     radius: int = 2          # circle radius, centred
     base_shift: float = 1.0  # effect magnitude in logit space
     # model / training
+    arm: str = "location_translation"   # causal-margin arm; see module docstring
     ate_init: float = 0.5    # recorded: tau_hat is sensitive to its start
+                             # (location_translation only -- the spline arm has no ate)
     rqs_knots: int = 8
     nn_depth: int = 1
     nn_width: int = 50
@@ -85,6 +117,13 @@ class Config:
     marginal_max_patience: int = 10
     seed_fit: int = 34
     x64: bool = False        # precision the flow trains at (recorded in config.json)
+    # interventional read-out (flexible_continuous only)
+    n_mc: int = 5000         # paired common-random-number draws per treatment arm
+    seed_mc: int = 0         # read-out RNG, separate from the fit RNG
+
+    def __post_init__(self):
+        if self.arm not in ARMS:
+            raise ValueError(f"unknown arm {self.arm!r}; choose from {ARMS}")
 
 
 # --------------------------------------------------------------------------- #
@@ -131,9 +170,22 @@ def fit_flow(cfg: Config, toy: dict):
     )
     u_z = np.asarray(z_res["u_z_cont"])
 
+    # Both arms share the copula/margin capacity knobs. Only location_translation
+    # takes an "ate": the spline arm has no tau parameter to initialise, so
+    # cfg.ate_init is unused there (still recorded in config.json, so a run folder
+    # always documents the full invocation).
+    causal_model_args = {
+        "RQS_knots": cfg.rqs_knots,
+        "nn_depth": cfg.nn_depth,
+        "nn_width": cfg.nn_width,
+        "flow_layers": cfg.flow_layers,
+    }
+    if cfg.arm == "location_translation":
+        causal_model_args["ate"] = cfg.ate_init
+
     key, subkey = jr.split(key)
     flow, losses = train_frugal_flow(
-        causal_model="location_translation",
+        causal_model=cfg.arm,
         key=subkey,
         y=jnp.asarray(toy["Y"]),
         u_z=jnp.asarray(u_z),
@@ -142,28 +194,88 @@ def fit_flow(cfg: Config, toy: dict):
         max_epochs=cfg.max_epochs,
         max_patience=cfg.max_patience,
         batch_size=cfg.batch_size,
-        causal_model_args={
-            "ate": cfg.ate_init,
-            "RQS_knots": cfg.rqs_knots,
-            "nn_depth": cfg.nn_depth,
-            "nn_width": cfg.nn_width,
-            "flow_layers": cfg.flow_layers,
-        },
+        causal_model_args=causal_model_args,
     )
     return flow, losses, u_z
 
 
-def evaluate(cfg: Config, flow, toy: dict, losses: dict, wall_time_s: float) -> tuple[np.ndarray, dict]:
-    """Per-pixel tau_hat off the LocCond blocks, scored against the known truth."""
-    K = cfg.size**2
+def _tau_hat_location_translation(flow, K: int) -> np.ndarray:
+    """Read the per-pixel ATE straight off the LocCond blocks (an exact parameter)."""
     loccond_block = flow.bijection.bijections[5]
-    tau_hat = np.array(
+    return np.array(
         [float(paramax.unwrap(loccond_block.bijections[k]).ate) for k in range(K)]
     )
+
+
+def _tau_hat_flexible_continuous(cfg: Config, flow, toy: dict, K: int) -> tuple[np.ndarray, dict, dict]:
+    """Estimate the per-pixel ATE by paired common-random-number interventional draws.
+
+    This arm has no LocCond block -- treatment enters the spline margin itself --
+    so the effect is a Monte-Carlo functional of the fitted interventional
+    distribution rather than a model parameter. ``interventional_samples`` needs a
+    TYPED key (``jr.key``), and ``dim_y`` must be passed explicitly: it defaults to
+    1, which would silently return pixel 0 only.
+    """
+    readout = interventional_samples(
+        jr.key(cfg.seed_mc),
+        flow,
+        cond_dim=int(np.asarray(toy["X"]).shape[1]),
+        n_mc=cfg.n_mc,
+        dim_y=K,
+    )
+    tau_hat = np.asarray(readout["ate"])
+    u_grid, curves = tau_curve(readout["y0"], readout["y1"])
+
+    extras = {
+        "tau_u": np.asarray(u_grid),
+        "tau_curves": np.asarray(curves),          # (n_bins, K)
+        "mc_mean0": np.asarray(readout["mean0"]),
+        "mc_mean1": np.asarray(readout["mean1"]),
+        "mc_var0": np.asarray(readout["var0"]),
+        "mc_var1": np.asarray(readout["var1"]),
+        "mc_tau_sd": np.asarray(readout["tau_sd"]),
+    }
+    # SD of tau across the u-grid, averaged over pixels. The toy effect is a pure
+    # location shift, so the truth is flat in u and this should be ~0; anything
+    # larger is spline curvature the data does not support.
+    inside = toy["circle"].astype(bool)
+    flat = np.asarray(curves).std(axis=0)
+    arm_metrics = {
+        "mc_n": int(cfg.n_mc),
+        "mc_anynan": bool(readout["anynan"]),
+        "tau_u_sd_inside_circle": float(flat[inside].mean()),
+        "tau_u_sd_outside_circle": float(flat[~inside].mean()),
+    }
+    return tau_hat, arm_metrics, extras
+
+
+def evaluate(cfg: Config, flow, toy: dict, losses: dict,
+             wall_time_s: float) -> tuple[np.ndarray, dict, dict]:
+    """Per-pixel tau_hat for the configured arm, scored against the known truth.
+
+    The two arms recover tau by different routes (an exact parameter vs a Monte
+    Carlo estimate) but return the same ``(K,)`` vector and the same score keys,
+    so run folders from either arm are directly comparable.
+    """
+    K = cfg.size**2
+    n_blocks = len(flow.bijection.bijections)
+    assert n_blocks == ARM_CHAIN_LEN[cfg.arm], (
+        f"expected a {ARM_CHAIN_LEN[cfg.arm]}-block chain for arm {cfg.arm!r}, "
+        f"got {n_blocks} -- the read-out below indexes the chain by position"
+    )
+
+    extras: dict = {}
+    arm_metrics: dict = {}
+    if cfg.arm == "location_translation":
+        tau_hat = _tau_hat_location_translation(flow, K)
+    else:
+        tau_hat, arm_metrics, extras = _tau_hat_flexible_continuous(cfg, flow, toy, K)
+
     truth = np.asarray(toy["ate_true"])
     inside = toy["circle"].astype(bool)
     err = tau_hat - truth
     metrics = {
+        "arm": cfg.arm,
         "ate_mae": float(np.abs(err).mean()),
         "ate_rmse": float(np.sqrt((err**2).mean())),
         "ate_corr": float(np.corrcoef(tau_hat, truth)[0, 1]),
@@ -176,16 +288,19 @@ def evaluate(cfg: Config, flow, toy: dict, losses: dict, wall_time_s: float) -> 
         "n_units": int(toy["Y"].shape[0]),
         "n_pixels": int(K),
         "wall_time_s": float(wall_time_s),
+        **arm_metrics,
     }
-    return tau_hat, metrics
+    return tau_hat, metrics, extras
 
 
 # --------------------------------------------------------------------------- #
 # plots (all read from plain arrays, so --replot needs no refit)
 # --------------------------------------------------------------------------- #
-def make_plots(cfg: Config, toy: dict, losses: dict, tau_hat: np.ndarray, u_z: np.ndarray, plots_dir: str):
+def make_plots(cfg: Config, toy: dict, losses: dict, tau_hat: np.ndarray, u_z: np.ndarray,
+               plots_dir: str, extras: dict | None = None):
     os.makedirs(plots_dir, exist_ok=True)
     size = cfg.size
+    extras = extras or {}
 
     def save(fig, name):
         fig.savefig(os.path.join(plots_dir, name), dpi=120, bbox_inches="tight")
@@ -279,6 +394,30 @@ def make_plots(cfg: Config, toy: dict, losses: dict, tau_hat: np.ndarray, u_z: n
     fig.colorbar(im2, ax=axes[2])
     save(fig, "ate_maps.png")
 
+    # 8. spline arm only: quantile-resolved effect tau(u) per pixel. The toy
+    # effect is a pure location shift, so the truth is FLAT in u for every pixel
+    # and any slope is spurious spline curvature.
+    if "tau_curves" in extras:
+        u = np.asarray(extras["tau_u"])
+        curves = np.asarray(extras["tau_curves"])
+        inside = np.asarray(toy["circle"]).astype(bool)
+        fig, axes = plt.subplots(1, 2, figsize=(13, 4.5), sharey=True)
+        for ax, mask, name in zip(axes, [inside, ~inside], ["inside circle", "outside circle"]):
+            if not mask.any():
+                ax.set_visible(False)
+                continue
+            band = curves[:, mask]
+            ax.plot(u, band, color="C0", alpha=0.15, lw=0.8)
+            ax.plot(u, band.mean(axis=1), color="C0", lw=2.5, label="mean over pixels")
+            ax.axhline(float(ate_true[mask].mean()), color="k", ls="--", lw=1.5,
+                       label="truth (flat)")
+            ax.set_title(f"{name}  ({int(mask.sum())} pixels)")
+            ax.set_xlabel("u")
+            ax.legend()
+        axes[0].set_ylabel(r"$\tau(u)$")
+        fig.suptitle(r"Quantile-resolved effect $\tau(u)$ — flat is correct here")
+        save(fig, "tau_curves.png")
+
 
 # --------------------------------------------------------------------------- #
 # run folder + metadata
@@ -339,8 +478,14 @@ def write_config(cfg: Config, run_id: str, run_dir: str):
         json.dump(config_record, f, indent=2)
 
 
+# Arm-specific arrays written into arrays.npz. Kept as an explicit list so
+# --replot can pick them back out of an npz that may or may not contain them.
+EXTRA_ARRAY_KEYS = ("tau_u", "tau_curves", "mc_mean0", "mc_mean1",
+                    "mc_var0", "mc_var1", "mc_tau_sd")
+
+
 def save_run(cfg: Config, toy: dict, losses: dict, tau_hat: np.ndarray, u_z: np.ndarray,
-             metrics: dict, run_dir: str):
+             metrics: dict, extras: dict, run_dir: str):
     metrics = {"run_id": os.path.basename(run_dir), **metrics}
     with open(os.path.join(run_dir, "metrics.json"), "w") as f:
         json.dump(metrics, f, indent=2)
@@ -356,8 +501,9 @@ def save_run(cfg: Config, toy: dict, losses: dict, tau_hat: np.ndarray, u_z: np.
         u_z=np.asarray(u_z),
         loss_train=np.asarray(losses["train"]),
         loss_val=np.asarray(losses["val"]),
+        **{k: np.asarray(v) for k, v in (extras or {}).items()},
     )
-    make_plots(cfg, toy, losses, tau_hat, u_z, os.path.join(run_dir, "plots"))
+    make_plots(cfg, toy, losses, tau_hat, u_z, os.path.join(run_dir, "plots"), extras=extras)
 
 
 def replot(run_dir: str):
@@ -372,7 +518,11 @@ def replot(run_dir: str):
         "circle": a["circle"],
     }
     losses = {"train": a["loss_train"], "val": a["loss_val"]}
-    make_plots(cfg, toy, losses, a["tau_hat"], a["u_z"], os.path.join(run_dir, "plots"))
+    # Arm-specific arrays are absent from location_translation runs (and from any
+    # run archived before the spline arm existed), so pick out only what is there.
+    extras = {k: a[k] for k in EXTRA_ARRAY_KEYS if k in a}
+    make_plots(cfg, toy, losses, a["tau_hat"], a["u_z"], os.path.join(run_dir, "plots"),
+               extras=extras)
     print(f"replotted: {os.path.join(run_dir, 'plots')}")
 
 
@@ -382,6 +532,7 @@ def replot(run_dir: str):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
+    extra_args = {"arm": {"choices": ARMS}}
     for f in fields(Config):
         flag = "--" + f.name.replace("_", "-")
         if f.type == "bool":
@@ -389,7 +540,8 @@ def main(argv=None):
         elif f.type == "int | None":
             parser.add_argument(flag, type=int, default=f.default)
         else:
-            parser.add_argument(flag, type=type(f.default), default=f.default)
+            parser.add_argument(flag, type=type(f.default), default=f.default,
+                                **extra_args.get(f.name, {}))
     parser.add_argument("--replot", metavar="RUN_DIR", default=None,
                         help="regenerate plots for an existing run, no refit")
     args = parser.parse_args(argv)
@@ -402,7 +554,10 @@ def main(argv=None):
     jax.config.update("jax_enable_x64", cfg.x64)
 
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
-    run_id = f"{stamp}_s{cfg.seed_fit}_k{cfg.size**2}_{secrets.token_hex(3)}"
+    # The arm goes in the run id so the two arms stay distinguishable in the
+    # archive listing without opening config.json.
+    run_id = (f"{stamp}_{ARM_SHORT[cfg.arm]}_s{cfg.seed_fit}"
+              f"_k{cfg.size**2}_{secrets.token_hex(3)}")
     run_dir = os.path.join(SCRIPT_DIR, "runs", "toy_ate_recovery", run_id)
     write_config(cfg, run_id, run_dir)
     print(f"run dir: {run_dir}")
@@ -411,6 +566,7 @@ def main(argv=None):
         out, err = _Tee(sys.stdout, lf), _Tee(sys.stderr, lf)
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             print(f"started {stamp}; watch progress with: tail -f {run_dir}/log.txt")
+            print(f"arm: {cfg.arm}")
             toy = build_toy_data(cfg)
             print(f"data built: {toy['Y'].shape[0]} units x {toy['Y'].shape[1]} pixels")
             t0 = time.monotonic()
@@ -418,8 +574,8 @@ def main(argv=None):
             wall = time.monotonic() - t0
             n_ep = len(losses["train"])
             print(f"fit finished: {n_ep} epochs in {wall:.0f}s (~{wall / n_ep:.1f}s/epoch)")
-            tau_hat, metrics = evaluate(cfg, flow, toy, losses, wall)
-            save_run(cfg, toy, losses, tau_hat, u_z, metrics, run_dir)
+            tau_hat, metrics, extras = evaluate(cfg, flow, toy, losses, wall)
+            save_run(cfg, toy, losses, tau_hat, u_z, metrics, extras, run_dir)
             for k, v in metrics.items():
                 print(f"  {k}: {v:.4g}" if isinstance(v, float) else f"  {k}: {v}")
 
