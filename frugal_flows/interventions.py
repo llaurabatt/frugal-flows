@@ -57,7 +57,9 @@ def interventional_samples(
     Returns:
         dict with ``y0``/``y1`` sample arrays, their ``mean``/``var``,
         ``ate = mean(y1 - y0)``, ``tau_sd = std(y1 - y0)``, ``frac_neg`` (fraction
-        of pooled draws <= 0), and ``anynan``.
+        of pooled draws <= 0), and ``anynan`` (True when ANY draw is non-finite —
+        NaN or +/-inf; a saturated margin produces inf draws whose statistics then
+        surface as NaN).
     """
     t = as_outcome_transform(outcome_transform)
     cols = slice(y_index, y_index + dim_y)
@@ -73,7 +75,7 @@ def interventional_samples(
         "var0": stat(np.var(y0, axis=0)), "var1": stat(np.var(y1, axis=0)),
         "ate": stat(np.mean(tau, axis=0)), "tau_sd": stat(np.std(tau, axis=0)),
         "frac_neg": stat(np.mean(np.concatenate([y0, y1]) <= 0, axis=0)),
-        "anynan": bool(np.any(np.isnan(y0)) or np.any(np.isnan(y1))),
+        "anynan": bool(not (np.all(np.isfinite(y0)) and np.all(np.isfinite(y1)))),
     }
 
 
