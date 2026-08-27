@@ -25,6 +25,12 @@ The spline arm additionally records the quantile-resolved effect ``tau(u)``: the
 toy effect is a pure location shift, so the truth is FLAT in ``u`` for every
 pixel, and any slope is spline curvature the data does not support.
 
+The spline arm's margin can run on either conditioner engine via
+``--conditioner {mlp,transformer}`` (default ``mlp``; see
+``frugal_flows.bijections.transformer_autoregressive`` for the transformer).
+The transformer requires ``--nn-width`` divisible by ``--nn-heads`` (default 4),
+e.g. ``--nn-width 48``.
+
 Every run writes a self-contained folder under ``runs/toy_ate_recovery/``:
 
     <UTC-stamp>_<arm>_s<seed_fit>_k<K>_<random-suffix>/   # the folder name is the run_id
@@ -103,6 +109,8 @@ class Config:
     base_shift: float = 1.0  # effect magnitude in logit space
     # model / training
     arm: str = "location_translation"   # causal-margin arm; see module docstring
+    conditioner: str = "mlp"  # flexible_continuous margin engine: "mlp" | "transformer"
+    nn_heads: int = 4        # transformer conditioner only; must divide nn_width
     ate_init: float = 0.5    # recorded: tau_hat is sensitive to its start
                              # (location_translation only -- the spline arm has no ate)
     rqs_knots: int = 8
@@ -124,6 +132,15 @@ class Config:
     def __post_init__(self):
         if self.arm not in ARMS:
             raise ValueError(f"unknown arm {self.arm!r}; choose from {ARMS}")
+        if self.conditioner not in ("mlp", "transformer"):
+            raise ValueError(
+                f"unknown conditioner {self.conditioner!r}; choose 'mlp' or 'transformer'"
+            )
+        if self.conditioner != "mlp" and self.arm != "flexible_continuous":
+            raise ValueError(
+                "conditioner is a flexible_continuous option; "
+                f"arm {self.arm!r} always uses its own margin"
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -182,6 +199,10 @@ def fit_flow(cfg: Config, toy: dict):
     }
     if cfg.arm == "location_translation":
         causal_model_args["ate"] = cfg.ate_init
+    if cfg.arm == "flexible_continuous":
+        causal_model_args["conditioner"] = cfg.conditioner
+        if cfg.conditioner == "transformer":
+            causal_model_args["nn_heads"] = cfg.nn_heads
 
     key, subkey = jr.split(key)
     flow, losses = train_frugal_flow(
@@ -276,6 +297,7 @@ def evaluate(cfg: Config, flow, toy: dict, losses: dict,
     err = tau_hat - truth
     metrics = {
         "arm": cfg.arm,
+        "conditioner": cfg.conditioner,
         "ate_mae": float(np.abs(err).mean()),
         "ate_rmse": float(np.sqrt((err**2).mean())),
         "ate_corr": float(np.corrcoef(tau_hat, truth)[0, 1]),
@@ -554,9 +576,11 @@ def main(argv=None):
     jax.config.update("jax_enable_x64", cfg.x64)
 
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
-    # The arm goes in the run id so the two arms stay distinguishable in the
-    # archive listing without opening config.json.
-    run_id = (f"{stamp}_{ARM_SHORT[cfg.arm]}_s{cfg.seed_fit}"
+    # The arm (and, for the spline arm, a non-default conditioner) goes in the
+    # run id so runs stay distinguishable in the archive listing without
+    # opening config.json.
+    arm_tag = ARM_SHORT[cfg.arm] + ("-trf" if cfg.conditioner == "transformer" else "")
+    run_id = (f"{stamp}_{arm_tag}_s{cfg.seed_fit}"
               f"_k{cfg.size**2}_{secrets.token_hex(3)}")
     run_dir = os.path.join(SCRIPT_DIR, "runs", "toy_ate_recovery", run_id)
     write_config(cfg, run_id, run_dir)

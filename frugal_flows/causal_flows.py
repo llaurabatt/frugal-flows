@@ -18,8 +18,8 @@ from flowjax.bijections.utils import Identity
 from flowjax.distributions import Transformed, Uniform, _StandardUniform
 from flowjax.flows import masked_autoregressive_flow
 from flowjax.train import fit_to_data
-from paramax import NonTrainable
 from jaxtyping import ArrayLike
+from paramax import NonTrainable
 
 from frugal_flows.basic_flows import (
     masked_autoregressive_bijection,
@@ -30,12 +30,53 @@ from frugal_flows.basic_flows import (
     univariate_marginal_flow,
 )
 from frugal_flows.bijections import LocCond, UnivariateNormalCDF
+from frugal_flows.bijections.transformer_autoregressive import (
+    transformer_autoregressive_bijection,
+)
 
 
 def _freeze_arrays(subtree):
     return jax.tree.map(
         lambda leaf: NonTrainable(leaf) if eqx.is_inexact_array(leaf) else leaf,
         subtree,
+    )
+
+
+def _build_flexible_margin(key, dim, condition, causal_model_args):
+    """Build the flexible causal margin with the conditioner named in
+    ``causal_model_args["conditioner"]``: ``"mlp"`` (default, the MADE-masked
+    MLP) or ``"transformer"`` (causal-transformer conditioner, TarFlow-inspired;
+    see ``bijections.transformer_autoregressive``). Both emit RQS spline
+    parameters on [-1, 1] and return the same ``Invert(Scan(...))`` bijection,
+    so the chain around the margin is conditioner-agnostic. The transformer
+    reads two extra optional keys, ``nn_heads`` (default 4; must divide
+    ``nn_width``) and ``expansion`` (default 2).
+    """
+    conditioner = causal_model_args.get("conditioner", "mlp")
+    if conditioner == "mlp":
+        return masked_autoregressive_bijection(
+            key=key,
+            dim=dim,
+            condition=condition,
+            nn_depth=causal_model_args["nn_depth"],
+            nn_width=causal_model_args["nn_width"],
+            RQS_knots=causal_model_args["RQS_knots"],
+            flow_layers=causal_model_args["flow_layers"],
+        )
+    if conditioner == "transformer":
+        return transformer_autoregressive_bijection(
+            key=key,
+            dim=dim,
+            condition=condition,
+            RQS_knots=causal_model_args["RQS_knots"],
+            nn_depth=causal_model_args["nn_depth"],
+            nn_width=causal_model_args["nn_width"],
+            flow_layers=causal_model_args["flow_layers"],
+            nn_heads=causal_model_args.get("nn_heads", 4),
+            expansion=causal_model_args.get("expansion", 2),
+        )
+    raise ValueError(
+        f"unknown conditioner {conditioner!r}; choose 'mlp' or 'transformer'"
     )
 
 
@@ -285,14 +326,8 @@ def train_frugal_flow_flexible_continuous(
 
     key, subkey = jr.split(key)
     # condition is unmasked here
-    causal_maf_bijection = masked_autoregressive_bijection(
-        key=subkey,
-        dim=dim_y,
-        condition=condition,
-        nn_depth=causal_model_args["nn_depth"],
-        nn_width=causal_model_args["nn_width"],
-        RQS_knots=causal_model_args["RQS_knots"],
-        flow_layers=causal_model_args["flow_layers"],
+    causal_maf_bijection = _build_flexible_margin(
+        key=subkey, dim=dim_y, condition=condition, causal_model_args=causal_model_args
     )
 
     list_bijections_ate_maf = [causal_maf_bijection] + [Identity((1,))] * nvars
@@ -341,8 +376,8 @@ def train_frugal_flow_flexible_continuous(
     # bijection at bijections[-2].bijections[0] (Concatenate([causal_maf, Identity...]));
     # it is left trainable (the freezing below only touches [-3] and [0]), so the
     # grafted margin co-adapts with the copula during fit_to_data. `pretrained_margin`
-    # must have been built by masked_autoregressive_bijection at IDENTICAL
-    # hyperparameters, else its pytree structure will not match the graft site.
+    # must have been built by the same margin builder at IDENTICAL hyperparameters
+    # AND conditioner, else its pytree structure will not match the graft site.
     if pretrained_margin is not None:
         # Validate BEFORE replacing: eqx.tree_at(replace=...) swaps subtrees with NO
         # structure check, so a wrong object (e.g. a base distribution's unconditional
@@ -421,12 +456,14 @@ def pretrain_causal_margin(
     the ATE *level* at the identified point before the copula is introduced, which
     empirically removes the small-``n`` level bias of a cold spline fit.
 
-    The margin is built by the SAME ``masked_autoregressive_bijection`` call
-    (identical hyperparameters, read from ``causal_model_args``) that
-    ``train_frugal_flow_flexible_continuous`` uses, so the returned bijection's
-    pytree matches the graft site exactly (the graft re-validates ``cond_shape`` +
-    structure before replacing). The outcome dimension is read from ``y``, so the
-    same ``y`` must be passed here and to the full frugal-flow fit.
+    The margin is built by the SAME margin builder (identical hyperparameters
+    AND conditioner, read from ``causal_model_args`` — see
+    ``_build_flexible_margin``) that ``train_frugal_flow_flexible_continuous``
+    uses, so the returned bijection's pytree matches the graft site exactly (the
+    graft re-validates ``cond_shape`` + structure before replacing; a pretrain
+    built with a different conditioner fails that structure check). The outcome
+    dimension is read from ``y``, so the same ``y`` must be passed here and to
+    the full frugal-flow fit.
 
     Args:
         key: a JAX PRNG key.
@@ -444,14 +481,8 @@ def pretrain_causal_margin(
     cond_dim = condition.shape[1]
     dim_y = jnp.asarray(y).shape[1]
     key, subkey = jr.split(key)
-    causal_maf = masked_autoregressive_bijection(
-        key=subkey,
-        dim=dim_y,
-        condition=condition,
-        nn_depth=causal_model_args["nn_depth"],
-        nn_width=causal_model_args["nn_width"],
-        RQS_knots=causal_model_args["RQS_knots"],
-        flow_layers=causal_model_args["flow_layers"],
+    causal_maf = _build_flexible_margin(
+        key=subkey, dim=dim_y, condition=condition, causal_model_args=causal_model_args
     )
     # base Uniform[-1, 1] -> causal_maf ([-1, 1]) -> Invert(Tanh) = atanh -> Y scale
     margin_flow = Transformed(Uniform(-jnp.ones(dim_y), jnp.ones(dim_y)), causal_maf)
