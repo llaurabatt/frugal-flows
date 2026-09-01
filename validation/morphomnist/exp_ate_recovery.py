@@ -16,7 +16,20 @@ The experiment (``--preset``)
     exp1_rct_homogeneous            randomised assignment, one fixed effect map
     exp2_confounded_homogeneous     same effect, assignment driven by thickness
     exp3_confounded_heterogeneous   same assignment, effect varies with the
-                                    covariate AND the outcome quantile
+                                    covariate AND the unit's own Y(0) rank
+    exp4_covariate_cate             effect depends on OBSERVED COVARIATES ONLY
+                                    (thickness, brightness, interaction) -- no
+                                    Y(0) dependence, so it is unambiguously
+                                    treatment-effect heterogeneity
+    exp5_quantile_effect            the quantile-varying effect delta(u) is the
+                                    PRIMITIVE, so Q1(u) - Q0(u) is exactly what
+                                    was imposed (``TAU_ANALYTIC``)
+
+E3 mixes two things a reviewer will separate: covariate heterogeneity (genuine
+CATE) and a term keyed on the unit's own Y(0) rank, which is a coupling between
+the potential outcomes rather than heterogeneity, and is NOT identified from
+observational data. E4 and E5 pull those apart -- E4 is heterogeneity with no
+outcome coupling, E5 is the quantile effect stated honestly as a primitive.
 
 Any generator knob can be overridden on top of a preset (``--a-cov``,
 ``--b-quant``, ``--ps-slope``, ``--base-shift``, ...), so the presets are
@@ -119,6 +132,17 @@ Flags: which experiment to generate
                     | exp3_confounded_heterogeneous
 ``--a-cov``         Covariate heterogeneity: how much the effect varies with
                     thickness. 0 in E1/E2, 0.5 in E3.
+``--h-shape``       SHAPE of that dependence -- i.e. the form of the CATE as a
+                    function of the thickness rank:
+                        linear     (default) CATE linear in the rank
+                        cubic      monotone, flat middle and steep tails
+                        quadratic  NON-monotone, U-shaped
+                        sine       NON-monotone, oscillating
+                        step       discontinuous, two groups
+                    The imposed ATE stays exact for every one of them, because
+                    the modulator is centred on its EMPIRICAL mean rather than
+                    an analytic one. Use a non-linear shape when the point is to
+                    recover a non-trivial CATE rather than an ATE.
 ``--b-quant``       Quantile heterogeneity: how much the effect varies with the
                     outcome's own latent quantile. 0 in E1/E2, 0.4 in E3.
                     Keep ``a_cov + b_quant < 1``, or some units' effects flip
@@ -333,6 +357,9 @@ PRESET_SHORT = {
     "exp1_rct_homogeneous": "e1rct",
     "exp2_confounded_homogeneous": "e2conf",
     "exp3_confounded_heterogeneous": "e3het",
+    "exp4_covariate_cate": "e4cate",
+    "exp5_quantile_effect": "e5qte",
+    "exp6_spatial_cate": "e6spat",
 }
 # Expected bijection-chain length per arm, asserted before the parametric
 # read-out so a future change to the chain layout fails loudly instead of
@@ -358,7 +385,14 @@ class Config:
     seed_data: int = 0         # generator RNG (subset, dequantisation, assignment)
     # ---- generator overrides (None -> keep the preset's value) ----
     base_shift: float | None = None
+    effect_mode: str | None = None  # outcome_coupled | covariate_only |
+                                    # quantile_primitive
     a_cov: float | None = None
+    a_bright: float | None = None   # covariate_only only
+    a_inter: float | None = None    # covariate_only only
+    h_shape: str | None = None      # shape of the covariate modulation; see
+                                    # prepare_morphomnist_exps.H_SHAPES
+    g_shape: str | None = None      # shape of the quantile term / of delta(u)
     b_quant: float | None = None
     ps_slope: float | None = None
     ps_intercept: float | None = None
@@ -415,8 +449,9 @@ class Config:
 # --------------------------------------------------------------------------- #
 # stages
 # --------------------------------------------------------------------------- #
-GENERATOR_OVERRIDE_KEYS = ("base_shift", "a_cov", "b_quant", "ps_slope",
-                           "ps_intercept", "effect")
+GENERATOR_OVERRIDE_KEYS = ("base_shift", "effect_mode", "a_cov", "a_bright",
+                           "a_inter", "h_shape", "g_shape", "b_quant",
+                           "ps_slope", "ps_intercept", "effect")
 
 
 def build_data(cfg: Config) -> dict:
@@ -428,7 +463,7 @@ def build_data(cfg: Config) -> dict:
     return build_preset(cfg.preset, **overrides)
 
 
-def fit_flow(cfg: Config, data: dict):
+def fit_flow(cfg: Config, data: dict, timings: dict | None = None):
     """Stage-1 marginal quantiles for Z, then the frugal flow.
 
     Copied rather than imported from ``toy_ate_recovery`` on purpose: that
@@ -445,12 +480,19 @@ def fit_flow(cfg: Config, data: dict):
     if z_discr.shape[1] > 0:  # all-digits variant; a single-digit subset has none
         quantile_args["z_discr"] = jnp.asarray(z_discr)
 
+    # Stage 1 and stage 2 are timed separately: stage 1 fits the covariate
+    # margins and costs roughly the same whatever K is, so folding it into the
+    # per-epoch figure would inflate exactly the small, fast runs one tends to
+    # extrapolate from.
+    _t = time.monotonic()
     z_res = get_independent_quantiles(
         key=subkey,
         max_epochs=cfg.marginal_max_epochs,
         max_patience=cfg.marginal_max_patience,
         **quantile_args,
     )
+    if timings is not None:
+        timings["marginal_s"] = time.monotonic() - _t
     u_z = np.asarray(z_res["u_z_cont"])
     if "u_z_discr" in z_res and z_discr.shape[1] > 0:
         u_z = np.hstack([u_z, np.asarray(z_res["u_z_discr"])])
@@ -469,6 +511,7 @@ def fit_flow(cfg: Config, data: dict):
             causal_model_args["nn_heads"] = cfg.nn_heads
 
     key, subkey = jr.split(key)
+    _t = time.monotonic()
     flow, losses = train_frugal_flow(
         causal_model=cfg.arm,
         key=subkey,
@@ -481,6 +524,8 @@ def fit_flow(cfg: Config, data: dict):
         batch_size=cfg.batch_size,
         causal_model_args=causal_model_args,
     )
+    if timings is not None:
+        timings["flow_fit_s"] = time.monotonic() - _t
     return flow, losses, u_z
 
 
@@ -567,7 +612,8 @@ def _tau_hat_flexible_continuous(cfg: Config, flow, data: dict, K: int):
     return tau_hat, arm_metrics, extras
 
 
-def evaluate(cfg: Config, flow, data: dict, losses: dict, wall_time_s: float):
+def evaluate(cfg: Config, flow, data: dict, losses: dict, wall_time_s: float,
+             timings: dict | None = None):
     """Per-pixel ``tau_hat`` for the configured arm, scored against the truth.
 
     Both arms return the same ``(K,)`` vector under the same score keys, so run
@@ -628,8 +674,14 @@ def evaluate(cfg: Config, flow, data: dict, losses: dict, wall_time_s: float):
         "n_epochs_run": int(len(losses["train"])),
         "n_units": int(np.asarray(data["Y"]).shape[0]),
         "n_pixels": int(K),
+        # wall_time_s brackets BOTH fits (stage-1 margins + the frugal flow);
+        # s_per_epoch uses the flow's own time so it is not inflated by stage 1.
         "wall_time_s": float(wall_time_s),
-        "s_per_epoch": float(wall_time_s / max(len(losses["train"]), 1)),
+        "marginal_s": float((timings or {}).get("marginal_s", float("nan"))),
+        "flow_fit_s": float((timings or {}).get("flow_fit_s", wall_time_s)),
+        "build_data_s": float((timings or {}).get("build_data_s", float("nan"))),
+        "s_per_epoch": float((timings or {}).get("flow_fit_s", wall_time_s)
+                             / max(len(losses["train"]), 1)),
         **arm_metrics,
     }
     return tau_hat, metrics, extras
@@ -879,17 +931,29 @@ def run_one(cfg: Config, runs_root: str = None) -> dict:
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             print(f"started; watch progress with: tail -f {run_dir}/log.txt")
             print(f"preset: {cfg.preset} | arm: {cfg.arm} | conditioner: {cfg.conditioner}")
+            timings: dict = {}
+            t_start = time.monotonic()
+            _t = time.monotonic()
             data = build_data(cfg)
+            timings["build_data_s"] = time.monotonic() - _t
             Y = np.asarray(data["Y"])
             print(f"data built: {Y.shape[0]} units x {Y.shape[1]} pixels "
-                  f"(size={cfg.size}, radius={cfg.effective_radius})")
+                  f"(size={cfg.size}, radius={cfg.effective_radius}) "
+                  f"in {timings['build_data_s']:.0f}s")
             t0 = time.monotonic()
-            flow, losses, u_z = fit_flow(cfg, data)
+            flow, losses, u_z = fit_flow(cfg, data, timings=timings)
             wall = time.monotonic() - t0
             n_ep = len(losses["train"])
-            print(f"fit finished: {n_ep} epochs in {wall:.0f}s (~{wall / n_ep:.1f}s/epoch)")
-            tau_hat, metrics, extras = evaluate(cfg, flow, data, losses, wall)
+            print(f"fit finished: {n_ep} epochs in {wall:.0f}s "
+                  f"(margins {timings['marginal_s']:.0f}s + flow "
+                  f"{timings['flow_fit_s']:.0f}s, ~{timings['flow_fit_s'] / n_ep:.1f}s/epoch)")
+            tau_hat, metrics, extras = evaluate(cfg, flow, data, losses, wall, timings)
             save_run(cfg, data, losses, tau_hat, u_z, metrics, extras, run_dir)
+            # Written last, so it covers everything including plotting and the
+            # npz write -- this is the number to multiply when sizing a sweep.
+            metrics["total_s"] = float(time.monotonic() - t_start)
+            with open(os.path.join(run_dir, "metrics.json"), "w") as f:
+                json.dump({"run_id": run_id, **metrics}, f, indent=2)
             for k, v in metrics.items():
                 print(f"  {k}: {v:.4g}" if isinstance(v, float) else f"  {k}: {v}")
 
@@ -974,6 +1038,14 @@ def _fmt(v) -> str:
 # --------------------------------------------------------------------------- #
 # self-test
 # --------------------------------------------------------------------------- #
+def _raises_valueerror(fn, *args, **kwargs) -> bool:
+    try:
+        fn(*args, **kwargs)
+        return False
+    except ValueError:
+        return True
+
+
 def _selftest_generator(check):
     """Invariants of the DGP itself, independent of any flow."""
     exps = {p: build_preset(p, size=4, radius=1, n=400, seed=0) for p in PRESETS}
@@ -1033,6 +1105,90 @@ def _selftest_generator(check):
                           seed=0, base_shift=3.0)
     check("override: base_shift scales the imposed ATE",
           abs(float(np.asarray(strong["ATE"]).max()) - 3.0) < 1e-9)
+
+    # The whole point of h_shape: the CATE may be an arbitrary function of the
+    # covariate rank, and the imposed ATE must survive every one of them.
+    from prepare_morphomnist_exps import H_SHAPES
+    for shape in H_SHAPES:
+        d = build_preset("exp3_confounded_heterogeneous", size=4, radius=1,
+                         n=400, seed=0, h_shape=shape)
+        ITE = np.asarray(d["ITE"])
+        check(f"h_shape={shape}: imposed ATE still exact",
+              np.abs(ITE.mean(0) - np.asarray(d["MAP"])).max() < 1e-9)
+        check(f"h_shape={shape}: effect multiplier stays positive",
+              summarise(d)["factor_min"] > 0)
+    # ...and the non-monotone shapes must actually produce a non-monotone CATE,
+    # otherwise the flag is decorative.
+    thick = np.asarray(
+        build_preset("exp3_confounded_heterogeneous", size=4, radius=1, n=400,
+                     seed=0, h_shape="linear")["THICKNESS"])
+    order = np.argsort(thick)
+    for shape, want_monotone in (("linear", True), ("quadratic", False),
+                                 ("sine", False)):
+        # b_quant=0 isolates the COVARIATE term: with the quantile term active,
+        # FACTOR also varies per pixel and is not monotone in thickness for any
+        # shape, so it would not test what this check claims to test.
+        d = build_preset("exp3_confounded_heterogeneous", size=4, radius=1,
+                         n=400, seed=0, h_shape=shape, b_quant=0.0)
+        f = np.asarray(d["FACTOR"])[order, 0]        # CATE vs thickness rank
+        is_monotone = bool(np.all(np.diff(f) >= -1e-12))
+        check(f"h_shape={shape}: CATE is {'monotone' if want_monotone else 'NON-monotone'}"
+              " in thickness", is_monotone == want_monotone)
+
+    # --- E4: heterogeneity with NO dependence on the outcome ---
+    e4 = exps["exp4_covariate_cate"]
+    F4 = np.asarray(e4["FACTOR"])
+    check("e4cate: effect is a per-unit scalar (no pixel/Y(0) dependence)",
+          F4.shape[1] == 1)
+
+    # --- E6: spatially coherent heterogeneity, still covariate-only ---
+    # The structural test is the RANK of the modulation matrix. A covariate-only
+    # effect is spanned by a handful of unit-level scores (rank <= 2 here: the
+    # scalar part plus the psi-shaped part), whereas an effect keyed on the
+    # unit's own Y(0) rank is essentially full rank.
+    e6 = exps["exp6_spatial_cate"]
+    F6 = np.asarray(e6["FACTOR"])
+    rank = lambda F: int(np.linalg.matrix_rank(F - F.mean())) if F.shape[1] > 1 else 1
+    check("e6spat: modulation varies across pixels", F6.shape[1] > 1)
+    check("e6spat: but is still low-rank, i.e. covariate-driven not Y(0)-driven",
+          rank(F6) <= 2)
+    check("e3het: by contrast is high-rank (Y(0)-coupled)",
+          rank(np.asarray(e3["FACTOR"])) > 8)
+    check("e6spat: psi is centred on the effect support",
+          abs(np.asarray(e6["PSI"])[np.asarray(e6["ATE"]) != 0].mean()) < 1e-12)
+    check("e6spat: effect multiplier stays positive ON SUPPORT",
+          summarise(e6)["factor_min"] > 0)
+    check("e6spat: units differ in the SHAPE of their effect, not just its size",
+          not np.allclose(*[np.asarray(e6["ITE"])[i] / np.abs(np.asarray(e6["ITE"])[i]).max()
+                            for i in np.argsort(e6["THICKNESS"])[[0, -1]]], atol=1e-3))
+    check("guard: quantile_primitive refuses a spatial term",
+          _raises_valueerror(build_preset, "exp5_quantile_effect", size=4,
+                             radius=1, n=400, seed=0,
+                             spatial_basis="gradient_x", a_spatial=0.3))
+    check("e4cate: brightness is in Z (a covariate the effect uses must be observed)",
+          np.asarray(e4["z_cont"]).shape[1] == 2)
+    check("e4cate: effect is still heterogeneous",
+          np.asarray(e4["ITE"]).std(0).max() > 1e-3)
+    check("e4cate: the interaction term is active (CATE is not merely additive)",
+          e4["config"]["a_inter"] > 0)
+
+    # --- E5: delta(u) as the primitive ---
+    e5 = exps["exp5_quantile_effect"]
+    check("e5qte: treated margin stayed monotone, so the identity holds",
+          e5["RANK_PRESERVED"] is True)
+    check("e5qte: Q1(u) - Q0(u) equals the imposed delta exactly",
+          np.abs(np.asarray(e5["TAU_ANALYTIC"])
+                 - np.asarray(e5["TAU_MARGINAL"])).max() < 1e-9)
+    check("e5qte: delta(u) actually varies with u",
+          np.asarray(e5["TAU_ANALYTIC"]).std(0).max() > 1e-3)
+    check("e5qte: no covariate term (that would break the identity)",
+          e5["config"]["a_cov"] == 0)
+    check("guard: quantile_primitive refuses a covariate term",
+          _raises_valueerror(build_preset, "exp5_quantile_effect", size=4,
+                             radius=1, n=400, seed=0, a_cov=0.3))
+    check("guard: a_bright is rejected outside covariate_only",
+          _raises_valueerror(build_preset, "exp3_confounded_heterogeneous",
+                             size=4, radius=1, n=400, seed=0, a_bright=0.2))
 
     # --digit toggles the discrete covariate block.
     check("digit=0 -> no discrete covariates",
