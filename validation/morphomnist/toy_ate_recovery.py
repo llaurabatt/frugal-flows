@@ -31,12 +31,14 @@ The spline arm's margin can run on either conditioner engine via
 The transformer requires ``--nn-width`` divisible by ``--nn-heads`` (default 4),
 e.g. ``--nn-width 48``.
 
-Every run writes a self-contained folder under ``runs/toy_ate_recovery/``:
+Every run writes a self-contained folder under ``runs/toy_ate_recovery/<precision>/``,
+where ``<precision>`` is ``f64`` or ``f32`` -- precision changes the numbers, so
+results from the two are never filed together:
 
-    <UTC-stamp>_<arm>_s<seed_fit>_k<K>_<random-suffix>/   # the folder name is the run_id
-        config.json    run_id + every knob + git commit/dirty flag + library versions
+    f64/<UTC-stamp>_<arm>_s<seed_fit>_k<K>_<random-suffix>/  # the folder name is the run_id
+        config.json    run_id + every knob + precision + git commit/dirty + versions
         log.txt        live training output (`tail -f` it to watch progress)
-        metrics.json   arm + recovery scores (MAE/RMSE/corr vs truth) + best val loss
+        metrics.json   precision + arm + recovery scores (MAE/RMSE/corr) + best val loss
         arrays.npz     raw arrays: tau_hat, truth, data, losses (replottable);
                        the spline arm adds the tau(u) curves and MC moments
         plots/         every figure, saved as PNG
@@ -45,11 +47,16 @@ Every run writes a self-contained folder under ``runs/toy_ate_recovery/``:
     only those two files means the run is still training; metrics.json,
     arrays.npz and plots/ appear when it completes.
 
+    The precision folder is taken from the LIVE JAX flag at run time, so it always
+    records what the run actually did rather than what was requested.
+
 Usage:
     python toy_ate_recovery.py                      # notebook-equivalent defaults
     python toy_ate_recovery.py --size 8 --seed-fit 7 --max-epochs 200
     python toy_ate_recovery.py --arm flexible_continuous --n-mc 5000
-    python toy_ate_recovery.py --replot runs/toy_ate_recovery/<run-id>
+    python toy_ate_recovery.py --no-x64             # force float32 for this run
+    JAX_ENABLE_X64=0 python toy_ate_recovery.py     # ...or for the whole job
+    python toy_ate_recovery.py --replot runs/toy_ate_recovery/f32/<run-id>
 
 The default configuration reproduces ``validation/ff_morphomnist_toy.ipynb``.
 """
@@ -84,6 +91,7 @@ import jax.numpy as jnp
 import jax.random as jr
 import paramax
 from frugal_flows.causal_flows import get_independent_quantiles, train_frugal_flow
+from frugal_flows.precision import apply_default_precision, set_x64
 from frugal_flows.interventions import interventional_samples, tau_curve
 from prepare_data import inverse_logit, prepare_flow_data, unflatten
 
@@ -124,7 +132,11 @@ class Config:
     marginal_max_epochs: int = 70
     marginal_max_patience: int = 10
     seed_fit: int = 34
-    x64: bool = False        # precision the flow trains at (recorded in config.json)
+    # Precision is decided at the PACKAGE level (frugal_flows.precision): None here
+    # means "inherit that decision", which is float64 unless JAX_ENABLE_X64 says
+    # otherwise. --x64 / --no-x64 override it for one run. Recorded either way, and
+    # the run is filed under runs/toy_ate_recovery/<f64|f32>/.
+    x64: bool | None = None
     # interventional read-out (flexible_continuous only)
     n_mc: int = 5000         # paired common-random-number draws per treatment arm
     seed_mc: int = 0         # read-out RNG, separate from the fit RNG
@@ -475,6 +487,16 @@ class _Tee:
         self._file.flush()
 
 
+def precision_tag() -> str:
+    """``"f64"`` / ``"f32"`` from the LIVE JAX flag, not from the requested config.
+
+    Reading the live flag means the tag records what the run actually did, so a
+    mismatch between what was asked for and what JAX provided (e.g. float64 asked
+    for on a TPU, which cannot supply it) can never be mislabelled in the archive.
+    """
+    return "f64" if jax.config.jax_enable_x64 else "f32"
+
+
 def write_config(cfg: Config, run_id: str, run_dir: str):
     """Create the run folder and record the full configuration at launch.
 
@@ -494,6 +516,7 @@ def write_config(cfg: Config, run_id: str, run_dir: str):
             "frugal_flows": getattr(frugal_flows, "__version__", "unversioned"),
         },
         "x64_active": bool(jax.config.jax_enable_x64),
+        "precision": precision_tag(),  # also the run's parent folder
         "started_utc": datetime.now(timezone.utc).isoformat(),
     }
     with open(os.path.join(run_dir, "config.json"), "w") as f:
@@ -508,7 +531,10 @@ EXTRA_ARRAY_KEYS = ("tau_u", "tau_curves", "mc_mean0", "mc_mean1",
 
 def save_run(cfg: Config, toy: dict, losses: dict, tau_hat: np.ndarray, u_z: np.ndarray,
              metrics: dict, extras: dict, run_dir: str):
-    metrics = {"run_id": os.path.basename(run_dir), **metrics}
+    # precision sits in metrics.json too, not only config.json: metrics is what
+    # gets read when comparing runs, and an f32/f64 number compared blind is a
+    # silent error.
+    metrics = {"run_id": os.path.basename(run_dir), "precision": precision_tag(), **metrics}
     with open(os.path.join(run_dir, "metrics.json"), "w") as f:
         json.dump(metrics, f, indent=2)
     np.savez(
@@ -557,7 +583,7 @@ def main(argv=None):
     extra_args = {"arm": {"choices": ARMS}}
     for f in fields(Config):
         flag = "--" + f.name.replace("_", "-")
-        if f.type == "bool":
+        if f.type in ("bool", "bool | None"):
             parser.add_argument(flag, action=argparse.BooleanOptionalAction, default=f.default)
         elif f.type == "int | None":
             parser.add_argument(flag, type=int, default=f.default)
@@ -573,16 +599,28 @@ def main(argv=None):
         return
 
     cfg = Config(**{f.name: getattr(args, f.name) for f in fields(Config)})
-    jax.config.update("jax_enable_x64", cfg.x64)
+    # Precision: inherit the package decision unless this run explicitly overrode it.
+    # The script must not re-decide precision on its own -- hard-forcing the flag here
+    # is what made it ignore both the package default and JAX_ENABLE_X64.
+    if cfg.x64 is None:
+        apply_default_precision()
+    else:
+        set_x64(cfg.x64)
 
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
     # The arm (and, for the spline arm, a non-default conditioner) goes in the
     # run id so runs stay distinguishable in the archive listing without
     # opening config.json.
-    arm_tag = ARM_SHORT[cfg.arm] + ("-trf" if cfg.conditioner == "transformer" else "")
+    arm_tag = ARM_SHORT[cfg.arm] + ("-trans" if cfg.conditioner == "transformer" else "")
     run_id = (f"{stamp}_{arm_tag}_s{cfg.seed_fit}"
               f"_k{cfg.size**2}_{secrets.token_hex(3)}")
-    run_dir = os.path.join(SCRIPT_DIR, "runs", "toy_ate_recovery", run_id)
+    # Runs are filed under the precision they were produced at. Precision changes
+    # the numbers, so f32 and f64 results must never sit in one undifferentiated
+    # pile -- the directory makes the distinction impossible to overlook when
+    # comparing runs. Read from the live JAX flag, not from cfg.x64, so the folder
+    # always reflects what actually happened.
+    run_dir = os.path.join(SCRIPT_DIR, "runs", "toy_ate_recovery",
+                           precision_tag(), run_id)
     write_config(cfg, run_id, run_dir)
     print(f"run dir: {run_dir}")
 

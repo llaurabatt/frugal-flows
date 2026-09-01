@@ -16,7 +16,12 @@ import jax.random as jr
 import numpy as np
 import pytest
 
-jax.config.update("jax_enable_x64", True)
+from frugal_flows.precision import apply_default_precision
+
+# float64 unless the caller asked otherwise via JAX_ENABLE_X64, so the suite can
+# be run in single precision (JAX_ENABLE_X64=0) to exercise the float32 path.
+# Hard-forcing True here would silently override that and make such a run a no-op.
+apply_default_precision()
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 

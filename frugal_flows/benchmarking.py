@@ -16,7 +16,11 @@ sys.path.append("../")  # go to parent dir
 
 import jax.random as jr
 import jax.numpy as jnp
-jax.config.update("jax_enable_x64", True)
+from frugal_flows.precision import apply_default_precision
+
+# float64 unless the caller asked otherwise via JAX_ENABLE_X64 or set_x64();
+# see frugal_flows/precision.py for the precedence rules.
+apply_default_precision()
 
 # Copula-flow hyperparameters. nn_width=200 (was 50): a 10-D complex-copula HP
 # search found the copula conditioner WIDTH is the lever for ATE recovery under
