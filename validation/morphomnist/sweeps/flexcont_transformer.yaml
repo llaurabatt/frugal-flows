@@ -1,0 +1,39 @@
+# Learning rate + architecture for the transformer conditioner.
+#
+# ~15 min per trial at 100 epochs and ~55 min at 200, so this is TRUNCATED to 60
+# epochs deliberately: the aim is to find which learning rates descend healthily,
+# then confirm the finalists at full budget by hand. nn_width must stay divisible
+# by nn_heads. Grid, not bayes -- the space is small and every trial is costly.
+
+program: sweep_agent.py
+method: grid
+metric:
+  name: best_val_loss
+  goal: minimize
+parameters:
+  preset:
+    value: exp4_covariate_cate
+  arm:
+    value: flexible_continuous
+  conditioner:
+    value: transformer
+  size:
+    value: 8
+  learning_rate:
+    values: [0.001, 0.003, 0.005, 0.01, 0.02]
+  nn_depth:
+    values: [1, 2]
+  nn_width:
+    value: 48
+  nn_heads:
+    value: 4
+  max_epochs:
+    value: 60
+  max_patience:
+    value: 60
+  n_mc:
+    value: 1000
+  seed:
+    values: [101, 102]
+  wandb_project:
+    value: morphomnist-tuning

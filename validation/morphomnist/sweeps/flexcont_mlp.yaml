@@ -1,0 +1,35 @@
+# Learning rate + capacity for the flexible_continuous / mlp arm.
+# ~3.5 min per trial at K=64, so this can run wide.
+
+program: sweep_agent.py
+method: bayes
+metric:
+  name: ate_mae
+  goal: minimize
+parameters:
+  preset:
+    values: [exp2_confounded_homogeneous, exp4_covariate_cate]
+  arm:
+    value: flexible_continuous
+  conditioner:
+    value: mlp
+  size:
+    value: 8
+  learning_rate:
+    distribution: log_uniform_values
+    min: 0.001
+    max: 0.03
+  flow_layers:
+    values: [4, 8]
+  nn_width:
+    values: [48, 96]
+  rqs_knots:
+    values: [8, 12]
+  max_epochs:
+    value: 200
+  max_patience:
+    value: 60
+  seed:
+    values: [101, 102, 103]
+  wandb_project:
+    value: morphomnist-tuning

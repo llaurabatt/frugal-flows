@@ -419,6 +419,12 @@ class Config:
     # ---- interventional read-out (flexible_continuous only) ----
     n_mc: int = 5000
     seed_mc: int = 0
+    # ---- experiment tracking (off by default; run folders stay authoritative) ----
+    wandb: bool = False
+    wandb_entity: str | None = None      # the team; None -> your default entity
+    wandb_project: str = "morphomnist-ate"
+    wandb_group: str | None = None       # None -> the preset name
+    wandb_tags: str | None = None        # comma-separated, appended to the auto tags
 
     def __post_init__(self):
         if self.preset not in PRESETS:
@@ -919,13 +925,96 @@ def collect(runs_root: str = RUNS_ROOT) -> list[dict]:
 # --------------------------------------------------------------------------- #
 # execution
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# experiment tracking
+# --------------------------------------------------------------------------- #
+def _wandb_start(cfg: Config, run_id: str):
+    """Open a wandb run, or return (None, False) if tracking is off.
+
+    Returns ``(run, owned)``. ``owned`` is False when we attached to a run that
+    someone else opened -- which is what happens under ``sweep_agent.py``, where
+    the agent calls ``wandb.init()`` before handing control here. Only the owner
+    finishes the run, otherwise the sweep agent's run is closed underneath it.
+    """
+    if not cfg.wandb:
+        return None, False
+    try:
+        import wandb
+    except ImportError:
+        print("  NOTE: --wandb requested but wandb is not installed; continuing without it")
+        return None, False
+
+    if wandb.run is not None:          # already inside a sweep agent
+        return wandb.run, False
+
+    extra = [t.strip() for t in (cfg.wandb_tags or "").split(",") if t.strip()]
+    cond = cfg.conditioner if cfg.arm == "flexible_continuous" else "n/a"
+    run = wandb.init(
+        entity=cfg.wandb_entity,
+        project=cfg.wandb_project,
+        group=cfg.wandb_group or cfg.preset,
+        job_type=f"{ARM_SHORT[cfg.arm]}/{cond}",
+        name=run_id,
+        tags=[cfg.preset, ARM_SHORT[cfg.arm], cond, f"k{cfg.size**2}"] + extra,
+        config={**asdict(cfg),
+                "effective_radius": cfg.effective_radius,
+                "n_pixels": cfg.size**2,
+                **{f"git_{k}": v for k, v in _git_info().items()}},
+        reinit=True,
+    )
+    return run, True
+
+
+def _numeric(d: dict) -> dict:
+    return {k: v for k, v in d.items() if isinstance(v, (int, float, bool))}
+
+
+def _wandb_log(run, data: dict, losses: dict, metrics: dict, run_dir: str):
+    """Per-epoch curves, final scores, design diagnostics and figures.
+
+    Steps are explicit throughout: the loss curves occupy steps 1..n and
+    everything final lands on step n+1, so wandb never has to guess an ordering.
+    Final scores also go to ``summary``, which is what sweeps read and what the
+    runs table shows.
+    """
+    import wandb
+
+    train, val = losses["train"], losses["val"]
+    for i, (tr, va) in enumerate(zip(train, val), start=1):
+        run.log({"train_loss": float(tr), "val_loss": float(va)}, step=i)
+
+    final_step = len(train) + 1
+    payload = _numeric(metrics)
+    # Design diagnostics describe the DATASET, not the fit -- prefixed so they
+    # group separately in the UI and can be used to filter/facet a sweep.
+    payload.update({f"design/{k}": v for k, v in _numeric(summarise(data)).items()})
+    for name in ("ate_maps", "recovery_scatter", "tau_curves",
+                 "loss_curves", "design_check", "truth_panels"):
+        p = os.path.join(run_dir, "plots", f"{name}.png")
+        if os.path.exists(p):
+            payload[f"plots/{name}"] = wandb.Image(p)
+    run.log(payload, step=final_step)
+    run.summary.update(_numeric(metrics))
+
+
 def run_one(cfg: Config, runs_root: str = None) -> dict:
     """Build, fit, score and archive one cell. Returns its metrics."""
     run_id = run_id_for(cfg)
     run_dir = os.path.join(runs_root or RUNS_ROOT, run_id)
     write_config(cfg, run_id, run_dir)
     print(f"run dir: {run_dir}")
+    wb, owned = _wandb_start(cfg, run_id)
 
+    try:
+        return _run_one_inner(cfg, run_id, run_dir, wb)
+    finally:
+        # Only close a run we opened: under a sweep agent the run belongs to the
+        # agent, and finishing it here would end the sweep's own bookkeeping.
+        if wb is not None and owned:
+            wb.finish()
+
+
+def _run_one_inner(cfg: Config, run_id: str, run_dir: str, wb) -> dict:
     with open(os.path.join(run_dir, "log.txt"), "w") as lf:
         out, err = _Tee(sys.stdout, lf), _Tee(sys.stderr, lf)
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -954,6 +1043,8 @@ def run_one(cfg: Config, runs_root: str = None) -> dict:
             metrics["total_s"] = float(time.monotonic() - t_start)
             with open(os.path.join(run_dir, "metrics.json"), "w") as f:
                 json.dump({"run_id": run_id, **metrics}, f, indent=2)
+            if wb is not None:
+                _wandb_log(wb, data, losses, metrics, run_dir)
             for k, v in metrics.items():
                 print(f"  {k}: {v:.4g}" if isinstance(v, float) else f"  {k}: {v}")
 
