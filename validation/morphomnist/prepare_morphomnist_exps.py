@@ -24,15 +24,27 @@ treatment effect is additive:
 
     m[k]    fixed spatial map (a circle by default) -- the effect a homogeneous
             unit would get. This is the quantity we are trying to recover.
-    h[i]    COVARIATE modulation: the unit's thickness, mapped to its own rank
-            and rescaled to (-1, 1). Makes CATE vary with Z.
+    h[i]    COVARIATE modulation: the unit's thickness, mapped to its own rank,
+            passed through ``h_shape`` and rescaled to [-1, 1]. Makes CATE vary
+            with Z. ``h_shape`` controls HOW: "linear" gives a CATE linear in
+            the thickness rank, while "cubic"/"quadratic"/"sine"/"step" give
+            non-trivial and (for the last three) NON-MONOTONE CATE functions.
+            The exact ATE survives all of them -- see below.
     g[i, k] QUANTILE modulation: pixel k's own rank within unit i's untreated
             value Y0[:, k], rescaled to (-1, 1). Makes tau vary with the
             outcome's latent quantile u.
     a, b    the two heterogeneity strengths.
 
-Both modulators are built from RANKS, so each has sample mean EXACTLY zero and
-lives in (-1, 1). Two consequences:
+Both modulators are built from RANKS and then have their EMPIRICAL mean
+subtracted, so each has sample mean exactly zero and lives in [-1, 1].
+
+The centering is what does the work, NOT the linearity: subtracting the observed
+mean rather than an analytic one makes the mean exactly zero for any shaping
+function whatsoever. That is why ``h_shape`` can be an arbitrary (even
+discontinuous, even non-monotone) function of the rank without disturbing
+anything below.
+
+Two consequences:
 
   1. the per-pixel sample ATE is exactly the map,
 
@@ -111,6 +123,32 @@ TAU_CURVE_BINS = 40  # matches frugal_flows.interventions.TAU_CURVE_BINS
 
 EFFECT_MAPS = ("circle", "ring", "const", "gradient")
 
+# How the per-unit effect is constructed. They differ in WHAT the effect is
+# allowed to depend on, which is the difference between "treatment effect
+# heterogeneity" and "a coupling between the potential outcomes".
+EFFECT_MODES = (
+    "outcome_coupled",     # tau depends on covariates AND on the unit's own Y(0)
+    "covariate_only",      # tau depends on OBSERVED COVARIATES ONLY -- no Y(0)
+    "quantile_primitive",  # delta_k(u) is specified directly; Y1 is built from it
+)
+
+# Spatial shape of the covariate modulation: makes the covariate's influence on
+# the effect vary across pixels, so units get differently-SHAPED effects rather
+# than the same map rescaled. Works in every mode except quantile_primitive.
+SPATIAL_BASES = ("none", "gradient_x", "gradient_y", "diagonal", "radial")
+
+# Shape of the covariate modulation, applied to the rank score u in (0,1).
+# The imposed ATE stays exact for ANY of these -- see `_modulator`. Defined here
+# rather than beside `_modulator` because ``ExpConfig.__post_init__`` validates
+# against it, and PRESETS instantiates ExpConfig at import time.
+H_SHAPES = {
+    "linear":    lambda u: 2.0 * u - 1.0,            # monotone, constant slope
+    "cubic":     lambda u: (2.0 * u - 1.0) ** 3,     # monotone, flat middle, steep tails
+    "quadratic": lambda u: (2.0 * u - 1.0) ** 2,     # NON-monotone, U-shaped
+    "sine":      lambda u: np.sin(2.0 * np.pi * u),  # NON-monotone, oscillating
+    "step":      lambda u: (u > 0.5).astype(float),  # discontinuous, two groups
+}
+
 
 @dataclass
 class ExpConfig:
@@ -129,8 +167,21 @@ class ExpConfig:
     radius: int = 2               # circle/ring radius in pixels, centred
     base_shift: float = 1.0       # effect magnitude in logit space
 
+    # ---- how the effect is built; see EFFECT_MODES and the module docstring ----
+    effect_mode: str = "outcome_coupled"
+
     # ---- heterogeneity ----
     a_cov: float = 0.0            # covariate (thickness) modulation strength
+    a_bright: float = 0.0         # brightness modulation   (covariate_only)
+    a_inter: float = 0.0          # thickness x brightness  (covariate_only)
+    spatial_basis: str = "none"   # spatial shape of the covariate modulation
+    a_spatial: float = 0.0        # its strength; 0 leaves the effect unshaped
+    g_shape: str = "linear"       # shape of the quantile term / of delta(u)
+    h_shape: str = "linear"       # SHAPE of that modulation; see H_SHAPES.
+                                  # "linear" makes the CATE linear in the
+                                  # thickness rank; the others give a
+                                  # non-trivial (and non-monotone) CATE
+                                  # without disturbing the exact ATE.
     b_quant: float = 0.0          # quantile (own outcome rank) modulation strength
 
     # ---- treatment assignment: p = sigmoid(intercept + slope * zscore(thickness)) ----
@@ -144,6 +195,33 @@ class ExpConfig:
             raise ValueError(f"digit must be in 0..9 or None, got {self.digit}")
         if self.a_cov < 0 or self.b_quant < 0:
             raise ValueError("a_cov and b_quant must be non-negative")
+        for name in ("h_shape", "g_shape"):
+            if getattr(self, name) not in H_SHAPES:
+                raise ValueError(
+                    f"unknown {name} {getattr(self, name)!r}; "
+                    f"choose from {list(H_SHAPES)}"
+                )
+        if self.effect_mode not in EFFECT_MODES:
+            raise ValueError(
+                f"unknown effect_mode {self.effect_mode!r}; choose from {EFFECT_MODES}"
+            )
+        if self.spatial_basis not in SPATIAL_BASES:
+            raise ValueError(
+                f"unknown spatial_basis {self.spatial_basis!r}; "
+                f"choose from {SPATIAL_BASES}"
+            )
+        if self.effect_mode == "quantile_primitive" and (self.a_cov or self.a_spatial):
+            raise ValueError(
+                "quantile_primitive specifies delta(u) as the primitive, so the "
+                "marginal quantile contrast equals it exactly. Any UNIT-level "
+                "term -- a_cov or a_spatial -- makes two units at the same u "
+                "receive different shifts and breaks that identity. Set them to "
+                "0, or use outcome_coupled / covariate_only."
+            )
+        if self.effect_mode != "covariate_only" and (self.a_bright or self.a_inter):
+            raise ValueError(
+                "a_bright / a_inter are covariate_only knobs"
+            )
 
 
 PRESETS: dict[str, ExpConfig] = {
@@ -154,12 +232,67 @@ PRESETS: dict[str, ExpConfig] = {
     # Same confounding, effect now varies with the covariate AND the quantile.
     # a + b = 0.9 < 1, so no unit's effect flips sign.
     "exp3_confounded_heterogeneous": ExpConfig(ps_slope=1.2, a_cov=0.5, b_quant=0.4),
+    # E3 with the Y(0) coupling removed: the effect is a function of OBSERVED
+    # COVARIATES ONLY (thickness, brightness, and their interaction), so it is
+    # unambiguously treatment-effect heterogeneity and nothing else. Coefficients
+    # sum to 0.9 < 1, so again no sign flips.
+    "exp4_covariate_cate": ExpConfig(ps_slope=1.2, effect_mode="covariate_only",
+                                     a_cov=0.4, a_bright=0.3, a_inter=0.2),
+    # The quantile-varying effect delta(u) as the PRIMITIVE: no covariate term,
+    # so the marginal quantile contrast Q1(u) - Q0(u) is exactly what was
+    # imposed, and TAU_ANALYTIC gives it in closed form.
+    "exp5_quantile_effect": ExpConfig(ps_slope=1.2, effect_mode="quantile_primitive",
+                                      b_quant=0.6, g_shape="linear"),
+    # E4 with the effect SHAPED as well as scaled by the covariate: thick digits
+    # respond more on one side of the image, thin digits on the other, so the
+    # heterogeneity is spatially coherent rather than a uniform rescaling.
+    # Still covariate-only, so still unambiguously CATE.
+    "exp6_spatial_cate": ExpConfig(ps_slope=1.2, effect_mode="covariate_only",
+                                   a_cov=0.3, a_bright=0.2, a_inter=0.1,
+                                   spatial_basis="gradient_x", a_spatial=0.3),
 }
 
 
 # --------------------------------------------------------------------------- #
 # building blocks
 # --------------------------------------------------------------------------- #
+def spatial_pattern(cfg: ExpConfig, m: np.ndarray) -> np.ndarray | None:
+    """The spatial modulation pattern ``psi``, shape ``(K,)``, or None.
+
+    ``psi`` makes the covariate's influence on the treatment effect vary ACROSS
+    PIXELS, so different units get differently-shaped effects rather than the
+    same map scaled up and down: with ``gradient_x``, thick digits respond more
+    on one side of the image and thin digits on the other. That is the spatially
+    coherent heterogeneity a real lesion would show.
+
+    Centred and scaled over the effect's SUPPORT (where ``m != 0``), since that
+    is the only region where it acts. Centring means the spatial term
+    redistributes effect within the support rather than changing its average, so
+    ``a_spatial`` is orthogonal to ``base_shift``.
+    """
+    if cfg.spatial_basis == "none":
+        return None
+    size = cfg.size
+    xx, yy = np.meshgrid(np.arange(size), np.arange(size), indexing="ij")
+    c = (size - 1) / 2
+    if cfg.spatial_basis == "gradient_x":
+        psi = xx - c                                    # left  <-> right
+    elif cfg.spatial_basis == "gradient_y":
+        psi = yy - c                                    # top   <-> bottom
+    elif cfg.spatial_basis == "diagonal":
+        psi = (xx - c) + (yy - c)                       # corner <-> corner
+    else:                                               # "radial"
+        psi = np.sqrt((xx - c) ** 2 + (yy - c) ** 2)    # centre <-> periphery
+    psi = psi.reshape(-1).astype(np.float64)
+
+    ref = m != 0
+    if not ref.any():
+        ref = np.ones_like(psi, dtype=bool)
+    psi = psi - psi[ref].mean()
+    scale = np.abs(psi[ref]).max()
+    return psi / scale if scale > 0 else psi
+
+
 def spatial_map(cfg: ExpConfig) -> np.ndarray:
     """The per-pixel effect map ``m``, shape ``(K,)`` -- the ATE we are imposing."""
     size = cfg.size
@@ -194,9 +327,28 @@ def rank_uniform(a: np.ndarray, axis: int = 0) -> np.ndarray:
     return (ranks + 0.5) / n
 
 
-def _centred(u: np.ndarray) -> np.ndarray:
-    """Rank scores in (0,1) -> modulator in (-1,1) with sample mean exactly 0."""
-    return 2.0 * u - 1.0
+def _modulator(u: np.ndarray, shape: str = "linear") -> np.ndarray:
+    """Rank scores in (0,1) -> modulator in [-1, 1] with sample mean EXACTLY 0.
+
+    The exactness of the imposed ATE does not depend on the modulation being
+    linear in the rank -- it depends only on the modulator having zero sample
+    mean, which is enforced here by subtracting the EMPIRICAL mean rather than
+    an analytic one. Any ``shape`` therefore leaves ``ATE == m`` intact, which
+    is what lets the CATE be an arbitrarily nasty function of the covariate.
+
+    Rescaling by ``max|.|`` afterwards puts every shape on a common footing, so
+    ``a_cov`` means the same thing whichever is chosen, and keeps the effect
+    multiplier positive whenever the coefficients sum below 1.
+
+    Operates along axis 0, so it handles both a per-unit ``(n,)`` covariate
+    score and a per-unit-per-pixel ``(n, K)`` one (centred within each column).
+    """
+    if shape not in H_SHAPES:
+        raise ValueError(f"unknown shape {shape!r}; choose from {list(H_SHAPES)}")
+    phi = np.asarray(H_SHAPES[shape](u), dtype=np.float64)
+    phi = phi - phi.mean(axis=0)                    # exact zero mean
+    scale = np.abs(phi).max(axis=0)
+    return np.divide(phi, scale, out=np.zeros_like(phi), where=scale > 0)
 
 
 def true_tau_curves(Y0: np.ndarray, Y1: np.ndarray, n_bins: int = TAU_CURVE_BINS):
@@ -255,29 +407,68 @@ def build_experiment(cfg: ExpConfig) -> dict:
 
     # ---- covariates ----
     thickness = ds.thickness[pool].numpy().astype(np.float64)  # already in [-1, 1]
+    brightness = ds.intensity[pool].numpy().astype(np.float64)  # ditto
+    # Brightness joins Z exactly when the effect uses it: a covariate the effect
+    # depends on MUST be observed, or the CATE is not identified.
+    uses_brightness = cfg.effect_mode == "covariate_only"
+    cont = ([thickness, brightness] if uses_brightness else [thickness])
     if cfg.digit is None:
-        Z = np.hstack([thickness[:, None], digit_onehot[pool]])
+        Z = np.hstack([np.column_stack(cont), digit_onehot[pool]])
         z_cat_idx = np.zeros(Z.shape[1], dtype=bool)
-        z_cat_idx[1:] = True
+        z_cat_idx[len(cont):] = True
     else:
         # a constant one-hot carries no information and breaks the discrete
-        # quantile stage, so a single-digit subset gets thickness only
-        Z = thickness[:, None]
-        z_cat_idx = np.zeros(1, dtype=bool)
+        # quantile stage, so a single-digit subset gets the continuous block only
+        Z = np.column_stack(cont)
+        z_cat_idx = np.zeros(len(cont), dtype=bool)
 
     # ---- the effect ----
-    m = spatial_map(cfg)                                  # (K,)
-    h = _centred(rank_uniform(thickness))[:, None]        # (n, 1)  covariate modulation
-    g = _centred(rank_uniform(Y0, axis=0))                # (n, K)  quantile modulation
-    factor = 1.0 + cfg.a_cov * h + cfg.b_quant * g        # (n, K)
+    m = spatial_map(cfg)                                              # (K,)
+    h = _modulator(rank_uniform(thickness), cfg.h_shape)[:, None]     # (n, 1)
+    psi = spatial_pattern(cfg, m)                                     # (K,) or None
+    delta = None
+
+    # The covariate's influence on the effect, allowed to vary across pixels.
+    # (a_cov + a_spatial*psi_k) is a per-PIXEL coefficient on the per-UNIT score
+    # h_i, so units get differently-shaped effects, not just rescaled ones. The
+    # imposed ATE is untouched: averaging over units still hits mean(h) == 0
+    # whatever psi is.
+    cov_coef = cfg.a_cov if psi is None else cfg.a_cov + cfg.a_spatial * psi[None, :]
+
+    if cfg.effect_mode == "outcome_coupled":
+        # The original construction. `g` is a function of the unit's OWN Y(0)
+        # rank, so the b-term is a coupling between the potential outcomes, not
+        # covariate heterogeneity -- see the module docstring.
+        g = _modulator(rank_uniform(Y0, axis=0), cfg.g_shape)         # (n, K)
+        factor = 1.0 + cov_coef * h + cfg.b_quant * g
+
+    elif cfg.effect_mode == "covariate_only":
+        # No dependence on Y(0) anywhere: the effect is a function of observed
+        # covariates alone, with an interaction so the CATE surface is not
+        # merely additive.
+        hb = _modulator(rank_uniform(brightness), cfg.h_shape)[:, None]
+        inter = _modulator(h * hb, "linear")   # re-centred: a product of two
+                                               # mean-zero terms is not mean-zero
+        factor = 1.0 + cov_coef * h + cfg.a_bright * hb + cfg.a_inter * inter
+
+    else:  # "quantile_primitive"
+        # The quantile-varying effect IS the primitive: delta_k(u) is specified
+        # directly and Y1 is built from it, so the marginal quantile contrast
+        # Q1(u) - Q0(u) equals delta by construction rather than emerging from a
+        # coupling. No covariate term -- adding one would break that identity.
+        u_y = rank_uniform(Y0, axis=0)                                # (n, K)
+        psi = _modulator(u_y, cfg.g_shape)
+        factor = 1.0 + cfg.b_quant * psi
+        delta = m[None, :] * factor            # delta_k(u) at each unit's own u
+
     ITE = m[None, :] * factor
     Y1 = Y0 + ITE
 
-    # The whole point of rank-based modulators: this holds to machine precision.
+    # The whole point of the centred modulators: this holds to machine precision.
     ate = ITE.mean(axis=0)
     assert np.allclose(ate, m, atol=1e-9), (
         f"imposed ATE drifted from the map by {np.abs(ate - m).max():.3g} -- "
-        "the rank modulators are no longer mean-zero"
+        "the modulators are no longer mean-zero"
     )
 
     # ---- treatment assignment ----
@@ -288,6 +479,26 @@ def build_experiment(cfg: ExpConfig) -> dict:
 
     treated = T[:, 0].astype(bool)
     u_grid, tau_paired, tau_marginal = true_tau_curves(Y0, Y1)
+
+    # In quantile_primitive the marginal quantile contrast is supposed to BE the
+    # imposed delta. That holds iff Q0(u) + delta(u) is still increasing in u --
+    # a steeply falling delta could reorder the treated margin, at which point
+    # the sorted contrast stops equalling delta. Check rather than assume.
+    tau_analytic, rank_preserved = None, None
+    if delta is not None:
+        order = np.argsort(Y0, axis=0, kind="stable")
+        y1_sorted = np.take_along_axis(Y1, order, axis=0)
+        rank_preserved = bool(np.all(np.diff(y1_sorted, axis=0) >= 0))
+        edges = np.linspace(0, n, TAU_CURVE_BINS + 1).astype(int)
+        d_sorted = np.take_along_axis(delta, order, axis=0)
+        tau_analytic = np.array([d_sorted[a:b].mean(axis=0)
+                                 for a, b in zip(edges[:-1], edges[1:])])
+        if rank_preserved and not np.allclose(tau_analytic, tau_marginal, atol=1e-9):
+            raise AssertionError(
+                "quantile_primitive: Q1(u) - Q0(u) does not match the imposed "
+                "delta despite a monotone treated margin -- the construction is "
+                "inconsistent"
+            )
 
     return {
         # ---- model inputs: the ONLY things training may see ----
@@ -311,6 +522,12 @@ def build_experiment(cfg: ExpConfig) -> dict:
         "TAU_MARGINAL": tau_marginal,               # (n_bins, K)
         "PROPENSITY": p,
         "THICKNESS": thickness,
+        "BRIGHTNESS": brightness,
+        "PSI": psi,                                 # (K,) spatial pattern, or None
+        # quantile_primitive only: the imposed delta(u) on the tau-curve grid,
+        # and whether the treated margin stayed monotone (so TAU_MARGINAL == it)
+        "TAU_ANALYTIC": tau_analytic,
+        "RANK_PRESERVED": rank_preserved,
         # ---- provenance ----
         "config": asdict(cfg),
         "image_size": cfg.size,
@@ -332,6 +549,19 @@ def build_preset(name: str, **overrides) -> dict:
 # --------------------------------------------------------------------------- #
 # design diagnostics
 # --------------------------------------------------------------------------- #
+def _on_support(factor: np.ndarray, ate: np.ndarray) -> np.ndarray:
+    """``factor`` restricted to pixels with a nonzero effect.
+
+    ``factor`` is ``(n, 1)`` when the modulation is a per-unit scalar and
+    ``(n, K)`` once it varies across pixels; only the latter needs masking.
+    """
+    factor = np.asarray(factor)
+    if factor.ndim < 2 or factor.shape[1] == 1:
+        return factor
+    support = np.asarray(ate) != 0
+    return factor[:, support] if support.any() else factor
+
+
 def summarise(data: dict) -> dict:
     """Design diagnostics: is the confounding real, is the truth recoverable?
 
@@ -369,8 +599,12 @@ def summarise(data: dict) -> dict:
         "atc_minus_ate_maxabs": float(np.abs(data["ATC"] - ATE).max()),
         # heterogeneity
         "ite_sd_across_units": float(ITE.std(axis=0).mean()),
-        "factor_min": float(data["FACTOR"].min()),
-        "frac_factor_negative": float((data["FACTOR"] < 0).mean()),
+        # Restricted to the effect's SUPPORT. Off support m_k == 0, so the
+        # multiplier there is unobservable -- and with a spatial basis it is
+        # routinely negative out at the edges, which would otherwise read as a
+        # sign flip that no unit actually experiences.
+        "factor_min": float(_on_support(data["FACTOR"], ATE).min()),
+        "frac_factor_negative": float((_on_support(data["FACTOR"], ATE) < 0).mean()),
         "tau_curve_gap": float(np.abs(gap).max()),  # 0 iff rank-preserving
         # is the design confounded, and is it identified?
         "naive_bias_mean": float((naive - ATE).mean()),
@@ -407,6 +641,8 @@ def main(argv=None):
         flag = "--" + f.name.replace("_", "-")
         if f.name in ("digit", "n"):
             parser.add_argument(flag, type=int, default=None)  # None => keep the preset's
+        elif f.name == "h_shape":
+            parser.add_argument(flag, type=str, default=None, choices=list(H_SHAPES))
         elif f.type == "str":
             parser.add_argument(flag, type=str, default=None)
         else:
