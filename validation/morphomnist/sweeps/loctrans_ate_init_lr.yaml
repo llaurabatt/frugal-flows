@@ -1,0 +1,43 @@
+# Joint ate_init x learning_rate search for the location_translation arm.
+#
+# These two interact: lr=3e-2 is good at ate_init=0.5 and destabilises at
+# ate_init=0.0, so a coordinate sweep would miss the optimum. Bayesian search
+# over the joint space is why this is a sweep and not a bash loop.
+#
+#   wandb sweep --entity YOUR_TEAM --project morphomnist-tuning \
+#       sweeps/loctrans_ate_init_lr.yaml
+#   wandb agent YOUR_TEAM/morphomnist-tuning/<sweep-id>
+#
+# TUNING PROJECT ONLY. ate_mae is computed from ground truth; these seeds (101+)
+# must stay disjoint from the reporting seeds (1-5).
+
+program: sweep_agent.py
+method: bayes
+metric:
+  name: ate_mae
+  goal: minimize
+early_terminate:
+  type: hyperband
+  min_iter: 40
+parameters:
+  preset:
+    values: [exp2_confounded_homogeneous, exp4_covariate_cate]
+  arm:
+    value: location_translation
+  size:
+    value: 8
+  ate_init:
+    min: 0.0
+    max: 1.0
+  learning_rate:
+    distribution: log_uniform_values
+    min: 0.001
+    max: 0.05
+  max_epochs:
+    value: 200
+  max_patience:
+    value: 60
+  seed:
+    values: [101, 102, 103]
+  wandb_project:
+    value: morphomnist-tuning
