@@ -31,8 +31,17 @@ python exp_ate_recovery.py --size 4 --n 400 --max-epochs 3 \
 python exp_ate_recovery.py --collect
 ```
 
-If you change anything in either script, run `--selftest` before trusting a
-result. It asserts 106 invariants and exits non-zero on failure.
+For the Frengression comparator, create the isolated environment at repository
+root and run its matching smoke test:
+
+```bash
+micromamba create -f environment-frengression.yaml
+micromamba run -n frugal-flows-frengression \
+    python validation/morphomnist/exp_frengression_recovery.py --selftest
+```
+
+If you change a runner, run its `--selftest` before trusting a result. Each
+exits non-zero on failure.
 
 ---
 
@@ -42,10 +51,45 @@ result. It asserts 106 invariants and exits non-zero on failure.
 |---|---|
 | `prepare_morphomnist_exps.py` | the data generator. All simulation settings live here. |
 | `exp_ate_recovery.py` | fits a frugal flow to a generated dataset, scores it, archives the run. |
+| `exp_frengression_recovery.py` | fits the official Frengression implementation to the same datasets. |
+| `morphomnist_metrics.py` | shared effect-map and marginal-QTE metric definitions. |
+| `compare_frengression_ff.py` | fail-closed complete-grid comparison across estimators. |
 | `dataset.py` | MorphoMNIST loader (images + thickness/intensity morphometrics). |
 
-Other scripts in this directory are earlier single-purpose versions, superseded by
-these two. Don't extend them.
+Other scripts in this directory are earlier single-purpose versions. Do not
+extend them for the Frengression comparison.
+
+## Frengression reporting run
+
+The adapter calls the official `frengression.Frengression.train_y`; it does not
+reimplement or extend the model. The frozen reporting profile is learning rate
+`1e-3`, width 100, three layers, noise dimension 64, and per-pixel outcome
+scaling with an SD floor.
+
+```bash
+cd validation/morphomnist
+
+# one cell
+python exp_frengression_recovery.py \
+    --preset exp4_covariate_cate --size 8 --seed-data 1 --seed-fit 1
+
+# E1-E6 x reporting seeds 1-5; safe to resume
+python exp_frengression_recovery.py --sweep --size 8 \
+    --seeds 1 2 3 4 5 --skip-done
+
+# matching classical baselines and fail-closed comparison
+python baselines.py --all --size 8 --seeds 1 2 3 4 5
+python compare_frengression_ff.py --size 8 --seeds 1 2 3 4 5
+```
+
+The comparison refuses missing seeds, duplicate cells, non-finite shared
+scores, and mismatched dataset designs. It also rejects legacy baseline CSVs
+that predate explicit size/radius/digit provenance; regenerate those baselines.
+
+W&B remains optional. For a direct run add `--wandb`; for the frozen reporting
+grid use `sweeps/frengression_report.yaml` with
+`frengression_sweep_agent.py`. Keep reporting seeds 1-5 separate from tuning
+seeds 101+.
 
 ---
 
@@ -173,8 +217,9 @@ Realised design diagnostics at `--size 8` (n = 5923, single digit class):
 | **oracle-IPW bias (max abs)** | **0.064** | **0.068** | **0.068** | **0.068** | **0.068** | **0.068** |
 
 The last row is the **sampling-noise floor** — what inverse-probability
-weighting by the *true* propensity achieves. No estimator can beat it. Judge
-recovery against ~0.065, not against zero.
+weighting by the *true* propensity achieves. The values shown are maximum
+absolute errors, not MAEs. Like-for-like oracle-IPW ATE MAE is roughly
+0.010–0.019 across E1–E6; do not use ~0.065 as an MAE floor.
 
 ### 2. `--effect-mode` — what τ is allowed to depend on
 
@@ -347,8 +392,8 @@ Each run writes a self-contained folder under `runs/exp_ate_recovery/`:
 ```
 
 `config.json` and `log.txt` appear at launch, so a folder holding only those two
-is still training (or died). Only `arrays.npz` is gitignored — completed run
-folders can be committed at negligible size.
+is still training (or died). Run folders are gitignored; publish only a compact
+CSV/Markdown summary with its provenance when a result needs to be shared.
 
 ---
 
@@ -361,6 +406,7 @@ folders can be committed at negligible size.
 | `ate_mae_off_support` | …restricted to pixels whose true effect is **exactly zero** |
 | `ate_corr` | spatial correlation — is the map in the right *place*? |
 | `att_mae` / `atc_mae` | same score against ATT and ATC |
+| `marginal_qte_rmse` | RMSE for independently sorted Q1(u)-Q0(u), available for sampling-based arms |
 | `design_oracle_ipw_bias_maxabs` | the design's sampling-noise floor |
 | `mc_frac_dropped` | fraction of non-finite interventional draws discarded |
 

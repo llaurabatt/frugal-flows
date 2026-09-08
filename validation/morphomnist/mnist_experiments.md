@@ -25,6 +25,21 @@ Needs writing before the main figure can be defended. IPW-weighted quantile
 contrast per pixel, scored against `TAU_MARGINAL` (and `TAU_ANALYTIC` on E5)
 using the same 40-bin grid as `frugal_flows.interventions.tau_curve`.
 
+### Stage 0c — Frengression comparator
+
+Run the official-package adapter with the frozen settings on the same reporting
+seeds, then compare only after all requested cells are present:
+
+```bash
+python exp_frengression_recovery.py --sweep --size 8 \
+    --seeds 1 2 3 4 5 --skip-done
+python compare_frengression_ff.py --size 8 --seeds 1 2 3 4 5
+```
+
+The shared marginal-QTE score independently sorts the `do(0)` and `do(1)`
+margins before differencing. Do not use the paired `tau_curve` output as a
+marginal QTE: the two functionals differ on E3/E4/E6.
+
 ### Stage 1 — resolve the transformer (~1 h)
 
 ```bash

@@ -1,0 +1,39 @@
+# Frozen E1-E6 reporting matrix. Reporting seeds must remain disjoint from
+# tuning seeds (101+); local run folders remain the authoritative archive.
+
+program: frengression_sweep_agent.py
+method: grid
+metric:
+  name: ate_mae
+  goal: minimize
+parameters:
+  preset:
+    values:
+      - exp1_rct_homogeneous
+      - exp2_confounded_homogeneous
+      - exp3_confounded_heterogeneous
+      - exp4_covariate_cate
+      - exp5_quantile_effect
+      - exp6_spatial_cate
+  size:
+    value: 8
+  seed:
+    values: [1, 2, 3, 4, 5]
+  seed_mc:
+    value: 0
+  num_iters:
+    value: 5000
+  lr:
+    value: 0.001
+  hidden_dim:
+    value: 100
+  num_layer:
+    value: 3
+  noise_dim:
+    value: 64
+  y_scaling:
+    value: per_pixel
+  y_sd_floor:
+    value: 0.25
+  wandb_project:
+    value: morphomnist-ate
