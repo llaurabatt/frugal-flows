@@ -48,6 +48,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
@@ -56,10 +57,10 @@ import numpy as np
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
-from morphomnist_metrics import score_effect_map
-from prepare_morphomnist_exps import PRESETS, build_preset
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import KFold
+
+from prepare_morphomnist_exps import PRESETS, build_preset
 
 METHODS = ("naive", "ipw", "ols", "aipw", "oracle_ipw")
 BASES = ("linear", "poly3", "poly5")
@@ -177,7 +178,19 @@ ESTIMATORS = {"naive": est_naive, "ipw": est_ipw, "ols": est_ols,
 # scoring -- identical keys to exp_ate_recovery.evaluate
 # --------------------------------------------------------------------------- #
 def score(tau_hat: np.ndarray, data: dict) -> dict:
-    return score_effect_map(tau_hat, data)
+    ATE = np.asarray(data["ATE"])
+    support = ATE != 0
+    err = tau_hat - ATE
+    return {
+        "ate_mae": float(np.abs(err).mean()),
+        "ate_rmse": float(np.sqrt((err**2).mean())),
+        "ate_max_abs_err": float(np.abs(err).max()),
+        "ate_mae_on_support": float(np.abs(err[support]).mean()),
+        "ate_mae_off_support": float(np.abs(err[~support]).mean()),
+        "ate_corr": float(np.corrcoef(tau_hat, ATE)[0, 1]),
+        "att_mae": float(np.abs(tau_hat - np.asarray(data["ATT"])).mean()),
+        "atc_mae": float(np.abs(tau_hat - np.asarray(data["ATC"])).mean()),
+    }
 
 
 def run_one(preset: str, size: int, seed: int, basis: str, n: int | None,
@@ -192,10 +205,8 @@ def run_one(preset: str, size: int, seed: int, basis: str, n: int | None,
     rows = []
     for name, fn in ESTIMATORS.items():
         tau = np.asarray(fn(Y, T, X, true_p, seed=seed))
-        rows.append({"preset": preset, "seed": seed, "seed_data": seed,
-                     "method": name, "basis": basis, "size": size,
-                     "radius": int(data["config"]["radius"]), "digit": digit,
-                     "n_requested": n, "n_pixels": Y.shape[1],
+        rows.append({"preset": preset, "seed": seed, "method": name,
+                     "basis": basis, "n_pixels": Y.shape[1],
                      "n_units": Y.shape[0], **score(tau, data)})
     return rows
 
@@ -216,8 +227,8 @@ def print_table(rows: list[dict], metric: str = "ate_mae"):
             line += (f"{np.mean(v):.4f}+-{np.std(v):.4f}".rjust(18) if v
                      else "-".rjust(18))
         print(line)
-    print("\n(oracle_ipw is the sampling-noise floor, not a competitor: it uses "
-          "the TRUE propensity)")
+    print(f"\n(oracle_ipw is the sampling-noise floor, not a competitor: it uses "
+          f"the TRUE propensity)")
 
 
 def main(argv=None):

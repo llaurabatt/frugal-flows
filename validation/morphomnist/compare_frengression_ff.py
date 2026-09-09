@@ -21,23 +21,29 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from frugal_flows.interventions import tau_curve
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
-from morphomnist_metrics import (
-    EFFECT_SCORE_KEYS,
-    marginal_qte_curve,
-    score_marginal_qte,
-)
 from prepare_morphomnist_exps import PRESETS
 
+EFFECT_SCORE_KEYS = (
+    "ate_mae",
+    "ate_rmse",
+    "ate_max_abs_err",
+    "ate_mae_on_support",
+    "ate_mae_off_support",
+    "ate_corr",
+    "att_mae",
+    "atc_mae",
+)
 QTE_SCORE_KEYS = (
-    "marginal_qte_rmse",
-    "marginal_qte_rmse_on_support",
-    "marginal_qte_sd_on_support",
-    "marginal_qte_sd_off_support",
-    "true_marginal_qte_sd_on_support",
+    "tau_u_rmse_vs_marginal",
+    "tau_u_rmse_on_support",
+    "tau_u_sd_on_support",
+    "tau_u_sd_off_support",
+    "true_tau_u_sd_on_support",
 )
 SCIENTIFIC_SCORE_KEYS = EFFECT_SCORE_KEYS + QTE_SCORE_KEYS
 GENERATOR_OVERRIDE_KEYS = (
@@ -84,9 +90,9 @@ def _override_signature(config: dict) -> str:
     return json.dumps(values, sort_keys=True, separators=(",", ":"))
 
 
-def _backfill_marginal_qte(metrics: dict, run_dir: str, method: str) -> None:
-    """Recompute corrected QTE from legacy raw samples when they are available."""
-    if "marginal_qte_rmse" in metrics:
+def _backfill_tau_u(metrics: dict, run_dir: str, method: str) -> None:
+    """Recompute the existing FF tau(u) metrics when raw samples are available."""
+    if "tau_u_rmse_vs_marginal" in metrics:
         return
     arrays_path = os.path.join(run_dir, "arrays.npz")
     if not os.path.exists(arrays_path):
@@ -107,10 +113,22 @@ def _backfill_marginal_qte(metrics: dict, run_dir: str, method: str) -> None:
     else:
         return
 
-    _, curve = marginal_qte_curve(y0, y1)
-    metrics.update(score_marginal_qte(
-        curve, {"ATE": arrays["ATE"], "TAU_MARGINAL": arrays["TAU_MARGINAL"]}
-    ))
+    _, curves = tau_curve(y0, y1)
+    support = arrays["ATE"] != 0
+    true_marg = np.asarray(arrays["TAU_MARGINAL"])
+    curve_err = np.asarray(curves) - true_marg
+    flat = np.asarray(curves).std(axis=0)
+    metrics.update({
+        "tau_u_rmse_vs_marginal": float(np.sqrt((curve_err**2).mean())),
+        "tau_u_rmse_on_support": float(
+            np.sqrt((curve_err[:, support] ** 2).mean())
+        ),
+        "tau_u_sd_on_support": float(flat[support].mean()),
+        "tau_u_sd_off_support": float(flat[~support].mean()),
+        "true_tau_u_sd_on_support": float(
+            true_marg[:, support].std(axis=0).mean()
+        ),
+    })
 
 
 def _model_row(method: str, metrics: dict, record: dict, run: str) -> dict:
@@ -148,7 +166,7 @@ def load_frengression(root: str) -> list[dict]:
         metrics = _read_json(metrics_path)
         if metrics.get("status") != "ok":
             continue
-        _backfill_marginal_qte(metrics, run_dir, "frengression")
+        _backfill_tau_u(metrics, run_dir, "frengression")
         rows.append(_model_row(
             "frengression", metrics, _read_json(config_path), name
         ))
@@ -172,7 +190,7 @@ def load_ff(root: str) -> list[dict]:
         method = ARM_LABEL.get(arm)
         if method is None:
             continue
-        _backfill_marginal_qte(metrics, run_dir, method)
+        _backfill_tau_u(metrics, run_dir, method)
         rows.append(_model_row(method, metrics, record, name))
     return rows
 
@@ -186,25 +204,36 @@ def load_baselines(root: str) -> list[dict]:
         with open(path, encoding="utf-8", newline="") as handle:
             for line_number, raw in enumerate(csv.DictReader(handle), start=2):
                 source = f"{path}:{line_number}"
-                required = {
-                    "preset", "method", "seed_data", "size", "radius", "digit",
-                    "n_units", *EFFECT_SCORE_KEYS,
-                }
+                required = {"preset", "method", "n_pixels", "n_units", *EFFECT_SCORE_KEYS}
                 missing = sorted(required - set(raw))
                 if missing:
-                    raise ValueError(
-                        f"{source}: legacy baseline CSV lacks {missing}; rerun "
-                        "baselines.py so design identity is explicit"
-                    )
-                digit = None if raw["digit"] in ("", "None") else int(float(raw["digit"]))
+                    raise ValueError(f"{source}: baseline CSV lacks {missing}")
+                seed_key = "seed_data" if "seed_data" in raw else "seed"
+                if seed_key not in raw:
+                    raise ValueError(f"{source}: baseline CSV lacks seed")
+                n_pixels = int(float(raw["n_pixels"]))
+                size = int(round(np.sqrt(n_pixels)))
+                if size**2 != n_pixels:
+                    raise ValueError(f"{source}: n_pixels={n_pixels} is not square")
+                size = int(float(raw["size"])) if raw.get("size") else size
+                radius = (
+                    int(float(raw["radius"]))
+                    if raw.get("radius") else max(1, round(size / 4))
+                )
+                digit = (
+                    None if raw.get("digit") in ("", "None")
+                    else int(float(raw["digit"]))
+                    if raw.get("digit") is not None
+                    else 0
+                )
                 metrics = _require_scores(raw, source)
                 rows.append({
                     "preset": raw["preset"],
                     "method": raw["method"],
-                    "seed_data": int(float(raw["seed_data"])),
+                    "seed_data": int(float(raw[seed_key])),
                     "seed_fit": None,
-                    "size": int(float(raw["size"])),
-                    "radius": int(float(raw["radius"])),
+                    "size": size,
+                    "radius": radius,
                     "n_units": int(float(raw["n_units"])),
                     "digit": digit,
                     "dgp_overrides": _override_signature({}),

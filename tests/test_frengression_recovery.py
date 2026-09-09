@@ -13,9 +13,9 @@ plausible-looking number that is quietly measuring the wrong thing:
   * common random numbers not actually pairing, which inflates the Monte-Carlo
     error to the size of the effect being estimated;
   * the sampling call materialising n * n_mc rows;
-  * a score formula drifting from the shared metrics helper, making the comparison
-    table wrong in a way no other test would notice;
-  * paired and independently sorted quantile effects being confused.
+  * a score formula drifting from the existing baseline/FF metrics, making the
+    comparison table wrong in a way no other test would notice;
+  * the established FF tau_curve and tau_u metric contract drifting.
 
 Everything is written under `tmp_path`, so the suite never leaves experiment
 artefacts in the worktree.
@@ -41,9 +41,8 @@ import compare_frengression_ff as cmp_mod  # noqa: E402
 import exp_ate_recovery as ff  # noqa: E402
 import exp_frengression_recovery as fr  # noqa: E402
 import frengression_sweep_agent as sweep_agent  # noqa: E402
-import morphomnist_metrics as shared_metrics  # noqa: E402
 import torch  # noqa: E402
-from frugal_flows.interventions import tau_curve as paired_tau_curve  # noqa: E402
+from frugal_flows.interventions import tau_curve  # noqa: E402
 
 # y_scaling and noise_dim are pinned rather than left to the Config defaults, so
 # that a later evidence-driven change to those defaults cannot silently change
@@ -328,7 +327,7 @@ def test_score_parity_with_baselines(cfg, data, fitted, inputs, monkeypatch):
     model, losses, info = fitted
     y0, y1, diag = fr.sample_margins(cfg, model, inputs)
     calls = []
-    real = shared_metrics.score_effect_map
+    real = baselines.score
 
     def spy(tau_hat, d):
         calls.append(tau_hat)
@@ -361,26 +360,35 @@ def test_metrics_contract(cfg, data, fitted, inputs):
         "hidden_dim", "num_layer", "noise_dim", "y_scaling", "z_scaling",
         "n_iters_run", "early_stopped", "loss_first", "loss_final", "loss_min",
         "loss_nonfinite_iters", "diverged", "fit_s", "mc_n", "mc_n_used",
-        "mc_frac_nonfinite", "mc_crn", "mc_se_max", "mc_se_mean", "mc_se_unpaired_max",
-        "marginal_qte_rmse", "marginal_qte_rmse_on_support",
-        "marginal_qte_sd_on_support", "marginal_qte_sd_off_support",
-        "true_marginal_qte_sd_on_support",
+        "mc_frac_dropped", "mc_crn", "mc_se_max", "mc_se_mean", "mc_se_unpaired_max",
+        "tau_u_rmse_vs_marginal", "tau_u_rmse_on_support",
+        "tau_u_sd_on_support", "tau_u_sd_off_support",
+        "true_tau_u_sd_on_support",
     ]
     missing = [k for k in required if k not in m]
     assert not missing, f"metrics.json is missing {missing}"
     assert np.isfinite(m["ate_mae"]) and np.isfinite(m["mc_se_max"])
 
 
-def test_marginal_qte_matches_truth_and_differs_from_paired_curve():
-    """E4 exposes the exact semantic difference that E2 hides."""
-    data = fr.build_data(fr.Config(
-        preset="exp4_covariate_cate", size=4, n=400, seed_data=7
-    ))
-    y0, y1 = np.asarray(data["Y0"]), np.asarray(data["Y1"])
-    _, marginal = shared_metrics.marginal_qte_curve(y0, y1)
-    _, paired = paired_tau_curve(y0, y1)
-    assert np.allclose(marginal, np.asarray(data["TAU_MARGINAL"]), atol=1e-12)
-    assert not np.allclose(paired, marginal, atol=1e-5)
+def test_tau_curve_metrics_match_ff_contract(cfg, data, fitted, inputs):
+    model, losses, info = fitted
+    y0, y1, diag = fr.sample_margins(cfg, model, inputs)
+    _, metrics, extras = fr.evaluate(cfg, y0, y1, data, losses, info, diag, {})
+    u, curves = tau_curve(y0, y1)
+    support = np.asarray(data["ATE"]) != 0
+    true_marg = np.asarray(data["TAU_MARGINAL"])
+    curve_err = np.asarray(curves) - true_marg
+    flat = np.asarray(curves).std(axis=0)
+    assert np.array_equal(extras["tau_u"], u)
+    assert np.array_equal(extras["tau_curves"], curves)
+    assert metrics["tau_u_rmse_vs_marginal"] == pytest.approx(
+        np.sqrt((curve_err**2).mean())
+    )
+    assert metrics["tau_u_rmse_on_support"] == pytest.approx(
+        np.sqrt((curve_err[:, support] ** 2).mean())
+    )
+    assert metrics["tau_u_sd_on_support"] == pytest.approx(flat[support].mean())
+    assert metrics["tau_u_sd_off_support"] == pytest.approx(flat[~support].mean())
 
 
 # --------------------------------------------------------------------------- #
@@ -452,8 +460,8 @@ def _flags(cfg):
     return out
 
 
-def test_flow_runner_uses_the_same_shared_scores():
-    assert ff.score_effect_map is shared_metrics.score_effect_map
+def test_flow_runner_keeps_the_existing_tau_curve_import():
+    assert ff.tau_curve is tau_curve
 
 
 # --------------------------------------------------------------------------- #
@@ -498,9 +506,8 @@ def _write_baseline(root: Path, preset: str, seeds=(1, 2), method="ols"):
     rows = []
     for seed in seeds:
         rows.append({
-            "preset": preset, "seed": seed, "seed_data": seed, "method": method,
-            "basis": "poly3", "size": 8, "radius": 2, "digit": 0,
-            "n_requested": None, "n_pixels": 64, "n_units": 5923,
+            "preset": preset, "seed": seed, "method": method,
+            "basis": "poly3", "n_pixels": 64, "n_units": 5923,
             **_scores(0.01),
         })
     keys = list(rows[0])
@@ -533,7 +540,7 @@ def test_comparison_joins_and_averages(tmp_path):
     assert got[("ols", 2)] == pytest.approx(0.010)
 
 
-def test_comparison_backfills_corrected_marginal_qte(tmp_path):
+def test_comparison_backfills_existing_tau_u_metrics(tmp_path):
     root = tmp_path / "runs"
     root.mkdir()
     preset = "exp2_confounded_homogeneous"
@@ -552,9 +559,14 @@ def test_comparison_backfills_corrected_marginal_qte(tmp_path):
         TAU_MARGINAL=np.zeros((40, 2)),
     )
 
+    _, curves = tau_curve(y0, y1)
+    truth = np.zeros((40, 2))
+    err = curves - truth
     row = cmp_mod.load_frengression(str(root))[0]
-    assert row["marginal_qte_rmse"] == pytest.approx(np.sqrt((0.5 ** 2 + 0.2 ** 2) / 2))
-    assert row["marginal_qte_rmse_on_support"] == pytest.approx(0.5)
+    assert row["tau_u_rmse_vs_marginal"] == pytest.approx(np.sqrt((err**2).mean()))
+    assert row["tau_u_rmse_on_support"] == pytest.approx(
+        np.sqrt((err[:, [True, False]] ** 2).mean())
+    )
 
 
 def test_comparison_rejects_missing_duplicate_and_mismatched_cells(tmp_path):
@@ -582,15 +594,18 @@ def test_comparison_rejects_missing_duplicate_and_mismatched_cells(tmp_path):
         )
 
 
-def test_legacy_baseline_csv_is_rejected(tmp_path):
+def test_existing_baseline_csv_is_accepted_without_function_changes(tmp_path):
     bl = tmp_path / "bl"
     bl.mkdir()
     hdr = ("preset,seed,method,basis,n_pixels,n_units,ate_mae,ate_rmse,ate_max_abs_err,"
            "ate_mae_on_support,ate_mae_off_support,ate_corr,att_mae,atc_mae")
     (bl / "b.csv").write_text(
         hdr + "\nexp1_rct_homogeneous,1,ols,poly3,16,300,0.01,0.01,0.01,0.01,0.01,0.9,0.01,0.01\n")
-    with pytest.raises(ValueError, match="legacy baseline CSV"):
-        cmp_mod.load_baselines(str(bl))
+    row = cmp_mod.load_baselines(str(bl))[0]
+    assert row["seed_data"] == 1
+    assert row["size"] == 4
+    assert row["radius"] == 1
+    assert row["digit"] == 0
 
 
 def test_sweep_seed_maps_to_data_and_fit():

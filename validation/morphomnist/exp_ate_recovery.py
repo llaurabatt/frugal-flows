@@ -347,8 +347,7 @@ import jax.numpy as jnp
 import jax.random as jr
 import paramax
 from frugal_flows.causal_flows import get_independent_quantiles, train_frugal_flow
-from frugal_flows.interventions import interventional_samples
-from morphomnist_metrics import marginal_qte_curve, score_effect_map, score_marginal_qte
+from frugal_flows.interventions import interventional_samples, tau_curve
 from prepare_morphomnist_exps import PRESETS, build_preset, inverse_logit, summarise
 
 ARMS = ("location_translation", "flexible_continuous")
@@ -581,11 +580,11 @@ def _tau_hat_flexible_continuous(cfg: Config, flow, data: dict, K: int):
     y0, y1 = y0[keep], y1[keep]
 
     tau_hat = np.mean(y1 - y0, axis=0)
-    u_grid, curves = marginal_qte_curve(y0, y1)
+    u_grid, curves = tau_curve(y0, y1)
 
     extras = {
-        "marginal_qte_u": np.asarray(u_grid),
-        "marginal_qte_curves": np.asarray(curves),  # (n_bins, K)
+        "tau_u": np.asarray(u_grid),
+        "tau_curves": np.asarray(curves),           # (n_bins, K)
         # Recomputed from the FILTERED draws: readout's own moments are taken
         # over the raw arrays, so a single non-finite draw leaves them inf/nan
         # even once tau_hat is clean.
@@ -600,13 +599,21 @@ def _tau_hat_flexible_continuous(cfg: Config, flow, data: dict, K: int):
     # monotone causal margin can represent; TAU_PAIRED is the average ITE at
     # rank u and is NOT this arm's target (the two coincide only when the DGP is
     # rank-preserving, i.e. a_cov == 0).
+    support = data["ATE"] != 0
+    true_marg = np.asarray(data["TAU_MARGINAL"])
+    curve_err = np.asarray(curves) - true_marg
+    flat = np.asarray(curves).std(axis=0)
     arm_metrics = {
         "mc_n": int(cfg.n_mc),
         "mc_n_used": int(keep.sum()),
         "mc_frac_dropped": frac_dropped,   # >0 means the margin has heavy tails
         "mc_anynan": bool(readout["anynan"]),
         "readout_s": float(readout_s),
-        **score_marginal_qte(curves, data),
+        "tau_u_rmse_vs_marginal": float(np.sqrt((curve_err**2).mean())),
+        "tau_u_rmse_on_support": float(np.sqrt((curve_err[:, support] ** 2).mean())),
+        "tau_u_sd_on_support": float(flat[support].mean()),
+        "tau_u_sd_off_support": float(flat[~support].mean()),
+        "true_tau_u_sd_on_support": float(true_marg[:, support].std(axis=0).mean()),
     }
     return tau_hat, arm_metrics, extras
 
@@ -639,14 +646,27 @@ def evaluate(cfg: Config, flow, data: dict, losses: dict, wall_time_s: float,
 
     truth = np.asarray(data["ATE"])
     support = truth != 0
+    err = tau_hat - truth
     design = summarise(data)
     metrics = {
         "preset": cfg.preset,
         "arm": cfg.arm,
         "conditioner": cfg.conditioner if cfg.arm == "flexible_continuous" else "n/a",
-        # Shared scientific contract used by every estimator family.
-        **score_effect_map(tau_hat, data),
+        # recovery against the primary estimand
+        "ate_mae": float(np.abs(err).mean()),
+        "ate_rmse": float(np.sqrt((err**2).mean())),
+        "ate_corr": float(np.corrcoef(tau_hat, truth)[0, 1]),
+        "ate_max_abs_err": float(np.abs(err).max()),
+        # Most pixels carry a true effect of EXACTLY zero (a radius-2 disc is 12
+        # of 64), so a plain MAE is dominated by off-support bleed and hides
+        # whether the magnitude on support was recovered at all. Split it: these
+        # two are different failure modes and a method can fail either alone.
+        "ate_mae_on_support": float(np.abs(err[support]).mean()),
+        "ate_mae_off_support": float(np.abs(err[~support]).mean()),
         "frac_pixels_on_support": float(support.mean()),
+        # which estimand did it actually land on?
+        "att_mae": float(np.abs(tau_hat - np.asarray(data["ATT"])).mean()),
+        "atc_mae": float(np.abs(tau_hat - np.asarray(data["ATC"])).mean()),
         # is the map in the right place?
         "tau_hat_mean_on_support": float(tau_hat[support].mean()),
         "tau_hat_mean_off_support": float(tau_hat[~support].mean()),
@@ -711,8 +731,7 @@ def make_plots(cfg: Config, data: dict, losses: dict, tau_hat: np.ndarray,
     axes[0].scatter(ate_true, tau_hat, s=12, alpha=0.6)
     lo, hi = float(min(ate_true.min(), tau_hat.min())), float(max(ate_true.max(), tau_hat.max()))
     axes[0].plot([lo, hi], [lo, hi], "k--", lw=1)
-    axes[0].set_xlabel("true ATE")
-    axes[0].set_ylabel(r"$\hat{\tau}$")
+    axes[0].set_xlabel("true ATE"); axes[0].set_ylabel(r"$\hat{\tau}$")
     axes[0].set_title("Per-pixel recovery")
     for lab, v in [("ATE", ate_true), ("ATT", np.asarray(data["ATT"])),
                    ("ATC", np.asarray(data["ATC"]))]:
@@ -722,9 +741,9 @@ def make_plots(cfg: Config, data: dict, losses: dict, tau_hat: np.ndarray,
     save(fig, "recovery_scatter.png")
 
     # 3. spline arm only: estimated tau(u) against the exact marginal truth
-    if "marginal_qte_curves" in extras:
-        u = np.asarray(extras["marginal_qte_u"])
-        curves = np.asarray(extras["marginal_qte_curves"])
+    if "tau_curves" in extras:
+        u = np.asarray(extras["tau_u"])
+        curves = np.asarray(extras["tau_curves"])
         true_marg = np.asarray(data["TAU_MARGINAL"])
         fig, axes = plt.subplots(1, 2, figsize=(13, 4.5), sharey=True)
         for ax, mask, name in zip(axes, [support, ~support],
@@ -750,10 +769,7 @@ def make_plots(cfg: Config, data: dict, losses: dict, tau_hat: np.ndarray,
     epochs = np.arange(1, len(train) + 1)
     ax.plot(epochs, train, label="train", marker="o", markersize=3)
     ax.plot(epochs, val, label="val", marker="o", markersize=3)
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("Loss")
-    ax.legend()
-    ax.grid(True)
+    ax.set_xlabel("Epoch"); ax.set_ylabel("Loss"); ax.legend(); ax.grid(True)
     ax.set_title("Training / validation loss")
     save(fig, "loss_curves.png")
 
@@ -762,27 +778,23 @@ def make_plots(cfg: Config, data: dict, losses: dict, tau_hat: np.ndarray,
     fig, axes = plt.subplots(1, 3, figsize=(15, 3.6))
     axes[0].hist([data["THICKNESS"][~T], data["THICKNESS"][T]], bins=40,
                  label=["T=0", "T=1"], density=True, histtype="step")
-    axes[0].legend()
-    axes[0].set_title("Thickness by arm (confounding)")
+    axes[0].legend(); axes[0].set_title("Thickness by arm (confounding)")
     axes[1].hist(np.asarray(u_z)[:, 0], bins=30)
     axes[1].set_title(r"$U_{Z}$ stage-1 quantiles (should be flat)")
     mean_bright = inverse_logit(np.asarray(data["Y"])).mean(axis=1)
     axes[2].hist([mean_bright[~T], mean_bright[T]], bins=40,
                  label=["T=0", "T=1"], density=True, histtype="step")
-    axes[2].legend()
-    axes[2].set_title("Mean brightness by arm")
+    axes[2].legend(); axes[2].set_title("Mean brightness by arm")
     save(fig, "design_check.png")
 
     # 6. the imposed truth, for reference
     ITE = np.asarray(data["ITE"])
     fig, axes = plt.subplots(1, 3, figsize=(14, 4))
-    im = axes[0].imshow(ate_true.reshape(size, size))
-    fig.colorbar(im, ax=axes[0])
+    im = axes[0].imshow(ate_true.reshape(size, size)); fig.colorbar(im, ax=axes[0])
     axes[0].set_title("True per-pixel ATE")
     axes[1].hist(ITE.sum(axis=1), bins=50)
     axes[1].set_title("Per-unit total ITE (heterogeneity)")
-    im = axes[2].imshow(ITE.std(axis=0).reshape(size, size))
-    fig.colorbar(im, ax=axes[2])
+    im = axes[2].imshow(ITE.std(axis=0).reshape(size, size)); fig.colorbar(im, ax=axes[2])
     axes[2].set_title("ITE sd across units")
     save(fig, "truth_panels.png")
 
@@ -794,7 +806,7 @@ RUNS_ROOT = os.path.join(SCRIPT_DIR, "runs", "exp_ate_recovery")
 
 # Arm-specific arrays in arrays.npz, listed explicitly so --replot can pick them
 # out of an npz that may or may not contain them.
-EXTRA_ARRAY_KEYS = ("marginal_qte_u", "marginal_qte_curves", "mc_mean0", "mc_mean1",
+EXTRA_ARRAY_KEYS = ("tau_u", "tau_curves", "mc_mean0", "mc_mean1",
                     "mc_var0", "mc_var1", "mc_tau_sd")
 # Truth arrays needed to rebuild every plot without regenerating the dataset.
 TRUTH_ARRAY_KEYS = ("ATE", "ATT", "ATC", "TAU_U", "TAU_PAIRED", "TAU_MARGINAL",

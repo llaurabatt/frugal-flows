@@ -52,7 +52,6 @@ exits non-zero on failure.
 | `prepare_morphomnist_exps.py` | the data generator. All simulation settings live here. |
 | `exp_ate_recovery.py` | fits a frugal flow to a generated dataset, scores it, archives the run. |
 | `exp_frengression_recovery.py` | fits the official Frengression implementation to the same datasets. |
-| `morphomnist_metrics.py` | shared effect-map and marginal-QTE metric definitions. |
 | `compare_frengression_ff.py` | fail-closed complete-grid comparison across estimators. |
 | `dataset.py` | MorphoMNIST loader (images + thickness/intensity morphometrics). |
 
@@ -83,8 +82,9 @@ python compare_frengression_ff.py --size 8 --seeds 1 2 3 4 5
 ```
 
 The comparison refuses missing seeds, duplicate cells, non-finite shared
-scores, and mismatched dataset designs. It also rejects legacy baseline CSVs
-that predate explicit size/radius/digit provenance; regenerate those baselines.
+scores, and mismatched dataset designs. It accepts the existing baseline CSV
+format without changing `baselines.py`; size is recovered from `n_pixels`, with
+the existing default radius and digit used for the comparison identity.
 
 W&B remains optional. For a direct run add `--wandb`; for the frozen reporting
 grid use `sweeps/frengression_report.yaml` with
@@ -217,9 +217,8 @@ Realised design diagnostics at `--size 8` (n = 5923, single digit class):
 | **oracle-IPW bias (max abs)** | **0.064** | **0.068** | **0.068** | **0.068** | **0.068** | **0.068** |
 
 The last row is the **sampling-noise floor** — what inverse-probability
-weighting by the *true* propensity achieves. The values shown are maximum
-absolute errors, not MAEs. Like-for-like oracle-IPW ATE MAE is roughly
-0.010–0.019 across E1–E6; do not use ~0.065 as an MAE floor.
+weighting by the *true* propensity achieves. No estimator can beat it. Judge
+recovery against ~0.065, not against zero.
 
 ### 2. `--effect-mode` — what τ is allowed to depend on
 
@@ -392,8 +391,8 @@ Each run writes a self-contained folder under `runs/exp_ate_recovery/`:
 ```
 
 `config.json` and `log.txt` appear at launch, so a folder holding only those two
-is still training (or died). Run folders are gitignored; publish only a compact
-CSV/Markdown summary with its provenance when a result needs to be shared.
+is still training (or died). Only `arrays.npz` is gitignored — completed run
+folders can be committed at negligible size.
 
 ---
 
@@ -406,7 +405,7 @@ CSV/Markdown summary with its provenance when a result needs to be shared.
 | `ate_mae_off_support` | …restricted to pixels whose true effect is **exactly zero** |
 | `ate_corr` | spatial correlation — is the map in the right *place*? |
 | `att_mae` / `atc_mae` | same score against ATT and ATC |
-| `marginal_qte_rmse` | RMSE for independently sorted Q1(u)-Q0(u), available for sampling-based arms |
+| `tau_u_rmse_vs_marginal` | existing 40-bin `tau_curve` RMSE against `TAU_MARGINAL` |
 | `design_oracle_ipw_bias_maxabs` | the design's sampling-noise floor |
 | `mc_frac_dropped` | fraction of non-finite interventional draws discarded |
 

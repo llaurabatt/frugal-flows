@@ -96,7 +96,8 @@ import torch
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)  # prepare_morphomnist_exps / baselines are siblings
 
-from morphomnist_metrics import marginal_qte_curve, score_effect_map, score_marginal_qte
+from baselines import score as score_effect_map
+from frugal_flows.interventions import tau_curve
 from prepare_morphomnist_exps import PRESETS, build_preset, summarise
 
 # The only keys the training path may read. Everything else the generator
@@ -497,7 +498,7 @@ def sample_margins(cfg: Config, model, inputs: Inputs):
     diag = {
         "mc_n": int(cfg.n_mc),
         "mc_n_used": int(keep.sum()),
-        "mc_frac_nonfinite": float(1.0 - keep.mean()),
+        "mc_frac_dropped": float(1.0 - keep.mean()),
         "mc_anynan": bool((~keep).any()),
         "mc_crn": bool(cfg.crn),
         "readout_s": float(time.monotonic() - t0),
@@ -567,17 +568,25 @@ def evaluate(cfg: Config, y0: np.ndarray, y1: np.ndarray, data: dict,
         "mc_tau_sd_off_support": float(tau.std(axis=0)[~support].mean()) if (~support).any() else float("nan"),
     }
 
-    # Marginal QTE is Q1(u)-Q0(u): sort each generated margin independently.
-    # The paired tau_curve functional is intentionally not used here.
-    u_grid, curves = marginal_qte_curve(y0, y1)
-    metrics.update(score_marginal_qte(curves, data))
+    u_grid, curves = tau_curve(y0, y1)
+    support = data["ATE"] != 0
+    true_marg = np.asarray(data["TAU_MARGINAL"])
+    curve_err = np.asarray(curves) - true_marg
+    flat = np.asarray(curves).std(axis=0)
+    metrics.update({
+        "tau_u_rmse_vs_marginal": float(np.sqrt((curve_err**2).mean())),
+        "tau_u_rmse_on_support": float(np.sqrt((curve_err[:, support] ** 2).mean())),
+        "tau_u_sd_on_support": float(flat[support].mean()),
+        "tau_u_sd_off_support": float(flat[~support].mean()),
+        "true_tau_u_sd_on_support": float(true_marg[:, support].std(axis=0).mean()),
+    })
 
     metrics.update({k: float(v) for k, v in timings.items()})
     if fit_info.get("diverged"):
         metrics["status"] = "diverged"
     extras = {
-        "marginal_qte_u": np.asarray(u_grid),
-        "marginal_qte_curves": np.asarray(curves),
+        "tau_u": np.asarray(u_grid),
+        "tau_curves": np.asarray(curves),
         "mc_mean0": y0.mean(axis=0), "mc_mean1": y1.mean(axis=0),
         "mc_var0": y0.var(axis=0), "mc_var1": y1.var(axis=0),
         "mc_tau_sd": tau.std(axis=0),
@@ -631,9 +640,9 @@ def make_plots(cfg: Config, data: dict, losses: dict, tau_hat: np.ndarray,
     ax[1].set_title("MAE against each estimand", fontsize=10)
     save(fig, "recovery_scatter.png")
 
-    if "marginal_qte_curves" in extras:
-        u = np.asarray(extras["marginal_qte_u"])
-        curves = np.asarray(extras["marginal_qte_curves"])
+    if "tau_curves" in extras:
+        u = np.asarray(extras["tau_u"])
+        curves = np.asarray(extras["tau_curves"])
         true_marg = np.asarray(data["TAU_MARGINAL"])
         fig, ax = plt.subplots(1, 2, figsize=(9.5, 3.6), sharey=True)
         for a, mask, title in ((ax[0], support, "on support"),
@@ -809,7 +818,7 @@ def replot(run_dir: str):
     data = {k: a[k] for k in ("ATE", "ATT", "ATC", "TAU_U", "TAU_MARGINAL",
                               "THICKNESS", "PROPENSITY", "X", "ITE", "Y")}
     losses = {k: a[k] for k in ("iter", "loss", "loss_y", "loss_eta")}
-    extras = {k: a[k] for k in ("marginal_qte_u", "marginal_qte_curves") if k in a}
+    extras = {k: a[k] for k in ("tau_u", "tau_curves") if k in a}
     make_plots(cfg, data, losses, a["tau_hat"], os.path.join(run_dir, "plots"), extras)
     print(f"replotted: {os.path.join(run_dir, 'plots')}")
 
@@ -1013,8 +1022,8 @@ def _run_one_inner(cfg: Config, run_id: str, run_dir: str, plots: bool, wb) -> d
                     json.dump(metrics, f, indent=2)
                 print("FAILED: every interventional draw was non-finite")
                 return metrics
-            if mc_diag["mc_frac_nonfinite"]:
-                print(f"  WARNING: dropped {mc_diag['mc_frac_nonfinite']:.3%} non-finite "
+            if mc_diag["mc_frac_dropped"]:
+                print(f"  WARNING: dropped {mc_diag['mc_frac_dropped']:.3%} non-finite "
                       f"draw pairs before the read-out")
 
             t0 = time.monotonic()
@@ -1141,7 +1150,7 @@ def selftest() -> int:
               all(k in m for k in ("ate_mae", "ate_rmse", "ate_corr", "att_mae", "atc_mae")))
         check("metrics:mc_pairing", m["mc_se_max"] < m["mc_se_unpaired_max"],
               f"paired {m['mc_se_max']:.5f} vs unpaired {m['mc_se_unpaired_max']:.5f}")
-        check("metrics:marginal_qte", np.isfinite(m["marginal_qte_rmse"]))
+        check("metrics:tau_u", np.isfinite(m["tau_u_rmse_vs_marginal"]))
 
         replot(os.path.join(tmp, "cell"))
         check("replot:ok", True)

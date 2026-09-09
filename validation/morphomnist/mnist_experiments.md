@@ -36,9 +36,9 @@ python exp_frengression_recovery.py --sweep --size 8 \
 python compare_frengression_ff.py --size 8 --seeds 1 2 3 4 5
 ```
 
-The shared marginal-QTE score independently sorts the `do(0)` and `do(1)`
-margins before differencing. Do not use the paired `tau_curve` output as a
-marginal QTE: the two functionals differ on E3/E4/E6.
+The comparator keeps the Frugal Flow runner's existing `tau_curve`, `tau_u`,
+`tau_curves` and `tau_u_*` metric contract unchanged, and evaluates
+Frengression through the same functions and names.
 
 ### Stage 1 — resolve the transformer (~1 h)
 
