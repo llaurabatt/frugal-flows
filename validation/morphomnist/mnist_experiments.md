@@ -31,8 +31,12 @@ Run the official-package adapter with the frozen settings on the same reporting
 seeds, then compare only after all requested cells are present:
 
 ```bash
-python exp_frengression_recovery.py --sweep --size 8 \
-    --seeds 1 2 3 4 5 --skip-done
+for s in 1 2 3 4 5; do
+    for p in exp1_rct_homogeneous exp2_confounded_homogeneous exp3_confounded_heterogeneous exp4_covariate_cate exp5_quantile_effect exp6_spatial_cate; do
+        python exp_ate_recovery.py --preset "$p" --arm frengression \
+            --size 8 --seed-data "$s" --seed-fit "$s"
+    done
+done
 python compare_frengression_ff.py --size 8 --seeds 1 2 3 4 5
 ```
 
@@ -244,14 +248,19 @@ Vary **both** seeds together, so each replicate is a fresh dataset *and* a fresh
 initialisation and the error bars cover total variance.
 
 ```bash
-python run_morphomnist_benchmarks.py \
-    --output-root runs/benchmark-reporting
+python baselines.py --all --size 8 --seeds 1 2 3 4 5
+for s in 1 2 3 4 5; do
+    python exp_ate_recovery.py --sweep --size 8 \
+        --seed-data "$s" --seed-fit "$s" --skip-done
+done
+python compare_frengression_ff.py --size 8 --seeds 1 2 3 4 5
 ```
 
 This keeps location translation, flexible/MLP, and flexible/transformer in the
 same default reporting stage, retains all five classical baselines, and adds
-Frengression as the single new benchmark. Resume an interrupted grid by adding
-`--resume` to the same command.
+Frengression as the single new benchmark. All four learned estimators use the
+same `exp_ate_recovery.Config` / `run_one` interface and archive root. The
+existing `--skip-done` flag resumes an interrupted grid.
 
 ### Stage 3 — ablations (appendix, 3 seeds)
 

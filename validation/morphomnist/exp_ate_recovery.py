@@ -56,6 +56,12 @@ The estimator (``--arm``, ``--conditioner``)
                                             ``--nn-width`` divisible by
                                             ``--nn-heads``)
 
+    frengression          the official Frengression implementation, fitted to
+                          the same generated dataset and scored with the same
+                          effect-map and ``tau(u)`` metrics. Its implementation
+                          remains isolated in ``exp_frengression_recovery.py``;
+                          this module is the single experiment interface.
+
 Outcome dimensionality
 ----------------------
 ``--size s`` sets the image side, so ``K = s^2`` outcome dimensions: ``--size 4``
@@ -98,25 +104,28 @@ Run everything from ``validation/morphomnist/``.
     python exp_ate_recovery.py --preset exp3_confounded_heterogeneous \\
         --arm flexible_continuous --conditioner transformer --nn-width 48
 
-    # 3. the whole 9-cell matrix
+    # 3. every existing FF cell plus Frengression across E1-E6
     python exp_ate_recovery.py --sweep --size 8
 
-    # 4. a fast end-to-end cycle for debugging (recovers nothing; proves plumbing)
+    # 4. the same interface, with Frengression as the estimator
+    python exp_ate_recovery.py --preset exp2_confounded_homogeneous --arm frengression
+
+    # 5. a fast end-to-end cycle for debugging (recovers nothing; proves plumbing)
     python exp_ate_recovery.py --size 4 --n 400 --max-epochs 3 \\
         --marginal-max-epochs 3 --n-mc 200
 
-    # 5. look at what you have
+    # 6. look at what you have
     python exp_ate_recovery.py --collect
     python exp_ate_recovery.py --replot runs/exp_ate_recovery/<run-id>
 
 
 The five modes
 --------------
-``(default)``   Build one dataset, fit one flow, score it, archive the run.
-``--sweep``     Every (preset, arm, conditioner) cell in turn: 3 presets x 3
-                estimator combinations = 9 runs. The conditioner only applies
-                to ``flexible_continuous``, so ``location_translation``
-                contributes one cell per preset, not two. A cell that fails is
+``(default)``   Build one dataset, fit the selected estimator, score it, archive
+                the run.
+``--sweep``     Every (preset, arm, conditioner) cell in turn: E1-E6 x the three
+                existing FF configurations plus Frengression. The conditioner
+                only applies to ``flexible_continuous``. A cell that fails is
                 logged and skipped so the rest of the matrix still completes.
 ``--collect``   Print one row per completed run in the archive. No fitting.
 ``--replot``    Rebuild every plot for an existing run from its ``arrays.npz``.
@@ -181,7 +190,9 @@ Flags: outcome dimensionality and sample
 
 Flags: the estimator
 --------------------
-``--arm``           location_translation (default) | flexible_continuous
+``--arm``           location_translation (default) | flexible_continuous |
+                    frengression. The first two use the existing FF code paths;
+                    frengression is dispatched to the official-package adapter.
 ``--conditioner``   mlp (default) | transformer. FLEXCONT ONLY -- passing it
                     with ``location_translation`` is an error, because that arm
                     always builds its own margin.
@@ -350,9 +361,13 @@ from frugal_flows.causal_flows import get_independent_quantiles, train_frugal_fl
 from frugal_flows.interventions import interventional_samples, tau_curve
 from prepare_morphomnist_exps import PRESETS, build_preset, inverse_logit, summarise
 
-ARMS = ("location_translation", "flexible_continuous")
+ARMS = ("location_translation", "flexible_continuous", "frengression")
 CONDITIONERS = ("mlp", "transformer")
-ARM_SHORT = {"location_translation": "loctrans", "flexible_continuous": "flexcont"}
+ARM_SHORT = {"location_translation": "loctrans", "flexible_continuous": "flexcont",
+             "frengression": "freng"}
+FRENGRESSION_Y_SCALINGS = ("global", "per_pixel", "none")
+FRENGRESSION_Z_SCALINGS = ("standardize", "none")
+FRENGRESSION_DEVICES = ("cpu", "mps")
 PRESET_SHORT = {
     "exp1_rct_homogeneous": "e1rct",
     "exp2_confounded_homogeneous": "e2conf",
@@ -370,7 +385,8 @@ ARM_CHAIN_LEN = {"location_translation": 6, "flexible_continuous": 5}
 # location_translation contributes one cell per preset, not two.
 SWEEP_CELLS = [("location_translation", "mlp"),
                ("flexible_continuous", "mlp"),
-               ("flexible_continuous", "transformer")]
+               ("flexible_continuous", "transformer"),
+               ("frengression", "mlp")]
 
 
 @dataclass
@@ -419,6 +435,22 @@ class Config:
     # ---- interventional read-out (flexible_continuous only) ----
     n_mc: int = 5000
     seed_mc: int = 0
+    # ---- Frengression adapter (used only when arm == "frengression") ----
+    # Prefixing these fields preserves every existing Frugal Flow default.
+    frengression_num_iters: int = 5000
+    frengression_lr: float = 1e-3
+    frengression_hidden_dim: int = 100
+    frengression_num_layer: int = 3
+    frengression_noise_dim: int = 64
+    frengression_tol: float = 0.0
+    frengression_y_scaling: str = "per_pixel"
+    frengression_z_scaling: str = "standardize"
+    frengression_y_sd_floor: float = 0.25
+    frengression_n_mc: int = 50000
+    frengression_crn: bool = True
+    frengression_device: str = "cpu"
+    frengression_threads: int = 4
+    frengression_print_every: int = 100
     # ---- experiment tracking (off by default; run folders stay authoritative) ----
     wandb: bool = False
     wandb_entity: str | None = None      # the team; None -> your default entity
@@ -445,6 +477,26 @@ class Config:
                 f"transformer conditioner needs nn_width ({self.nn_width}) "
                 f"divisible by nn_heads ({self.nn_heads})"
             )
+        if self.arm == "frengression":
+            if self.frengression_y_scaling not in FRENGRESSION_Y_SCALINGS:
+                raise ValueError(
+                    "frengression_y_scaling must be one of "
+                    f"{FRENGRESSION_Y_SCALINGS}, got {self.frengression_y_scaling!r}"
+                )
+            if self.frengression_z_scaling not in FRENGRESSION_Z_SCALINGS:
+                raise ValueError(
+                    "frengression_z_scaling must be one of "
+                    f"{FRENGRESSION_Z_SCALINGS}, got {self.frengression_z_scaling!r}"
+                )
+            if self.frengression_device not in FRENGRESSION_DEVICES:
+                raise ValueError(
+                    "frengression_device must be one of "
+                    f"{FRENGRESSION_DEVICES}, got {self.frengression_device!r}"
+                )
+            if self.frengression_n_mc < 2:
+                raise ValueError("frengression_n_mc must be at least 2")
+            if self.frengression_threads < 1:
+                raise ValueError("frengression_threads must be at least 1")
 
     @property
     def effective_radius(self) -> int:
@@ -467,6 +519,56 @@ def build_data(cfg: Config) -> dict:
     overrides.update({k: getattr(cfg, k) for k in GENERATOR_OVERRIDE_KEYS
                       if getattr(cfg, k) is not None})
     return build_preset(cfg.preset, **overrides)
+
+
+def _as_frengression_config(cfg: Config):
+    """Translate the shared config into the isolated Frengression adapter.
+
+    The import is deliberately lazy: existing Frugal Flow runs do not require
+    Torch or Frengression merely because the optional arm is available.
+    """
+    import exp_frengression_recovery as frengression
+
+    return frengression.Config(
+        preset=cfg.preset,
+        size=cfg.size,
+        radius=cfg.radius,
+        digit=cfg.digit,
+        n=cfg.n,
+        seed_data=cfg.seed_data,
+        base_shift=cfg.base_shift,
+        effect_mode=cfg.effect_mode,
+        a_cov=cfg.a_cov,
+        a_bright=cfg.a_bright,
+        a_inter=cfg.a_inter,
+        h_shape=cfg.h_shape,
+        g_shape=cfg.g_shape,
+        b_quant=cfg.b_quant,
+        ps_slope=cfg.ps_slope,
+        ps_intercept=cfg.ps_intercept,
+        effect=cfg.effect,
+        num_iters=cfg.frengression_num_iters,
+        lr=cfg.frengression_lr,
+        hidden_dim=cfg.frengression_hidden_dim,
+        num_layer=cfg.frengression_num_layer,
+        noise_dim=cfg.frengression_noise_dim,
+        tol=cfg.frengression_tol,
+        y_scaling=cfg.frengression_y_scaling,
+        z_scaling=cfg.frengression_z_scaling,
+        y_sd_floor=cfg.frengression_y_sd_floor,
+        seed_fit=cfg.seed_fit,
+        n_mc=cfg.frengression_n_mc,
+        seed_mc=cfg.seed_mc,
+        crn=cfg.frengression_crn,
+        device=cfg.frengression_device,
+        threads=cfg.frengression_threads,
+        print_every=cfg.frengression_print_every,
+        wandb=cfg.wandb,
+        wandb_entity=cfg.wandb_entity,
+        wandb_project=cfg.wandb_project,
+        wandb_group=cfg.wandb_group,
+        wandb_tags=cfg.wandb_tags,
+    )
 
 
 def fit_flow(cfg: Config, data: dict, timings: dict | None = None):
@@ -900,7 +1002,12 @@ def save_run(cfg: Config, data: dict, losses: dict, tau_hat: np.ndarray,
 def replot(run_dir: str):
     """Regenerate every plot for an existing run from its saved arrays."""
     with open(os.path.join(run_dir, "config.json")) as f:
-        cfg = Config(**json.load(f)["config"])
+        stored = json.load(f)["config"]
+    if "arm" not in stored:
+        import exp_frengression_recovery as frengression
+
+        return frengression.replot(run_dir)
+    cfg = Config(**stored)
     a = np.load(os.path.join(run_dir, "arrays.npz"))
     data = {k: a[k] for k in TRUTH_ARRAY_KEYS}
     data.update({"X": a["X"], "Y": a["Y"], "ITE": a["ITE"]})
@@ -998,7 +1105,14 @@ def _wandb_log(run, data: dict, losses: dict, metrics: dict, run_dir: str):
 
 
 def run_one(cfg: Config, runs_root: str = None) -> dict:
-    """Build, fit, score and archive one cell. Returns its metrics."""
+    """Build, fit, score and archive one estimator through one interface."""
+    if cfg.arm == "frengression":
+        import exp_frengression_recovery as frengression
+
+        return frengression.run_one(
+            _as_frengression_config(cfg), runs_root=runs_root or RUNS_ROOT
+        )
+
     run_id = run_id_for(cfg)
     run_dir = os.path.join(runs_root or RUNS_ROOT, run_id)
     write_config(cfg, run_id, run_dir)
@@ -1090,13 +1204,27 @@ def run_sweep(base: Config, skip_done: bool = False) -> list[dict]:
     """
     rows = []
     done = completed_cells() if skip_done else set()
+    frengression_done = set()
+    if skip_done:
+        import exp_frengression_recovery as frengression
+
+        frengression_done = frengression.completed_cells(RUNS_ROOT)
     cells = [(p, arm, cond) for p in PRESETS for arm, cond in SWEEP_CELLS]
     for i, (preset, arm, cond) in enumerate(cells, 1):
         print(f"\n=== [{i}/{len(cells)}] {preset} | {arm} | {cond} ===")
         try:
             cfg = Config(**{**asdict(base), "preset": preset, "arm": arm,
                             "conditioner": cond})
-            if tuple(asdict(cfg).get(k) for k in CELL_IDENTITY) in done:
+            if cfg.arm == "frengression":
+                import exp_frengression_recovery as frengression
+
+                already_done = (
+                    frengression.cell_identity(_as_frengression_config(cfg))
+                    in frengression_done
+                )
+            else:
+                already_done = tuple(asdict(cfg).get(k) for k in CELL_IDENTITY) in done
+            if already_done:
                 print("  already completed, skipping (--skip-done)")
                 continue
             rows.append(run_one(cfg))

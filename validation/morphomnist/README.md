@@ -26,11 +26,15 @@ python prepare_morphomnist_exps.py --preset exp4_covariate_cate
 # 3. fit one cell
 python exp_ate_recovery.py --preset exp4_covariate_cate --size 8
 
-# 4. a fast end-to-end cycle while developing (recovers nothing; proves plumbing)
+# 4. fit Frengression through the same Config/run_one experiment interface
+python exp_ate_recovery.py --preset exp4_covariate_cate --size 8 \
+    --arm frengression
+
+# 5. a fast FF end-to-end cycle while developing (recovers nothing; proves plumbing)
 python exp_ate_recovery.py --size 4 --n 400 --max-epochs 3 \
     --marginal-max-epochs 3 --n-mc 200
 
-# 5. look at what you have
+# 6. look at every FF and Frengression run in the shared archive
 python exp_ate_recovery.py --collect
 ```
 
@@ -51,45 +55,57 @@ exits non-zero on failure.
 | file | what it is |
 |---|---|
 | `prepare_morphomnist_exps.py` | the data generator. All simulation settings live here. |
-| `exp_ate_recovery.py` | fits a frugal flow to a generated dataset, scores it, archives the run. |
-| `exp_frengression_recovery.py` | fits the official Frengression implementation to the same datasets. |
+| `exp_ate_recovery.py` | public experiment interface for the existing FF arms plus Frengression. |
+| `exp_frengression_recovery.py` | isolated official-package Frengression adapter used by the public interface. |
 | `compare_frengression_ff.py` | fail-closed complete-grid comparison across estimators. |
-| `run_morphomnist_benchmarks.py` | one-command runner for the complete established set plus Frengression. |
 | `dataset.py` | MorphoMNIST loader (images + thickness/intensity morphometrics). |
 
 Other scripts in this directory are earlier single-purpose versions. Do not
 extend them for the Frengression comparison.
 
-## Unified reporting run
+## One experiment interface
 
 The adapter calls the official `frengression.Frengression.train_y`; it does not
 reimplement or extend the model. The frozen reporting profile is learning rate
 `1e-3`, width 100, three layers, noise dimension 64, and per-pixel outcome
 scaling with an SD floor.
 
-```bash
-cd validation/morphomnist
+The existing `Config` and `run_one` are now the only interface a caller needs.
+The original FF paths and defaults are unchanged; `arm="frengression"` lazily
+dispatches to the adapter, so ordinary FF use does not require importing Torch.
 
-# Fast plumbing check: E1-E6 x every method, at tiny non-reporting budgets
-python run_morphomnist_benchmarks.py --smoke \
-    --output-root runs/benchmark-smoke
+```python
+from exp_ate_recovery import Config, run_one
 
-# Reporting grid: E1-E6 x seeds 1-5 x every established method, plus Frengression
-# This is a long sequential run; use --resume after any interruption.
-python run_morphomnist_benchmarks.py \
-    --output-root runs/benchmark-reporting
-
-# Resume the same grid after interruption
-python run_morphomnist_benchmarks.py \
-    --output-root runs/benchmark-reporting --resume
+metrics = run_one(Config(
+    preset="exp4_covariate_cate",
+    arm="frengression",
+    seed_data=1,
+    seed_fit=1,
+))
 ```
 
-The default method set is exactly the established comparison matrix -- naive,
-IPW, OLS, AIPW, oracle IPW, FF location translation, FF flexible/MLP, and FF
-flexible/transformer -- with Frengression added as one extra benchmark. The
-driver only coordinates the existing implementations; it does not reimplement
-or alter them. It writes an ATE report across all nine methods and a separate
-`tau_u` report across FF flexible/MLP, FF flexible/transformer, and Frengression.
+The same applies at the command line. `--sweep` retains location translation,
+flexible/MLP, and flexible/transformer and adds Frengression as one extra cell
+for each E1-E6 preset:
+
+```bash
+# Fast complete-path check; tiny budgets are not reporting results.
+python exp_ate_recovery.py --sweep --size 4 --n 300 \
+    --max-epochs 2 --marginal-max-epochs 2 --n-mc 200 \
+    --frengression-num-iters 20 --frengression-n-mc 800 \
+    --frengression-threads 1
+
+# Reporting grid. Each seed changes both the dataset and fit initialisation.
+for seed in 1 2 3 4 5; do
+    python exp_ate_recovery.py --sweep --size 8 \
+        --seed-data "$seed" --seed-fit "$seed" --skip-done
+done
+```
+
+All four model families write below `runs/exp_ate_recovery/` and are returned by
+`exp_ate_recovery.collect()`. The classical baselines retain their existing
+`baselines.py` interface and output format.
 
 The comparison refuses missing seeds, duplicate cells, non-finite shared
 scores, and mismatched dataset designs. It accepts the existing baseline CSV

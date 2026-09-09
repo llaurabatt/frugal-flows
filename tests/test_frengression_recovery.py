@@ -41,7 +41,6 @@ import compare_frengression_ff as cmp_mod  # noqa: E402
 import exp_ate_recovery as ff  # noqa: E402
 import exp_frengression_recovery as fr  # noqa: E402
 import frengression_sweep_agent as sweep_agent  # noqa: E402
-import run_morphomnist_benchmarks as benchmark  # noqa: E402
 import torch  # noqa: E402
 from frugal_flows.interventions import tau_curve  # noqa: E402
 
@@ -541,20 +540,42 @@ def test_comparison_joins_and_averages(tmp_path):
     assert got[("ols", 2)] == pytest.approx(0.010)
 
 
-def test_default_benchmark_is_previous_matrix_plus_frengression():
-    assert benchmark.CLASSICAL_METHODS == baselines.METHODS
-    assert benchmark.FF_CELLS == {
-        "ff_loctrans": ("location_translation", "mlp"),
-        "ff_flexcont_mlp": ("flexible_continuous", "mlp"),
-        "ff_flexcont_transformer": ("flexible_continuous", "transformer"),
-    }
-    assert benchmark.ALL_METHODS == (
-        *baselines.METHODS, *benchmark.FF_CELLS, "frengression"
+def test_exp_ate_is_single_interface_for_existing_ff_and_frengression(
+        tmp_path, monkeypatch):
+    assert ff.SWEEP_CELLS == [
+        ("location_translation", "mlp"),
+        ("flexible_continuous", "mlp"),
+        ("flexible_continuous", "transformer"),
+        ("frengression", "mlp"),
+    ]
+    assert cmp_mod.DEFAULT_METHODS == (
+        *baselines.METHODS,
+        "ff_loctrans", "ff_flexcont_mlp", "ff_flexcont_transformer",
+        "frengression",
     )
-    assert benchmark.DISTRIBUTIONAL_METHODS == (
-        "ff_flexcont_mlp", "ff_flexcont_transformer", "frengression"
+
+    cfg = ff.Config(
+        arm="frengression", size=4, n=250, seed_data=7, seed_fit=8,
+        frengression_num_iters=20, frengression_n_mc=800,
+        frengression_threads=1,
     )
-    assert cmp_mod.DEFAULT_METHODS == benchmark.ALL_METHODS
+    adapted = ff._as_frengression_config(cfg)
+    assert isinstance(adapted, fr.Config)
+    assert (adapted.preset, adapted.size, adapted.n, adapted.seed_data,
+            adapted.seed_fit) == (cfg.preset, 4, 250, 7, 8)
+    assert (adapted.num_iters, adapted.n_mc, adapted.threads) == (20, 800, 1)
+
+    seen = {}
+
+    def fake_run_one(fr_cfg, runs_root):
+        seen.update(config=fr_cfg, runs_root=runs_root)
+        return {"method": "frengression", "status": "ok"}
+
+    monkeypatch.setattr(fr, "run_one", fake_run_one)
+    result = ff.run_one(cfg, runs_root=str(tmp_path))
+    assert result == {"method": "frengression", "status": "ok"}
+    assert isinstance(seen["config"], fr.Config)
+    assert seen["runs_root"] == str(tmp_path)
 
 
 def test_comparison_backfills_existing_tau_u_metrics(tmp_path):

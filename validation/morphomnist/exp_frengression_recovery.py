@@ -527,6 +527,8 @@ def evaluate(cfg: Config, y0: np.ndarray, y1: np.ndarray, data: dict,
     metrics = {
         "status": "ok",
         "method": "frengression",
+        "arm": "frengression",
+        "conditioner": "n/a",
         "preset": cfg.preset,
         "size": int(cfg.size),
         "radius": int(cfg.effective_radius),
@@ -1015,7 +1017,8 @@ def _run_one_inner(cfg: Config, run_id: str, run_dir: str, plots: bool, wb) -> d
             y0, y1, mc_diag = sample_margins(cfg, model, inputs)
             if len(y0) == 0:
                 metrics = {"run_id": run_id, "status": "failed_nonfinite",
-                           "method": "frengression", "preset": cfg.preset,
+                           "method": "frengression", "arm": "frengression",
+                           "conditioner": "n/a", "preset": cfg.preset,
                            "seed_data": cfg.seed_data, "seed_fit": cfg.seed_fit,
                            **fit_info, **mc_diag}
                 with open(os.path.join(run_dir, "metrics.json"), "w", encoding="utf-8") as f:

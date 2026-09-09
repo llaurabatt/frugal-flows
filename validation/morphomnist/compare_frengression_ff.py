@@ -429,8 +429,9 @@ def plot_maps(rows: list[dict], freng_root: str, ff_root: str, out_dir: str, siz
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     runs = os.path.join(SCRIPT_DIR, "runs")
-    parser.add_argument("--frengression-root", default=os.path.join(runs, "frengression"))
-    parser.add_argument("--ff-root", default=os.path.join(runs, "exp_ate_recovery"))
+    experiment_root = os.path.join(runs, "exp_ate_recovery")
+    parser.add_argument("--frengression-root", default=experiment_root)
+    parser.add_argument("--ff-root", default=experiment_root)
     parser.add_argument("--baselines-root", default=os.path.join(runs, "baselines"))
     parser.add_argument("--out", default=os.path.join(runs, "comparison"))
     parser.add_argument("--metric", default="ate_mae", choices=SCIENTIFIC_SCORE_KEYS)
