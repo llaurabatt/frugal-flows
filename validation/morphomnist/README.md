@@ -87,25 +87,60 @@ metrics = run_one(Config(
 
 The same applies at the command line. `--sweep` retains location translation,
 flexible/MLP, and flexible/transformer and adds Frengression as one extra cell
-for each E1-E6 preset:
+for each E1-E6 preset.
+
+### Fast complete-path check
 
 ```bash
-# Fast complete-path check; tiny budgets are not reporting results.
+# Tiny budgets prove the plumbing; these are not reporting results.
 python exp_ate_recovery.py --sweep --size 4 --n 300 \
     --max-epochs 2 --marginal-max-epochs 2 --n-mc 200 \
     --frengression-num-iters 20 --frengression-n-mc 800 \
     --frengression-threads 1
+```
 
-# Reporting grid. Each seed changes both the dataset and fit initialisation.
+### Full reporting workflow
+
+This is the complete run-then-compare sequence. It uses E1-E6 at K=64 and five
+reporting seeds. Each seed changes both the generated dataset and the learned
+model's initialisation. The learned-model sweep is long and sequential;
+`--skip-done` makes the loop resumable.
+
+```bash
+# 0. Check both implementations before starting the reporting grid.
+python exp_ate_recovery.py --selftest
+python exp_frengression_recovery.py --selftest
+
+# 1. Existing classical estimators: naive, IPW, OLS, AIPW and oracle IPW.
+python baselines.py --all --size 8 --seeds 1 2 3 4 5
+
+# 2. E1-E6 x FF location translation, FF MLP, FF transformer and Frengression.
 for seed in 1 2 3 4 5; do
     python exp_ate_recovery.py --sweep --size 8 \
         --seed-data "$seed" --seed-fit "$seed" --skip-done
 done
+
+# 3. Optional inspection of every completed learned-model run.
+python exp_ate_recovery.py --collect
+
+# 4. ATE comparison across all nine methods, with seed-averaged ATE maps.
+python compare_frengression_ff.py \
+    --size 8 --seeds 1 2 3 4 5 \
+    --out runs/comparison-ate
+
+# 5. Distributional comparison for the three models that estimate tau(u).
+python compare_frengression_ff.py \
+    --metric tau_u_rmse_vs_marginal \
+    --methods ff_flexcont_mlp ff_flexcont_transformer frengression \
+    --size 8 --seeds 1 2 3 4 5 \
+    --out runs/comparison-tau --no-plots
 ```
 
-All four model families write below `runs/exp_ate_recovery/` and are returned by
-`exp_ate_recovery.collect()`. The classical baselines retain their existing
-`baselines.py` interface and output format.
+The learned models write below `runs/exp_ate_recovery/`; the classical methods
+write below `runs/baselines/`. The final commands create:
+
+- `runs/comparison-ate/{runs.csv,summary.csv,summary.md,ate_maps_*.png}`
+- `runs/comparison-tau/{runs.csv,summary.csv,summary.md}`
 
 The comparison refuses missing seeds, duplicate cells, non-finite shared
 scores, and mismatched dataset designs. It accepts the existing baseline CSV
@@ -392,7 +427,7 @@ advantages whichever arm it happens to suit.
 
 ```bash
 python exp_ate_recovery.py --preset exp4_covariate_cate     # one cell
-python exp_ate_recovery.py --sweep --size 8                 # 6 presets × 3 arms = 18 cells
+python exp_ate_recovery.py --sweep --size 8                 # 6 presets × 4 configurations = 24 cells
 python exp_ate_recovery.py --sweep --skip-done              # resume an interrupted sweep
 python exp_ate_recovery.py --collect                        # table of completed runs
 python exp_ate_recovery.py --replot runs/exp_ate_recovery/<run-id>
