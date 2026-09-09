@@ -58,9 +58,10 @@ ARM_LABEL = {
 }
 DEFAULT_METHODS = (
     "naive", "ipw", "ols", "aipw", "oracle_ipw",
-    "ff_loctrans", "ff_flexcont_mlp", "frengression",
+    "ff_loctrans", "ff_flexcont_mlp", "ff_flexcont_transformer",
+    "frengression",
 )
-METHOD_ORDER = DEFAULT_METHODS + ("ff_flexcont_transformer",)
+METHOD_ORDER = DEFAULT_METHODS
 
 
 def _read_json(path: str) -> dict:
@@ -394,16 +395,22 @@ def plot_maps(rows: list[dict], freng_root: str, ff_root: str, out_dir: str, siz
         return (np.mean(maps, axis=0) if maps else None), truth
 
     for preset in sorted({row["preset"] for row in rows}):
-        freng, truth = mean_map("frengression", preset, freng_root)
-        flow, flow_truth = mean_map("ff_flexcont_mlp", preset, ff_root)
-        truth = truth if truth is not None else flow_truth
+        estimates = []
+        truth = None
+        for method, label, root in (
+            ("ff_loctrans", "FF location translation", ff_root),
+            ("ff_flexcont_mlp", "FF flexible / MLP", ff_root),
+            ("ff_flexcont_transformer", "FF flexible / transformer", ff_root),
+            ("frengression", "Frengression", freng_root),
+        ):
+            estimate, method_truth = mean_map(method, preset, root)
+            if truth is None and method_truth is not None:
+                truth = method_truth
+            if estimate is not None:
+                estimates.append((estimate, label))
         if truth is None:
             continue
-        panels = [(truth, "true ATE")]
-        if flow is not None:
-            panels.append((flow, "frugal flow"))
-        if freng is not None:
-            panels.append((freng, "frengression"))
+        panels = [(truth, "true ATE"), *estimates]
         figure, axes = plt.subplots(1, len(panels), figsize=(3.7 * len(panels), 3.4))
         axes = np.atleast_1d(axes)
         limit = max(np.abs(image).max() for image, _ in panels) or 1.0

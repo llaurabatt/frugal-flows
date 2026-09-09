@@ -41,6 +41,7 @@ import compare_frengression_ff as cmp_mod  # noqa: E402
 import exp_ate_recovery as ff  # noqa: E402
 import exp_frengression_recovery as fr  # noqa: E402
 import frengression_sweep_agent as sweep_agent  # noqa: E402
+import run_morphomnist_benchmarks as benchmark  # noqa: E402
 import torch  # noqa: E402
 from frugal_flows.interventions import tau_curve  # noqa: E402
 
@@ -538,6 +539,22 @@ def test_comparison_joins_and_averages(tmp_path):
     assert got[("frengression", 2)] == pytest.approx(0.03)
     assert got[("ff_flexcont_mlp", 2)] == pytest.approx(0.04)
     assert got[("ols", 2)] == pytest.approx(0.010)
+
+
+def test_default_benchmark_is_previous_matrix_plus_frengression():
+    assert benchmark.CLASSICAL_METHODS == baselines.METHODS
+    assert benchmark.FF_CELLS == {
+        "ff_loctrans": ("location_translation", "mlp"),
+        "ff_flexcont_mlp": ("flexible_continuous", "mlp"),
+        "ff_flexcont_transformer": ("flexible_continuous", "transformer"),
+    }
+    assert benchmark.ALL_METHODS == (
+        *baselines.METHODS, *benchmark.FF_CELLS, "frengression"
+    )
+    assert benchmark.DISTRIBUTIONAL_METHODS == (
+        "ff_flexcont_mlp", "ff_flexcont_transformer", "frengression"
+    )
+    assert cmp_mod.DEFAULT_METHODS == benchmark.ALL_METHODS
 
 
 def test_comparison_backfills_existing_tau_u_metrics(tmp_path):

@@ -238,21 +238,20 @@ little room above it to win. The Stage 0 reframing should survive, with the flow
 landing nearer parity — which is a stronger sentence for the paper anyway
 ("competitive after tuning, plus τ(u)" beats "2–4× worse at defaults, plus τ(u)").
 
-### Stage 2 — main results, at the Stage 1b settings (~7–8 h, overnight)
+### Stage 2 — main results, at the Stage 1b settings (overnight; hardware-dependent)
 
 Vary **both** seeds together, so each replicate is a fresh dataset *and* a fresh
 initialisation and the error bars cover total variance.
 
 ```bash
-for s in 1 2 3 4 5; do for p in exp1_rct_homogeneous exp2_confounded_homogeneous exp3_confounded_heterogeneous exp4_covariate_cate exp5_quantile_effect exp6_spatial_cate; do python exp_ate_recovery.py --preset $p --arm flexible_continuous --conditioner mlp --size 8 --seed-data $s --seed-fit $s; done; done
+python run_morphomnist_benchmarks.py \
+    --output-root runs/benchmark-reporting
 ```
 
-```bash
-for s in 1 2 3 4 5; do for p in exp1_rct_homogeneous exp2_confounded_homogeneous exp3_confounded_heterogeneous exp4_covariate_cate exp5_quantile_effect exp6_spatial_cate; do python exp_ate_recovery.py --preset $p --arm location_translation --size 8 --seed-data $s --seed-fit $s; done; done
-```
-
-30 runs each: mlp ≈ 70 min, loctrans ≈ 100 min. Add the transformer loop with
-whatever Stage 1 settles on (≈ 5 h).
+This keeps location translation, flexible/MLP, and flexible/transformer in the
+same default reporting stage, retains all five classical baselines, and adds
+Frengression as the single new benchmark. Resume an interrupted grid by adding
+`--resume` to the same command.
 
 ### Stage 3 — ablations (appendix, 3 seeds)
 
@@ -281,8 +280,9 @@ for s in 1 2 3; do for k in 4 8 16; do python exp_ate_recovery.py --preset exp4_
 ### Main paper
 
 **Table 1 — ATE recovery.** Rows = E1–E6, columns = {naive, IPW, OLS, AIPW,
-FF-loctrans, FF-flexcont}, cells = `ate_mae` mean ± sd over 5 seeds, with the
-oracle-IPW row as the floor. Framed as *competitiveness*, not victory.
+FF-loctrans, FF-flexcont/MLP, FF-flexcont/transformer, Frengression}, cells =
+`ate_mae` mean ± sd over 5 seeds, with oracle IPW included as the sampling-noise
+floor. Framed as *competitiveness*, not victory.
 
 **Figure 1 — what only the flow provides.** Two panels:
 - (a) true ATE map / recovered / error, one preset (E4 or E6), showing the

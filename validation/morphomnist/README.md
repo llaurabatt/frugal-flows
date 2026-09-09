@@ -12,6 +12,9 @@ directory.
 ## Quick start
 
 ```bash
+# From the repository root: one environment contains both JAX and PyTorch stacks.
+micromamba create -f environment-frengression.yaml
+micromamba activate frugal-flows-frengression
 cd validation/morphomnist
 
 # 1. does everything still work? (~2 min, writes nothing permanent)
@@ -31,13 +34,11 @@ python exp_ate_recovery.py --size 4 --n 400 --max-epochs 3 \
 python exp_ate_recovery.py --collect
 ```
 
-For the Frengression comparator, create the isolated environment at repository
-root and run its matching smoke test:
+The two runners also retain their focused smoke tests:
 
 ```bash
-micromamba create -f environment-frengression.yaml
-micromamba run -n frugal-flows-frengression \
-    python validation/morphomnist/exp_frengression_recovery.py --selftest
+python exp_ate_recovery.py --selftest
+python exp_frengression_recovery.py --selftest
 ```
 
 If you change a runner, run its `--selftest` before trusting a result. Each
@@ -53,12 +54,13 @@ exits non-zero on failure.
 | `exp_ate_recovery.py` | fits a frugal flow to a generated dataset, scores it, archives the run. |
 | `exp_frengression_recovery.py` | fits the official Frengression implementation to the same datasets. |
 | `compare_frengression_ff.py` | fail-closed complete-grid comparison across estimators. |
+| `run_morphomnist_benchmarks.py` | one-command runner for the complete established set plus Frengression. |
 | `dataset.py` | MorphoMNIST loader (images + thickness/intensity morphometrics). |
 
 Other scripts in this directory are earlier single-purpose versions. Do not
 extend them for the Frengression comparison.
 
-## Frengression reporting run
+## Unified reporting run
 
 The adapter calls the official `frengression.Frengression.train_y`; it does not
 reimplement or extend the model. The frozen reporting profile is learning rate
@@ -68,18 +70,26 @@ scaling with an SD floor.
 ```bash
 cd validation/morphomnist
 
-# one cell
-python exp_frengression_recovery.py \
-    --preset exp4_covariate_cate --size 8 --seed-data 1 --seed-fit 1
+# Fast plumbing check: E1-E6 x every method, at tiny non-reporting budgets
+python run_morphomnist_benchmarks.py --smoke \
+    --output-root runs/benchmark-smoke
 
-# E1-E6 x reporting seeds 1-5; safe to resume
-python exp_frengression_recovery.py --sweep --size 8 \
-    --seeds 1 2 3 4 5 --skip-done
+# Reporting grid: E1-E6 x seeds 1-5 x every established method, plus Frengression
+# This is a long sequential run; use --resume after any interruption.
+python run_morphomnist_benchmarks.py \
+    --output-root runs/benchmark-reporting
 
-# matching classical baselines and fail-closed comparison
-python baselines.py --all --size 8 --seeds 1 2 3 4 5
-python compare_frengression_ff.py --size 8 --seeds 1 2 3 4 5
+# Resume the same grid after interruption
+python run_morphomnist_benchmarks.py \
+    --output-root runs/benchmark-reporting --resume
 ```
+
+The default method set is exactly the established comparison matrix -- naive,
+IPW, OLS, AIPW, oracle IPW, FF location translation, FF flexible/MLP, and FF
+flexible/transformer -- with Frengression added as one extra benchmark. The
+driver only coordinates the existing implementations; it does not reimplement
+or alter them. It writes an ATE report across all nine methods and a separate
+`tau_u` report across FF flexible/MLP, FF flexible/transformer, and Frengression.
 
 The comparison refuses missing seeds, duplicate cells, non-finite shared
 scores, and mismatched dataset designs. It accepts the existing baseline CSV
@@ -391,8 +401,9 @@ Each run writes a self-contained folder under `runs/exp_ate_recovery/`:
 ```
 
 `config.json` and `log.txt` appear at launch, so a folder holding only those two
-is still training (or died). Only `arrays.npz` is gitignored — completed run
-folders can be committed at negligible size.
+is still training (or died). The whole `runs/` directory is gitignored. To share
+a result, copy the selected `summary.md`/`summary.csv` to an explicitly tracked
+results location rather than accidentally committing model archives.
 
 ---
 
