@@ -1,0 +1,58 @@
+# Validation-only environment for the frengression comparison on MorphoMNIST.
+#
+# Separate from environment.yaml because the two stacks do not coexist there:
+# the frengression baseline is PyTorch, the frugal flow is JAX/FlowJAX, and no
+# existing env holds both. Nothing here is added to the core package's
+# dependencies -- `frengression` and `engression` are used only by
+# validation/morphomnist/exp_frengression_recovery.py.
+#
+# Everything after python comes from pip rather than conda-forge on purpose:
+# conda's numpy/scikit-learn pull `llvm-openmp` while the torch wheel bundles
+# its own `libomp`, and loading both aborts the interpreter with
+# "OMP: Error #15: Initializing libomp.dylib, but found libomp.dylib already
+# initialized". One pip-provided OpenMP avoids the clash outright, rather than
+# papering over it with KMP_DUPLICATE_LIB_OK.
+#
+#   micromamba create -f environment-frengression.yaml
+#   micromamba run -n frugal-flows-frengression python -c "import jax, torch"
+#
+# R/rpy2 are deliberately absent: neither the frengression runner nor
+# exp_ate_recovery.py needs causl.
+
+name: frugal-flows-frengression
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13
+  - pip
+  - pip:
+    # --- the frugal-flows stack, pinned to what multi-y was developed against
+    - jax==0.9.2
+    - jaxlib==0.9.2
+    - flowjax==19.1.0
+    - paramax==0.0.5
+    - equinox==0.13.7
+    # lineax>=0.1.1 requires jax>=0.10; 0.1.0 declares jax>=0.6.1 and resolves.
+    - lineax==0.1.0
+    - optax
+    - numpy
+    - scipy
+    - scikit-learn
+    - pandas
+    - matplotlib
+    - tqdm
+    - wandb
+    # --- the frengression stack
+    - torch
+    - torchvision
+    - engression==0.1.15
+    # Not on PyPI: pinned to the commit the adapter was written against.
+    - frengression @ git+https://github.com/linyingyang/frengression_pkg@8a09055b03c496090d3acb496f9d1bbc9657f191
+    # --- tooling: notebook execution, tests, lint
+    - ipykernel
+    - nbclient
+    - nbconvert
+    - nbformat
+    - pytest
+    - ruff
+    - --editable ./

@@ -12,6 +12,9 @@ directory.
 ## Quick start
 
 ```bash
+# From the repository root: one environment contains both JAX and PyTorch stacks.
+micromamba create -f environment-frengression.yaml
+micromamba activate frugal-flows-frengression
 cd validation/morphomnist
 
 # 1. does everything still work? (~2 min, writes nothing permanent)
@@ -23,16 +26,27 @@ python prepare_morphomnist_exps.py --preset exp4_covariate_cate
 # 3. fit one cell
 python exp_ate_recovery.py --preset exp4_covariate_cate --size 8
 
-# 4. a fast end-to-end cycle while developing (recovers nothing; proves plumbing)
+# 4. fit Frengression through the same Config/run_one experiment interface
+python exp_ate_recovery.py --preset exp4_covariate_cate --size 8 \
+    --arm frengression
+
+# 5. a fast FF end-to-end cycle while developing (recovers nothing; proves plumbing)
 python exp_ate_recovery.py --size 4 --n 400 --max-epochs 3 \
     --marginal-max-epochs 3 --n-mc 200
 
-# 5. look at what you have
+# 6. look at every FF and Frengression run in the shared archive
 python exp_ate_recovery.py --collect
 ```
 
-If you change anything in either script, run `--selftest` before trusting a
-result. It asserts 106 invariants and exits non-zero on failure.
+The two runners also retain their focused smoke tests:
+
+```bash
+python exp_ate_recovery.py --selftest
+python exp_frengression_recovery.py --selftest
+```
+
+If you change a runner, run its `--selftest` before trusting a result. Each
+exits non-zero on failure.
 
 ---
 
@@ -41,11 +55,102 @@ result. It asserts 106 invariants and exits non-zero on failure.
 | file | what it is |
 |---|---|
 | `prepare_morphomnist_exps.py` | the data generator. All simulation settings live here. |
-| `exp_ate_recovery.py` | fits a frugal flow to a generated dataset, scores it, archives the run. |
+| `exp_ate_recovery.py` | public experiment interface for the existing FF arms plus Frengression. |
+| `exp_frengression_recovery.py` | isolated official-package Frengression adapter used by the public interface. |
+| `compare_frengression_ff.py` | fail-closed complete-grid comparison across estimators. |
 | `dataset.py` | MorphoMNIST loader (images + thickness/intensity morphometrics). |
 
-Other scripts in this directory are earlier single-purpose versions, superseded by
-these two. Don't extend them.
+Other scripts in this directory are earlier single-purpose versions. Do not
+extend them for the Frengression comparison.
+
+## One experiment interface
+
+The adapter calls the official `frengression.Frengression.train_y`; it does not
+reimplement or extend the model. The frozen reporting profile is learning rate
+`1e-3`, width 100, three layers, noise dimension 64, and per-pixel outcome
+scaling with an SD floor.
+
+The existing `Config` and `run_one` are now the only interface a caller needs.
+The original FF paths and defaults are unchanged; `arm="frengression"` lazily
+dispatches to the adapter, so ordinary FF use does not require importing Torch.
+
+```python
+from exp_ate_recovery import Config, run_one
+
+metrics = run_one(Config(
+    preset="exp4_covariate_cate",
+    arm="frengression",
+    seed_data=1,
+    seed_fit=1,
+))
+```
+
+The same applies at the command line. `--sweep` retains location translation,
+flexible/MLP, and flexible/transformer and adds Frengression as one extra cell
+for each E1-E6 preset.
+
+### Fast complete-path check
+
+```bash
+# Tiny budgets prove the plumbing; these are not reporting results.
+python exp_ate_recovery.py --sweep --size 4 --n 300 \
+    --max-epochs 2 --marginal-max-epochs 2 --n-mc 200 \
+    --frengression-num-iters 20 --frengression-n-mc 800 \
+    --frengression-threads 1
+```
+
+### Full reporting workflow
+
+This is the complete run-then-compare sequence. It uses E1-E6 at K=64 and five
+reporting seeds. Each seed changes both the generated dataset and the learned
+model's initialisation. The learned-model sweep is long and sequential;
+`--skip-done` makes the loop resumable.
+
+```bash
+# 0. Check both implementations before starting the reporting grid.
+python exp_ate_recovery.py --selftest
+python exp_frengression_recovery.py --selftest
+
+# 1. Existing classical estimators: naive, IPW, OLS, AIPW and oracle IPW.
+python baselines.py --all --size 8 --seeds 1 2 3 4 5
+
+# 2. E1-E6 x FF location translation, FF MLP, FF transformer and Frengression.
+for seed in 1 2 3 4 5; do
+    python exp_ate_recovery.py --sweep --size 8 \
+        --seed-data "$seed" --seed-fit "$seed" --skip-done
+done
+
+# 3. Optional inspection of every completed learned-model run.
+python exp_ate_recovery.py --collect
+
+# 4. ATE comparison across all nine methods, with seed-averaged ATE maps.
+python compare_frengression_ff.py \
+    --size 8 --seeds 1 2 3 4 5 \
+    --out runs/comparison-ate
+
+# 5. Distributional comparison for the three models that estimate tau(u).
+python compare_frengression_ff.py \
+    --metric tau_u_rmse_vs_marginal \
+    --methods ff_flexcont_mlp ff_flexcont_transformer frengression \
+    --size 8 --seeds 1 2 3 4 5 \
+    --out runs/comparison-tau --no-plots
+```
+
+The learned models write below `runs/exp_ate_recovery/`; the classical methods
+write below `runs/baselines/`. The final commands create:
+
+- `runs/comparison-ate/{runs.csv,summary.csv,summary.md,ate_maps_*.png}`
+- `runs/comparison-tau/{runs.csv,summary.csv,summary.md}`
+
+The comparison refuses missing seeds, duplicate cells, non-finite shared
+scores, and mismatched dataset designs. It accepts the existing baseline CSV
+format without changing `baselines.py`; size is recovered from `n_pixels`, with
+the existing default radius and digit used for the comparison identity.
+
+W&B remains optional. For a direct run add `--wandb`; for the frozen reporting
+grid use `sweeps/frengression_report.yaml` with
+`frengression_sweep_agent.py`. Keep reporting seeds 1-5 separate from tuning
+seeds 101+.
 
 ---
 
@@ -322,7 +427,7 @@ advantages whichever arm it happens to suit.
 
 ```bash
 python exp_ate_recovery.py --preset exp4_covariate_cate     # one cell
-python exp_ate_recovery.py --sweep --size 8                 # 6 presets × 3 arms = 18 cells
+python exp_ate_recovery.py --sweep --size 8                 # 6 presets × 4 configurations = 24 cells
 python exp_ate_recovery.py --sweep --skip-done              # resume an interrupted sweep
 python exp_ate_recovery.py --collect                        # table of completed runs
 python exp_ate_recovery.py --replot runs/exp_ate_recovery/<run-id>
@@ -347,8 +452,9 @@ Each run writes a self-contained folder under `runs/exp_ate_recovery/`:
 ```
 
 `config.json` and `log.txt` appear at launch, so a folder holding only those two
-is still training (or died). Only `arrays.npz` is gitignored — completed run
-folders can be committed at negligible size.
+is still training (or died). The whole `runs/` directory is gitignored. To share
+a result, copy the selected `summary.md`/`summary.csv` to an explicitly tracked
+results location rather than accidentally committing model archives.
 
 ---
 
@@ -361,6 +467,7 @@ folders can be committed at negligible size.
 | `ate_mae_off_support` | …restricted to pixels whose true effect is **exactly zero** |
 | `ate_corr` | spatial correlation — is the map in the right *place*? |
 | `att_mae` / `atc_mae` | same score against ATT and ATC |
+| `tau_u_rmse_vs_marginal` | existing 40-bin `tau_curve` RMSE against `TAU_MARGINAL` |
 | `design_oracle_ipw_bias_maxabs` | the design's sampling-noise floor |
 | `mc_frac_dropped` | fraction of non-finite interventional draws discarded |
 
