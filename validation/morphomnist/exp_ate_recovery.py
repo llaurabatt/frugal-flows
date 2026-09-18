@@ -357,12 +357,33 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 import paramax
-from frugal_flows.causal_flows import get_independent_quantiles, train_frugal_flow
+from flowjax.bijections import (
+    Invert,
+    MaskedAutoregressive,
+    RationalQuadraticSpline,
+    Scan,
+    Stack,
+    Tanh,
+)
+from flowjax.distributions import Transformed, Uniform
+from flowjax.flows import _add_default_permute
+from flowjax.train import fit_to_data
+from frugal_flows.causal_flows import (
+    _build_flexible_margin,
+    get_independent_quantiles,
+    train_frugal_flow,
+)
 from frugal_flows.interventions import interventional_samples, tau_curve
 from prepare_morphomnist_exps import PRESETS, build_preset, inverse_logit, summarise
 
 ARMS = ("location_translation", "flexible_continuous", "frengression")
 CONDITIONERS = ("mlp", "transformer")
+# What is fitted. "ff" is the frugal flow (margin + copula on the covariate ranks);
+# "margin" is the treatment-conditioned image margin alone, no copula, no stage-1
+# quantiles; "margin_sep" is one unconditional margin per treatment arm, effect read
+# as the difference of their paired samples. The margin models exist as baselines
+# for the ff fits and are only defined for the flexible_continuous arm.
+MODELS = ("ff", "margin", "margin_sep")
 ARM_SHORT = {"location_translation": "loctrans", "flexible_continuous": "flexcont",
              "frengression": "freng"}
 FRENGRESSION_Y_SCALINGS = ("global", "per_pixel", "none")
@@ -415,6 +436,7 @@ class Config:
     effect: str | None = None
     # ---- model / training ----
     arm: str = "location_translation"
+    model: str = "ff"          # ff | margin | margin_sep (see MODELS)
     conditioner: str = "mlp"   # flexible_continuous margin engine
     nn_heads: int = 4          # transformer conditioner only; must divide nn_width
     ate_init: float = 0.5      # location_translation only
@@ -424,6 +446,18 @@ class Config:
                          # transformer conditioners at IDENTICAL capacity and the
                          # transformer cells need no special-casing
     flow_layers: int = 4
+    # ---- copula: the u_z | R conditional that carries the confounding ----
+    # Separate knobs from the margin's, because the two do different jobs and
+    # need different capacity: the margin fits K pixel conditionals, the copula
+    # must represent one global function of all K ranks (thickness | image).
+    # Until these existed the copula ALWAYS ran at the library defaults --
+    # fit_flow routed nn_width/flow_layers/rqs_knots to the causal margin only,
+    # so no sweep had ever touched it. Defaults equal the library's, so every
+    # existing archive is reproduced unchanged.
+    copula_nn_width: int = 50
+    copula_flow_layers: int = 4
+    copula_rqs_knots: int = 8
+    copula_nn_depth: int = 1
     learning_rate: float = 1e-2
     max_epochs: int = 100
     max_patience: int = 30
@@ -466,6 +500,13 @@ class Config:
         if self.conditioner not in CONDITIONERS:
             raise ValueError(
                 f"unknown conditioner {self.conditioner!r}; choose from {CONDITIONERS}"
+            )
+        if self.model not in MODELS:
+            raise ValueError(f"unknown model {self.model!r}; choose from {MODELS}")
+        if self.model != "ff" and self.arm != "flexible_continuous":
+            raise ValueError(
+                f"model {self.model!r} is a margin-only baseline and needs "
+                "arm='flexible_continuous'"
             )
         if self.conditioner != "mlp" and self.arm != "flexible_continuous":
             raise ValueError(
@@ -571,6 +612,89 @@ def _as_frengression_config(cfg: Config):
     )
 
 
+def _uncond_margin_bijection(key, dim, RQS_knots, nn_depth, nn_width, flow_layers):
+    """``masked_autoregressive_bijection`` with no conditioning input.
+
+    The library wrapper reads ``condition.shape[1]`` unconditionally, so it cannot
+    build an unconditional margin; this mirrors it line for line with the
+    treatment input removed: same spline, same layer count, same permutations,
+    same inversion.
+    """
+    transformer = RationalQuadraticSpline(knots=RQS_knots, interval=1)
+
+    def make_layer(k):
+        bk, pk = jr.split(k)
+        b = MaskedAutoregressive(key=bk, transformer=transformer, dim=dim, cond_dim=None,
+                                 nn_width=nn_width, nn_depth=nn_depth)
+        return _add_default_permute(b, dim, pk)
+
+    return Invert(Scan(equinox.filter_vmap(make_layer)(jr.split(key, flow_layers))))
+
+
+def _margin_dist(cfg: Config, key, K: int, condition):
+    """The image margin as a distribution on its own: the same spline blocks the
+    frugal flow puts after the copula (built by ``_build_flexible_margin`` with the
+    same ``causal_model_args``), on a uniform base, followed by the inverse tanh to
+    logit space. ``condition=None`` gives the unconditional version used by
+    ``margin_sep``."""
+    if condition is None:
+        margin = _uncond_margin_bijection(key, K, cfg.rqs_knots, cfg.nn_depth,
+                                          cfg.nn_width, cfg.flow_layers)
+    else:
+        args = {"RQS_knots": cfg.rqs_knots, "nn_depth": cfg.nn_depth,
+                "nn_width": cfg.nn_width, "flow_layers": cfg.flow_layers,
+                "conditioner": cfg.conditioner}
+        if cfg.conditioner == "transformer":
+            args["nn_heads"] = cfg.nn_heads
+        margin = _build_flexible_margin(key=key, dim=K, condition=condition,
+                                        causal_model_args=args)
+    dist = Transformed(Uniform(-jnp.ones(K), jnp.ones(K)), margin)
+    return Transformed(dist, Stack([Invert(Tanh(()))] * K)).merge_transforms()
+
+
+def _fit_margin_only(cfg: Config, data: dict, timings: dict | None = None):
+    """Fit the margin baseline(s): no stage-1 quantiles, no copula.
+
+    ``margin``: one flow ``p(y | t)`` on all images, treatment as a conditioner
+    input. ``margin_sep``: one unconditional flow per treatment arm, fitted on
+    that arm's images only; the pair is returned as a tuple. Both use the same
+    ``fit_to_data`` call the frugal flow uses (same split rule, patience,
+    best-validation checkpoint), so the training diagnostics are comparable.
+    Returns ``(flow_or_pair, losses, None)`` -- ``u_z`` is None because nothing
+    was fitted to the covariates.
+    """
+    key = jr.PRNGKey(cfg.seed_fit)
+    key, subkey = jr.split(key)            # consumed where stage 1 would have used it
+    if timings is not None:
+        timings["marginal_s"] = 0.0
+    Y = jnp.asarray(data["Y"])
+    T = jnp.asarray(data["X"])
+    K = int(Y.shape[1])
+    fit_kw = dict(learning_rate=cfg.learning_rate, max_epochs=cfg.max_epochs,
+                  max_patience=cfg.max_patience, batch_size=cfg.batch_size)
+    _t = time.monotonic()
+    if cfg.model == "margin":
+        key, bkey, fkey = jr.split(key, 3)
+        flow, losses = fit_to_data(key=fkey, dist=_margin_dist(cfg, bkey, K, T),
+                                   data=(Y, T), **fit_kw)
+        losses = {"train": np.asarray(losses["train"]), "val": np.asarray(losses["val"])}
+    else:                                   # margin_sep
+        flows, losses = [], {}
+        arms = np.asarray(data["X"])[:, 0]
+        for t in (0, 1):
+            key, bkey, fkey = jr.split(key, 3)
+            f, l = fit_to_data(key=fkey, dist=_margin_dist(cfg, bkey, K, None),
+                               data=Y[arms == t], **fit_kw)
+            flows.append(f)
+            sfx = "" if t == 0 else "_arm1"       # arm 0 fills the standard keys
+            losses[f"train{sfx}"] = np.asarray(l["train"])
+            losses[f"val{sfx}"] = np.asarray(l["val"])
+        flow = tuple(flows)
+    if timings is not None:
+        timings["flow_fit_s"] = time.monotonic() - _t
+    return flow, losses, None
+
+
 def fit_flow(cfg: Config, data: dict, timings: dict | None = None):
     """Stage-1 marginal quantiles for Z, then the frugal flow.
 
@@ -579,6 +703,8 @@ def fit_flow(cfg: Config, data: dict, timings: dict | None = None):
     so an import would break silently if either moved. It also has to differ
     here, to carry the discrete digit block when ``--digit`` is unset.
     """
+    if cfg.model != "ff":
+        return _fit_margin_only(cfg, data, timings)
     key = jr.PRNGKey(cfg.seed_fit)
     key, subkey = jr.split(key)
 
@@ -631,6 +757,13 @@ def fit_flow(cfg: Config, data: dict, timings: dict | None = None):
         max_patience=cfg.max_patience,
         batch_size=cfg.batch_size,
         causal_model_args=causal_model_args,
+        # copula capacity (the dispatcher forwards these to every arm's
+        # masked_autoregressive_flow_first_uniform); the margin's capacity
+        # travels separately inside causal_model_args above.
+        nn_width=cfg.copula_nn_width,
+        flow_layers=cfg.copula_flow_layers,
+        RQS_knots=cfg.copula_rqs_knots,
+        nn_depth=cfg.copula_nn_depth,
     )
     if timings is not None:
         timings["flow_fit_s"] = time.monotonic() - _t
@@ -653,13 +786,22 @@ def _tau_hat_flexible_continuous(cfg: Config, flow, data: dict, K: int):
     pixel 0 only.
     """
     t0 = time.monotonic()
-    readout = interventional_samples(
-        jr.key(cfg.seed_mc),
-        flow,
-        cond_dim=int(np.asarray(data["X"]).shape[1]),
-        n_mc=cfg.n_mc,
-        dim_y=K,
-    )
+    if isinstance(flow, tuple):
+        # margin_sep: one unconditional flow per arm; the same key gives both
+        # arms the same base draws, so the difference is paired as above.
+        f0, f1 = flow
+        y0 = np.asarray(f0.sample(jr.key(cfg.seed_mc), sample_shape=(cfg.n_mc,)))
+        y1 = np.asarray(f1.sample(jr.key(cfg.seed_mc), sample_shape=(cfg.n_mc,)))
+        readout = {"y0": y0, "y1": y1,
+                   "anynan": bool(not (np.isfinite(y0).all() and np.isfinite(y1).all()))}
+    else:
+        readout = interventional_samples(
+            jr.key(cfg.seed_mc),
+            flow,
+            cond_dim=int(np.asarray(data["X"]).shape[1]),
+            n_mc=cfg.n_mc,
+            dim_y=K,
+        )
     readout_s = time.monotonic() - t0
 
     # A spline margin can throw the odd draw into its tails and overflow to
@@ -720,8 +862,114 @@ def _tau_hat_flexible_continuous(cfg: Config, flow, data: dict, K: int):
     return tau_hat, arm_metrics, extras
 
 
+def _fit_val_indices(cfg: Config, n: int, losses: dict, nll_all: np.ndarray):
+    """Reconstruct the validation rows flowjax's ``fit_to_data`` held out.
+
+    ``fit_to_data`` splits with ``jr.permutation(subkey, .)`` and keeps the last
+    ``round(0.1 n)`` rows, where ``subkey`` is one split below the key it was
+    handed -- itself a few splits below ``fit_flow``'s. Rather than hard-code
+    that chain (it would silently break if a split were added upstream), try
+    each depth and pick the one whose rows look held-out.
+
+    Matching ``min(losses["val"])`` exactly is NOT possible: flowjax evaluates
+    the val loss over whole batches only (the truncated last batch is dropped)
+    and reshuffles which rows fall in it every epoch, so its number is a mean
+    over a per-epoch random subset. What IS unambiguous is that the true val
+    rows were never trained on: their mean NLL exceeds the train rows' by the
+    overfitting gap (tens of nats at K=256, ~2 at K=64), while any wrong split
+    mixes the two and shows ~no gap. So choose the depth maximising
+    ``mean(nll[val]) - mean(nll[train])`` and require it to clear 3 standard
+    errors of that difference under the null. Returns ``(idx, depth, gap_z)``,
+    or ``(None, None, best_z)`` if no depth clears the bar.
+    """
+    n_train = n - round(0.1 * n)
+    key = jr.PRNGKey(cfg.seed_fit)
+    key, _ = jr.split(key)          # fit_flow: stage-1 marginals
+    key, sub = jr.split(key)        # fit_flow: train_frugal_flow(key=sub)
+    key = sub
+    sd = float(np.std(nll_all))
+    se = sd * np.sqrt(1.0 / (n - n_train) + 1.0 / n_train)
+    best = (None, None, -np.inf)
+    for depth in range(1, 12):
+        key, sub = jr.split(key)
+        _, split_key = jr.split(sub)                     # fit_to_data's own split
+        perm = np.asarray(jr.permutation(split_key, jnp.arange(n)))
+        idx, tr = perm[n_train:], perm[:n_train]
+        z = float((nll_all[idx].mean() - nll_all[tr].mean()) / max(se, 1e-12))
+        if z > best[2]:
+            best = (idx, depth, z)
+    idx, depth, z = best
+    return (idx, depth, z) if z > 3.0 else (None, None, z)
+
+
+def copula_term(cfg: Config, flow, data: dict, u_z, losses: dict) -> dict:
+    """Split the held-out log-likelihood into its causal-margin and copula parts.
+
+    The joint loss is ``log p*(y|t) + log c(u_z | R)``: K pixel conditionals
+    plus ONE term for the covariate ranks given the outcome ranks. That one
+    term is where deconfounding lives -- it rises when the copula explains the
+    Z-pixel association and falls when the margin's T-channel absorbs it
+    instead (the halo) -- yet it is ~1-2 nats out of ~50, so the joint loss
+    barely registers it. Reporting it on its own gives a selection criterion
+    aligned with the causal estimand that needs no ground truth.
+
+    After ``merge_transforms`` the chain is ``[copula blocks..., margin blocks]``
+    with the margin blocks acting on the y dims only, so
+    ``log c = log p(y,u_z|t) - (sum of margin inverse log-dets - K log 2)``.
+    Verified numerically against an independent recompute; the u_z columns must
+    come through the margin blocks untouched, and this asserts that.
+
+    Reported as NLLs (lower is better, like ``best_val_loss``). ``val_*`` are on
+    flowjax's own held-out rows (reconstructed and verified -- see
+    ``_fit_val_indices``); ``all_*`` on every row, as a fallback and for the
+    in-sample/held-out gap of the copula itself.
+    """
+    B = flow.bijection.bijections
+    n_copula = 3                                   # [rescale, copula flow, affine]
+    if cfg.arm not in ARM_CHAIN_LEN or len(B) != ARM_CHAIN_LEN[cfg.arm]:
+        return {}
+    K = int(np.asarray(data["Y"]).shape[1])
+    x = jnp.hstack([jnp.asarray(data["Y"]), jnp.asarray(u_z)])
+    cond = jnp.asarray(data["X"])
+    total = np.asarray(jax.vmap(flow.log_prob)(x, cond))
+
+    def inv_ld(b, xs):
+        b = paramax.unwrap(b)
+        if b.cond_shape is not None:
+            return jax.vmap(lambda xi, ci: b.inverse_and_log_det(xi, ci))(xs, cond)
+        return jax.vmap(lambda xi: b.inverse_and_log_det(xi))(xs)
+
+    xs, ld_margin = x, jnp.zeros(x.shape[0])
+    for b in reversed(B[n_copula:]):               # data -> base, margin blocks only
+        xs, ld = inv_ld(b, xs)
+        ld_margin = ld_margin + ld
+    if not bool(jnp.allclose(xs[:, K:], x[:, K:], atol=1e-5)):
+        return {"copula_term_verified": False}
+    margin_ll = np.asarray(ld_margin) - K * np.log(2.0)
+    copula_ll = total - margin_ll
+
+    out = {
+        "copula_term_verified": True,
+        "all_total_nll": float(-total.mean()),
+        "all_margin_nll": float(-margin_ll.mean()),
+        "all_copula_nll": float(-copula_ll.mean()),
+    }
+    idx, depth, gap_z = _fit_val_indices(cfg, x.shape[0], losses, -total)
+    out["val_split_gap_z"] = float(gap_z)          # held-out minus train NLL, in SEs
+    if idx is not None:
+        out.update({
+            "val_split_key_depth": int(depth),
+            "val_total_nll": float(-total[idx].mean()),      # ~ best_val_loss (see docstring)
+            "val_margin_nll": float(-margin_ll[idx].mean()),
+            "val_copula_nll": float(-copula_ll[idx].mean()),  # <- select on this
+        })
+    else:
+        out["val_split_key_depth"] = -1
+    return out
+
+
 def evaluate(cfg: Config, flow, data: dict, losses: dict, wall_time_s: float,
-             timings: dict | None = None):
+             timings: dict | None = None, u_z=None):
     """Per-pixel ``tau_hat`` for the configured arm, scored against the truth.
 
     Both arms return the same ``(K,)`` vector under the same score keys, so run
@@ -733,11 +981,12 @@ def evaluate(cfg: Config, flow, data: dict, losses: dict, wall_time_s: float,
     all three coincide.
     """
     K = cfg.size**2
-    n_blocks = len(flow.bijection.bijections)
-    assert n_blocks == ARM_CHAIN_LEN[cfg.arm], (
-        f"expected a {ARM_CHAIN_LEN[cfg.arm]}-block chain for arm {cfg.arm!r}, "
-        f"got {n_blocks} -- the read-out below indexes the chain by position"
-    )
+    if cfg.model == "ff":
+        n_blocks = len(flow.bijection.bijections)
+        assert n_blocks == ARM_CHAIN_LEN[cfg.arm], (
+            f"expected a {ARM_CHAIN_LEN[cfg.arm]}-block chain for arm {cfg.arm!r}, "
+            f"got {n_blocks} -- the read-out below indexes the chain by position"
+        )
 
     extras: dict = {}
     arm_metrics: dict = {}
@@ -745,6 +994,11 @@ def evaluate(cfg: Config, flow, data: dict, losses: dict, wall_time_s: float,
         tau_hat = _tau_hat_location_translation(flow, K)
     else:
         tau_hat, arm_metrics, extras = _tau_hat_flexible_continuous(cfg, flow, data, K)
+    if cfg.model == "margin_sep":       # the second arm's fit, alongside arm 0's standard keys
+        arm_metrics.update({
+            "best_val_loss_arm1": float(np.min(losses["val_arm1"])),
+            "n_epochs_run_arm1": int(len(losses["train_arm1"])),
+        })
 
     truth = np.asarray(data["ATE"])
     support = truth != 0
@@ -753,6 +1007,7 @@ def evaluate(cfg: Config, flow, data: dict, losses: dict, wall_time_s: float,
     metrics = {
         "preset": cfg.preset,
         "arm": cfg.arm,
+        "model": cfg.model,
         "conditioner": cfg.conditioner if cfg.arm == "flexible_continuous" else "n/a",
         # recovery against the primary estimand
         "ate_mae": float(np.abs(err).mean()),
@@ -791,6 +1046,9 @@ def evaluate(cfg: Config, flow, data: dict, losses: dict, wall_time_s: float,
         "s_per_epoch": float((timings or {}).get("flow_fit_s", wall_time_s)
                              / max(len(losses["train"]), 1)),
         **arm_metrics,
+        # held-out loss split into margin vs copula; val_copula_nll is the
+        # deconfounding term and the selection criterion (see copula_term)
+        **(copula_term(cfg, flow, data, u_z, losses) if u_z is not None else {}),
     }
     return tau_hat, metrics, extras
 
@@ -881,8 +1139,13 @@ def make_plots(cfg: Config, data: dict, losses: dict, tau_hat: np.ndarray,
     axes[0].hist([data["THICKNESS"][~T], data["THICKNESS"][T]], bins=40,
                  label=["T=0", "T=1"], density=True, histtype="step")
     axes[0].legend(); axes[0].set_title("Thickness by arm (confounding)")
-    axes[1].hist(np.asarray(u_z)[:, 0], bins=30)
-    axes[1].set_title(r"$U_{Z}$ stage-1 quantiles (should be flat)")
+    if u_z is not None:
+        axes[1].hist(np.asarray(u_z)[:, 0], bins=30)
+        axes[1].set_title(r"$U_{Z}$ stage-1 quantiles (should be flat)")
+    else:
+        axes[1].text(0.5, 0.5, "no stage-1 quantiles:\nmargin-only model", ha="center",
+                     va="center", transform=axes[1].transAxes)
+        axes[1].set_axis_off()
     mean_bright = inverse_logit(np.asarray(data["Y"])).mean(axis=1)
     axes[2].hist([mean_bright[~T], mean_bright[T]], bins=40,
                  label=["T=0", "T=1"], density=True, histtype="step")
@@ -946,11 +1209,40 @@ class _Tee:
         self._file.flush()
 
 
-def run_id_for(cfg: Config) -> str:
-    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+def digit_tag(cfg: Config) -> str:
+    """``d0`` for the single-class subset (the digit number), ``d0-9`` for all ten."""
+    return "d0-9" if cfg.digit is None else f"d{cfg.digit}"
+
+
+def model_tag(cfg: Config) -> str:
+    """``ff`` (margin + copula), ``margin``, ``margin_sep``, or ``margin_zero`` for a
+    margin fit on data whose treatment effect is set to zero."""
+    if cfg.model == "margin" and cfg.base_shift == 0.0:
+        return "margin_zero"
+    return cfg.model
+
+
+def wandb_name_for(cfg: Config, uid: str) -> str:
+    """The wandb run name:
+    ``<model>_<preset>_<arm>[-trf]_[bs<shift>_]k<K>_s<seed>_d<digit>_<uid>``.
+
+    ``uid`` is the six-hex-character id that also ends the run folder's name.
+    """
     arm_tag = ARM_SHORT[cfg.arm] + ("-trf" if cfg.conditioner == "transformer" else "")
-    return (f"{stamp}_{PRESET_SHORT[cfg.preset]}_{arm_tag}"
-            f"_s{cfg.seed_fit}_k{cfg.size**2}_{secrets.token_hex(3)}")
+    variant = f"_bs{cfg.base_shift:g}" if cfg.base_shift not in (None, 0.0) else ""
+    return (f"{model_tag(cfg)}_{PRESET_SHORT[cfg.preset][:2]}_{arm_tag}{variant}"
+            f"_k{cfg.size**2}_s{cfg.seed_fit}_{digit_tag(cfg)}_{uid}")
+
+
+def run_id_for(cfg: Config) -> str:
+    """The run folder's name: the launch timestamp (UTC) in front of the wandb name."""
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+    return f"{stamp}_{wandb_name_for(cfg, secrets.token_hex(3))}"
+
+
+def wandb_name_of(run_id: str) -> str:
+    """Strip the timestamp off a run id to get the wandb name."""
+    return run_id.split("_", 1)[1]
 
 
 def write_config(cfg: Config, run_id: str, run_dir: str):
@@ -962,6 +1254,8 @@ def write_config(cfg: Config, run_id: str, run_dir: str):
     os.makedirs(run_dir, exist_ok=False)
     record = {
         "run_id": run_id,
+        "wandb_name": wandb_name_of(run_id),
+        "uid": run_id[-6:],
         "config": asdict(cfg),
         "effective_radius": cfg.effective_radius,
         "git": _git_info(),
@@ -987,12 +1281,15 @@ def save_run(cfg: Config, data: dict, losses: dict, tau_hat: np.ndarray,
     np.savez(
         os.path.join(run_dir, "arrays.npz"),
         tau_hat=tau_hat,
-        u_z=np.asarray(u_z),
         X=np.asarray(data["X"]),
         Y=np.asarray(data["Y"]),
         ITE=np.asarray(data["ITE"]),
         loss_train=np.asarray(losses["train"]),
         loss_val=np.asarray(losses["val"]),
+        # u_z exists only for the frugal flow; the margin baselines fit nothing to Z.
+        **({"u_z": np.asarray(u_z)} if u_z is not None else {}),
+        # margin_sep: the second arm's loss curves, next to arm 0's standard ones
+        **{f"loss_{k}": np.asarray(v) for k, v in losses.items() if k.endswith("_arm1")},
         **{k: np.asarray(data[k]) for k in TRUTH_ARRAY_KEYS},
         **{k: np.asarray(v) for k, v in (extras or {}).items()},
     )
@@ -1013,7 +1310,7 @@ def replot(run_dir: str):
     data.update({"X": a["X"], "Y": a["Y"], "ITE": a["ITE"]})
     losses = {"train": a["loss_train"], "val": a["loss_val"]}
     extras = {k: a[k] for k in EXTRA_ARRAY_KEYS if k in a}
-    make_plots(cfg, data, losses, a["tau_hat"], a["u_z"],
+    make_plots(cfg, data, losses, a["tau_hat"], a["u_z"] if "u_z" in a else None,
                os.path.join(run_dir, "plots"), extras)
     print(f"replotted: {os.path.join(run_dir, 'plots')}")
 
@@ -1061,7 +1358,7 @@ def _wandb_start(cfg: Config, run_id: str):
         project=cfg.wandb_project,
         group=cfg.wandb_group or cfg.preset,
         job_type=f"{ARM_SHORT[cfg.arm]}/{cond}",
-        name=run_id,
+        name=wandb_name_of(run_id),
         tags=[cfg.preset, ARM_SHORT[cfg.arm], cond, f"k{cfg.size**2}"] + extra,
         config={**asdict(cfg),
                 "effective_radius": cfg.effective_radius,
@@ -1118,6 +1415,14 @@ def run_one(cfg: Config, runs_root: str = None) -> dict:
     write_config(cfg, run_id, run_dir)
     print(f"run dir: {run_dir}")
     wb, owned = _wandb_start(cfg, run_id)
+    # the folder-to-wandb link, next to config.json, so a run can be found from either side;
+    # written even when wandb is off, so every folder says whether a wandb run exists
+    with open(os.path.join(run_dir, "wandb.json"), "w") as f:
+        if wb is not None:
+            json.dump({"id": wb.id, "name": wb.name, "group": wb.group, "url": wb.url}, f, indent=2)
+        else:
+            json.dump({"id": None, "name": wandb_name_of(run_id), "note": "not logged to wandb"},
+                      f, indent=2)
 
     try:
         return _run_one_inner(cfg, run_id, run_dir, wb)
@@ -1133,7 +1438,8 @@ def _run_one_inner(cfg: Config, run_id: str, run_dir: str, wb) -> dict:
         out, err = _Tee(sys.stdout, lf), _Tee(sys.stderr, lf)
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             print(f"started; watch progress with: tail -f {run_dir}/log.txt")
-            print(f"preset: {cfg.preset} | arm: {cfg.arm} | conditioner: {cfg.conditioner}")
+            print(f"preset: {cfg.preset} | model: {cfg.model} | arm: {cfg.arm} | "
+                  f"conditioner: {cfg.conditioner}")
             timings: dict = {}
             t_start = time.monotonic()
             _t = time.monotonic()
@@ -1150,7 +1456,8 @@ def _run_one_inner(cfg: Config, run_id: str, run_dir: str, wb) -> dict:
             print(f"fit finished: {n_ep} epochs in {wall:.0f}s "
                   f"(margins {timings['marginal_s']:.0f}s + flow "
                   f"{timings['flow_fit_s']:.0f}s, ~{timings['flow_fit_s'] / n_ep:.1f}s/epoch)")
-            tau_hat, metrics, extras = evaluate(cfg, flow, data, losses, wall, timings)
+            tau_hat, metrics, extras = evaluate(cfg, flow, data, losses, wall, timings,
+                                                u_z=u_z)
             save_run(cfg, data, losses, tau_hat, u_z, metrics, extras, run_dir)
             # Written last, so it covers everything including plotting and the
             # npz write -- this is the number to multiply when sizing a sweep.
@@ -1169,9 +1476,10 @@ def _run_one_inner(cfg: Config, run_id: str, run_dir: str, wb) -> dict:
 # Config fields that identify a sweep cell, for --skip-done. A run with
 # different capacity or a different seed is NOT the same cell, so the tuple
 # covers the knobs that make two runs comparable rather than just the label.
-CELL_IDENTITY = ("preset", "arm", "conditioner", "size", "radius", "digit", "n",
+CELL_IDENTITY = ("preset", "arm", "model", "conditioner", "size", "radius", "digit", "n",
                  "seed_data", "seed_fit", "nn_width", "nn_depth", "flow_layers",
-                 "max_epochs", "n_mc")
+                 "copula_nn_width", "copula_nn_depth", "copula_flow_layers",
+                 "copula_rqs_knots", "max_epochs", "n_mc")
 
 
 def completed_cells(runs_root: str = RUNS_ROOT) -> set[tuple]:
@@ -1571,6 +1879,9 @@ def main(argv=None):
                         help="regenerate plots for an existing run, no refit")
     parser.add_argument("--collect", action="store_true",
                         help="print a table of every completed run and exit")
+    parser.add_argument("--runs-root", default=None, metavar="DIR",
+                        help="write the run folder under DIR instead of runs/exp_ate_recovery "
+                             "(for trial runs that must not land among the real ones)")
     parser.add_argument("--selftest", action="store_true",
                         help="end-to-end correctness check; writes nothing permanent")
     args = parser.parse_args(argv)
@@ -1596,7 +1907,7 @@ def main(argv=None):
         print(f"\n=== sweep complete: {len(rows)} cells ===")
         print_table(rows)
     else:
-        run_one(cfg)
+        run_one(cfg, runs_root=args.runs_root)
 
 
 if __name__ == "__main__":

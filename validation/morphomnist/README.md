@@ -414,6 +414,26 @@ either conditioner:
   **Requires `--nn-width` divisible by `--nn-heads`**; the default width of 48
   satisfies the default 4 heads.
 
+### What is fitted: `--model`
+
+**`--model ff`** (default) — the frugal flow: the arm's margin plus the copula on the
+covariate ranks, after the stage-1 quantile fit. Every run before 2026-09-18 is this.
+
+**`--model margin`** — the treatment-conditioned image margin alone: no stage-1
+quantiles, no copula. The same spline blocks `ff` puts after its copula, fitted
+directly to `p(y | t)` with the same `fit_to_data` call. A baseline for what the
+copula adds; `flexible_continuous` only. With `--base-shift 0` (no treatment
+effect anywhere) the run is named `margin_zero_…`.
+
+**`--model margin_sep`** — one unconditional margin per treatment arm, each fitted
+on that arm's images only; the effect is the difference of their paired samples.
+`metrics.json` carries arm 0 under the standard keys and arm 1 as
+`best_val_loss_arm1` / `n_epochs_run_arm1`; `arrays.npz` gains `loss_train_arm1`
+and `loss_val_arm1`. `flexible_continuous` only.
+
+Margin-only runs save no `u_z` and no copula split (`val_copula_nll`). The
+design-check figure's middle panel says so instead of showing the stage-1 quantiles.
+
 ### ⚠️ The learning rate is not neutral between arms
 
 `location_translation` carries an explicit additive parameter that must travel
@@ -432,7 +452,13 @@ python exp_ate_recovery.py --sweep --skip-done              # resume an interrup
 python exp_ate_recovery.py --collect                        # table of completed runs
 python exp_ate_recovery.py --replot runs/exp_ate_recovery/<run-id>
 python exp_ate_recovery.py --selftest
+python exp_ate_recovery.py --model margin --runs-root /some/scratch/dir   # trial run kept OUT of runs/
+python run_tables.py runs/exp_ate_recovery/<run-id>        # the four summary tables -> tables.md
+python check_runs.py [--no-wandb] [--root DIR]             # naming/config/wandb consistency of every run
 ```
+
+`--runs-root DIR` writes the run folder under `DIR` instead of `runs/exp_ate_recovery/`;
+use it for any fit that must not land among the real runs.
 
 ⚠️ `--skip-done` keys on `metrics.json` existing, so a run that finished with a
 non-finite score still counts as done and **will be skipped**. Delete such
@@ -440,16 +466,27 @@ folders before resuming.
 
 ### Run folders
 
-Each run writes a self-contained folder under `runs/exp_ate_recovery/`:
+Each run writes a self-contained folder under `runs/exp_ate_recovery/`, named after
+its wandb run with the launch time in front:
 
 ```
-<UTC-stamp>_<preset>_<arm>_s<seed>_k<K>_<suffix>/
-    config.json    every knob + git commit/dirty + library versions
+<UTC-stamp>_<wandb name>/        e.g. 2026-09-10T14-29-26Z_ff_e1_flexcont_k64_s101_d0_85c851
+    config.json    run_id, wandb_name, uid, every knob, git commit/dirty, library versions
+    wandb.json     id, name and url of the wandb run (written once wandb.init returns)
     log.txt        live training output (`tail -f` it)
     metrics.json   recovery scores + timings
     arrays.npz     tau_hat, truth, τ(u) curves, losses (replottable)
     plots/         every figure as PNG
 ```
+
+The wandb name is `<model>_<preset>_<arm>[-trf]_[<variant>_]k<K>_s<seed>_d<digit>_<uid>`:
+`ff` because this script fits margin **and** copula (`margin`, `margin_sep`, `margin_zero`
+are reserved for copula-free fits from other scripts); `e1`…`e6` the preset; `flexcont` or
+`loctrans` the arm, `-trf` for a transformer conditioner; a variant tag only when a setting
+differs from the plain fit (`copw<W>`, `coplam<λ>`, `copwd<v>`, `bs<shift>`, `rct`, …); `s<seed>`
+the fit seed; `d0` for the single digit class, `d0-9` for all ten; `uid` six hex characters.
+The stamp is UTC (`2026-09-10T14-29-26Z` = 10 Sep 2026, 14:29:26). Built by `run_id_for` /
+`wandb_name_for`; what a run *is* should always be read from `config.json`, not from its name.
 
 `config.json` and `log.txt` appear at launch, so a folder holding only those two
 is still training (or died). The whole `runs/` directory is gitignored. To share
