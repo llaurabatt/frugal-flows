@@ -419,7 +419,10 @@ class Config:
     radius: int | None = None  # effect-map radius; None -> round(size/4)
     digit: int | None = 0      # single digit class, or None for all ten
     n: int | None = None       # cap on sample size (None = all of the subset)
-    seed_data: int = 0         # generator RNG (subset, dequantisation, assignment)
+    seed_data: int = 0         # generator RNG: image order/subset, dequantisation noise, and
+                               # the treatment assignment unless seed_assign is set
+    seed_assign: int | None = None  # independent generator for the assignment only (None:
+                               # drawn from the seed_data stream, as every run before 2026-09-18)
     # ---- generator overrides (None -> keep the preset's value) ----
     base_shift: float | None = None
     effect_mode: str | None = None  # outcome_coupled | covariate_only |
@@ -556,7 +559,8 @@ GENERATOR_OVERRIDE_KEYS = ("base_shift", "effect_mode", "a_cov", "a_bright",
 def build_data(cfg: Config) -> dict:
     """The chosen preset, with any explicit generator overrides applied."""
     overrides = {"size": cfg.size, "radius": cfg.effective_radius,
-                 "digit": cfg.digit, "n": cfg.n, "seed": cfg.seed_data}
+                 "digit": cfg.digit, "n": cfg.n, "seed": cfg.seed_data,
+                 "seed_assign": cfg.seed_assign}
     overrides.update({k: getattr(cfg, k) for k in GENERATOR_OVERRIDE_KEYS
                       if getattr(cfg, k) is not None})
     return build_preset(cfg.preset, **overrides)
@@ -999,6 +1003,17 @@ def evaluate(cfg: Config, flow, data: dict, losses: dict, wall_time_s: float,
             "best_val_loss_arm1": float(np.min(losses["val_arm1"])),
             "n_epochs_run_arm1": int(len(losses["train_arm1"])),
         })
+    # regional errors against the truth, and everything against the images themselves
+    masks = region_masks(cfg.size, cfg.effective_radius)
+    om = observed_maps(data, extras.get("mc_mean0"), extras.get("mc_mean1"))
+    extras["obs_diff"] = om["obs_diff"]
+    arm_metrics.update({
+        **{k.replace("err_", ""): v for k, v in _regional_metrics("err", tau_hat - np.asarray(data["ATE"]), masks).items()},
+        **_regional_metrics("imb", om["imbalance"], masks),            # observed − true
+        **_regional_metrics("vsobs", tau_hat - om["obs_diff"], masks),  # estimate − observed
+        **_regional_metrics("d0", om["d0"], masks, with_mae=False),      # sampled T=0 mean − untreated images
+        **_regional_metrics("d1", om["d1"], masks, with_mae=False),      # sampled T=1 mean − treated images
+    })
 
     truth = np.asarray(data["ATE"])
     support = truth != 0
@@ -1008,6 +1023,10 @@ def evaluate(cfg: Config, flow, data: dict, losses: dict, wall_time_s: float,
         "preset": cfg.preset,
         "arm": cfg.arm,
         "model": cfg.model,
+        # the dataset's fingerprints (prepare_morphomnist_exps.dataset_identity), so
+        # this run can be joined to baselines and other fits on the same data
+        "dataset_id": data.get("dataset_id"),
+        "data_hash": data.get("data_hash"),
         "conditioner": cfg.conditioner if cfg.arm == "flexible_continuous" else "n/a",
         # recovery against the primary estimand
         "ate_mae": float(np.abs(err).mean()),
@@ -1094,47 +1113,109 @@ def _region_lines(err: np.ndarray, masks, with_mae_rmse: bool) -> str:
     return "\n".join(lines)
 
 
+def observed_maps(data: dict, mc_mean0=None, mc_mean1=None) -> dict:
+    """What the finite sample itself shows, per pixel, over ALL n images of the dataset:
+
+    ``obs_diff``  mean of Y over treated images minus mean over untreated images
+    ``imbalance`` obs_diff minus the true effect: what a plain group comparison gets wrong
+    ``d0``        the model's sampled T=0 mean minus the untreated images' mean (None if the
+                  model has no sampled arm means)
+    ``d1``        the sampled T=1 mean minus the treated images' mean
+    ``d1 - d0`` equals ``tau_hat - obs_diff``, the estimate's departure from the raw comparison.
+    """
+    Y = np.asarray(data["Y"], dtype=np.float64)
+    T = np.asarray(data["X"])[:, 0].astype(bool)
+    m1, m0 = Y[T].mean(axis=0), Y[~T].mean(axis=0)
+    out = {"obs_diff": m1 - m0, "imbalance": (m1 - m0) - np.asarray(data["ATE"], dtype=np.float64),
+           "d0": None, "d1": None}
+    if mc_mean0 is not None and mc_mean1 is not None:
+        out["d0"] = np.asarray(mc_mean0, dtype=np.float64) - m0
+        out["d1"] = np.asarray(mc_mean1, dtype=np.float64) - m1
+    return out
+
+
+def _regional_metrics(prefix: str, err, masks, with_mae: bool = True) -> dict:
+    """Region averages of a per-pixel error as flat metric keys."""
+    if err is None:
+        return {}
+    e = np.where(np.isfinite(err), err, np.nan)
+    disc, ring, far = masks
+    out = {f"{prefix}_signed_disc": float(np.nanmean(e[disc])),
+           f"{prefix}_signed_ring": float(np.nanmean(e[ring])),
+           f"{prefix}_signed_far": float(np.nanmean(e[far]))}
+    if with_mae:
+        a = np.abs(e)
+        out.update({f"{prefix}_mae_all": float(np.nanmean(a)), f"{prefix}_mae_disc": float(np.nanmean(a[disc])),
+                    f"{prefix}_mae_ring": float(np.nanmean(a[ring])), f"{prefix}_mae_far": float(np.nanmean(a[far]))})
+    return out
+
+
 def plot_ate_maps(size: int, radius: int, tau_hat: np.ndarray, ate_true: np.ndarray,
                   path: str, title: str = "", e0: np.ndarray | None = None,
-                  e1: np.ndarray | None = None):
-    """The effect-map figure: estimated, true, signed error, and -- when the arm means
-    are available -- each arm's error against its own true mean. Under every error
-    panel, that error averaged over all pixels, the disc, the ring and the far region
-    (plus MAE and RMSE under the signed-error panel). The disc is outlined in black.
-    Non-finite pixels are left blank and excluded from the averages."""
+                  e1: np.ndarray | None = None, obs_diff: np.ndarray | None = None,
+                  d0: np.ndarray | None = None, d1: np.ndarray | None = None):
+    """The effect-map figure, two rows of five panels.
+
+    Row 1, against the TRUTH: estimated effect; true effect; signed error; and, when the
+    model has sampled arm means, each arm's error against its own true population mean.
+    Row 2, against the DATA: the observed treated-minus-untreated difference over all
+    images; the finite-sample imbalance (observed minus true); the estimate minus the
+    observed difference; and each arm's sampled mean minus the mean of the images in
+    that arm. Under every error panel, that error averaged over all pixels, the disc,
+    the ring and the far region (MAE and RMSE too under the two signed-error panels).
+    The disc is outlined in black. Non-finite pixels are blank and excluded from averages.
+    A panel whose input is unavailable says so instead of drawing."""
     masks = region_masks(size, radius)
     disc2d = masks[0].reshape(size, size)
-    fin = lambda z: np.where(np.isfinite(z), z, np.nan)  # noqa: E731
+    fin = lambda z: None if z is None else np.where(np.isfinite(z), z, np.nan)  # noqa: E731
     err = fin(tau_hat - ate_true)
-    panels = [(fin(tau_hat), r"Estimated $\hat{\tau}$ per pixel", "viridis", None, None),
-              (ate_true, "True ATE per pixel (exact)", "viridis", None, None),
-              (err, r"Signed error $\hat{\tau} -$ truth", "RdBu_r", err, True)]
-    if e0 is not None and e1 is not None:
-        panels += [(fin(e0), "Untreated-arm error (T=0 mean − true)", "RdBu_r", fin(e0), False),
-                   (fin(e1), "Treated-arm error (T=1 mean − true)", "RdBu_r", fin(e1), False)]
-    # three colour scales: estimated/true share one; the signed error has its own; the two
-    # arm errors share a third (they are usually several times larger than the signed error)
-    vmax = float(max(np.nanmax(np.abs(fin(tau_hat))), np.abs(ate_true).max())) or 1.0
-    lim_err = float(np.nanmax(np.abs(err))) or 1.0
-    lim_arm = (float(np.nanmax(np.abs(np.concatenate([fin(e0), fin(e1)])))) or 1.0) if len(panels) > 3 else 1.0
-    n = len(panels)
-    fig, axes = plt.subplots(1, n, figsize=(4.4 * n, 5.4))
-    for i, (ax, (arr, name, cmap, stats, full)) in enumerate(zip(axes, panels)):
-        lim = vmax if i < 2 else (lim_err if i == 2 else lim_arm)
-        im = ax.imshow(np.asarray(arr).reshape(size, size), cmap=cmap, vmin=-lim, vmax=lim,
-                       interpolation="nearest")
-        ax.contour(disc2d, levels=[0.5], colors="k", linewidths=1.0)
-        ax.set_title(name, fontsize=9.5)
-        ax.set_xticks([])
-        ax.set_yticks([])
-        fig.colorbar(im, ax=ax, shrink=0.7, pad=0.03)
-        if stats is not None:
-            ax.text(0.0, -0.05, _region_lines(stats, masks, full), transform=ax.transAxes,
-                    ha="left", va="top", fontsize=8, family="monospace", linespacing=1.3)
+    vs_obs = fin(tau_hat - obs_diff) if obs_diff is not None else None
+    imb = fin(obs_diff - ate_true) if obs_diff is not None else None
+    e0, e1, d0, d1 = fin(e0), fin(e1), fin(d0), fin(d1)
+    # colour scales: level (estimated / true / observed) shared; the two signed errors
+    # share one; the imbalance its own; the four arm panels share one
+    lev = [np.nanmax(np.abs(fin(tau_hat))), np.abs(ate_true).max()] + ([np.nanmax(np.abs(obs_diff))] if obs_diff is not None else [])
+    lim_lev = float(max(lev)) or 1.0
+    lim_err = float(max(np.nanmax(np.abs(err)), np.nanmax(np.abs(vs_obs)) if vs_obs is not None else 0)) or 1.0
+    lim_imb = float(np.nanmax(np.abs(imb))) if imb is not None else 1.0
+    arms = [a for a in (e0, e1, d0, d1) if a is not None]
+    lim_arm = float(np.nanmax(np.abs(np.concatenate(arms)))) if arms else 1.0
+    # (array or None, title, cmap, limit, stats array or None, full stats?, what is missing)
+    rows = [
+        [(fin(tau_hat), r"Estimated $\hat{\tau}$", "viridis", lim_lev, None, False, ""),
+         (ate_true, "True effect (exact)", "viridis", lim_lev, None, False, ""),
+         (err, r"$\hat{\tau}$ − true", "RdBu_r", lim_err, err, True, ""),
+         (e0, "T=0 sampled mean − true untreated mean", "RdBu_r", lim_arm, e0, False, "no sampled arm means"),
+         (e1, "T=1 sampled mean − true treated mean", "RdBu_r", lim_arm, e1, False, "no sampled arm means")],
+        [(obs_diff, "Observed: treated − untreated images", "viridis", lim_lev, None, False, "no images available"),
+         (imb, "Imbalance: observed − true", "RdBu_r", lim_imb, imb, True, "no images available"),
+         (vs_obs, r"$\hat{\tau}$ − observed", "RdBu_r", lim_err, vs_obs, True, "no images available"),
+         (d0, "T=0 sampled mean − untreated images' mean", "RdBu_r", lim_arm, d0, False, "no sampled arm means"),
+         (d1, "T=1 sampled mean − treated images' mean", "RdBu_r", lim_arm, d1, False, "no sampled arm means")],
+    ]
+    fig, axes = plt.subplots(2, 5, figsize=(22.5, 11.5))
+    for r, row in enumerate(rows):
+        for ax, (arr, name, cmap, lim, stats, full, missing) in zip(axes[r], row):
+            ax.set_title(name, fontsize=9.5)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            if arr is None:
+                ax.text(0.5, 0.5, missing, ha="center", va="center", fontsize=9, transform=ax.transAxes)
+                ax.set_frame_on(False)
+                continue
+            im = ax.imshow(np.asarray(arr).reshape(size, size), cmap=cmap, vmin=-lim, vmax=lim,
+                           interpolation="nearest")
+            ax.contour(disc2d, levels=[0.5], colors="k", linewidths=1.0)
+            fig.colorbar(im, ax=ax, shrink=0.7, pad=0.03)
+            if stats is not None:
+                ax.text(0.0, -0.05, _region_lines(stats, masks, full), transform=ax.transAxes,
+                        ha="left", va="top", fontsize=8, family="monospace", linespacing=1.3)
     nonfinite = int((~np.isfinite(tau_hat)).sum())
     if nonfinite:
         title += f"   [{nonfinite} non-finite pixel(s) blank, excluded from averages]"
-    fig.suptitle(title + "   (black outline: disc)", fontsize=11)
+    fig.suptitle(title + "   (black outline: disc; row 1 against the truth, row 2 against the images)",
+                 fontsize=11)
+    fig.subplots_adjust(hspace=0.55)
     fig.savefig(path, dpi=120, bbox_inches="tight")
     plt.close(fig)
 
@@ -1159,11 +1240,12 @@ def make_plots(cfg: Config, data: dict, losses: dict, tau_hat: np.ndarray,
         Y0 = Y - X[:, None] * ITE
         e0 = np.asarray(extras["mc_mean0"]) - Y0.mean(axis=0)
         e1 = np.asarray(extras["mc_mean1"]) - (Y0 + ITE).mean(axis=0)
+    om = observed_maps(data, extras.get("mc_mean0"), extras.get("mc_mean1"))
     plot_ate_maps(size, cfg.effective_radius, np.asarray(tau_hat), ate_true,
                   os.path.join(plots_dir, "ate_maps.png"),
                   title=f"{cfg.preset}  |  {cfg.model}  |  {cfg.arm}"
                   + (f" / {cfg.conditioner}" if cfg.arm == "flexible_continuous" else ""),
-                  e0=e0, e1=e1)
+                  e0=e0, e1=e1, obs_diff=om["obs_diff"], d0=om["d0"], d1=om["d1"])
 
     # 2. per-pixel scatter, and which estimand the fit landed on
     fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
@@ -1251,7 +1333,7 @@ RUNS_ROOT = os.path.join(SCRIPT_DIR, "runs", "exp_ate_recovery")
 # Arm-specific arrays in arrays.npz, listed explicitly so --replot can pick them
 # out of an npz that may or may not contain them.
 EXTRA_ARRAY_KEYS = ("tau_u", "tau_curves", "mc_mean0", "mc_mean1",
-                    "mc_var0", "mc_var1", "mc_tau_sd")
+                    "mc_var0", "mc_var1", "mc_tau_sd", "obs_diff")
 # Truth arrays needed to rebuild every plot without regenerating the dataset.
 TRUTH_ARRAY_KEYS = ("ATE", "ATT", "ATC", "TAU_U", "TAU_PAIRED", "TAU_MARGINAL",
                     "THICKNESS", "PROPENSITY")
@@ -1309,6 +1391,8 @@ def wandb_name_for(cfg: Config, uid: str) -> str:
     """
     arm_tag = ARM_SHORT[cfg.arm] + ("-trf" if cfg.conditioner == "transformer" else "")
     variant = f"_bs{cfg.base_shift:g}" if cfg.base_shift not in (None, 0.0) else ""
+    if cfg.seed_assign is not None:        # assignment re-drawn with its own seed
+        variant += f"_sa{cfg.seed_assign}"
     return (f"{model_tag(cfg)}_{PRESET_SHORT[cfg.preset][:2]}_{arm_tag}{variant}"
             f"_k{cfg.size**2}_s{cfg.seed_fit}_{digit_tag(cfg)}_{uid}")
 
@@ -1527,7 +1611,15 @@ def _run_one_inner(cfg: Config, run_id: str, run_dir: str, wb) -> dict:
             Y = np.asarray(data["Y"])
             print(f"data built: {Y.shape[0]} units x {Y.shape[1]} pixels "
                   f"(size={cfg.size}, radius={cfg.effective_radius}) "
-                  f"in {timings['build_data_s']:.0f}s")
+                  f"in {timings['build_data_s']:.0f}s   dataset_id {data['dataset_id']} "
+                  f"data_hash {data['data_hash']}")
+            # record the dataset fingerprints next to the config, written at launch
+            cfg_path = os.path.join(run_dir, "config.json")
+            with open(cfg_path) as f:
+                record = json.load(f)
+            record.update(dataset_id=data["dataset_id"], data_hash=data["data_hash"])
+            with open(cfg_path, "w") as f:
+                json.dump(record, f, indent=2)
             t0 = time.monotonic()
             flow, losses, u_z = fit_flow(cfg, data, timings=timings)
             wall = time.monotonic() - t0

@@ -158,7 +158,13 @@ class ExpConfig:
     size: int = 8                 # image side; K = size^2 outcome dims
     digit: int | None = 0         # single digit class, or None for all ten
     n: int | None = 10000         # cap on sample size (None = use everything)
-    seed: int = 0
+    seed: int = 0                 # images (order/subset) and dequantisation noise; also the
+                                  # treatment assignment unless seed_assign is set
+    seed_assign: int | None = None  # None: assignment drawn from the continuation of the
+                                  # `seed` stream (the historical behaviour, every dataset
+                                  # before 2026-09-18). An int: an independent generator for
+                                  # the assignment only, so assignments can be re-drawn with
+                                  # the images and their noise held fixed.
     split: str = "train"
     data_dir: str = "data"        # relative to this file
 
@@ -474,7 +480,8 @@ def build_experiment(cfg: ExpConfig) -> dict:
     # ---- treatment assignment ----
     z = (thickness - thickness.mean()) / thickness.std()
     p = 1.0 / (1.0 + np.exp(-(cfg.ps_intercept + cfg.ps_slope * z)))
-    T = (rng.uniform(size=n) < p).astype(np.float64)[:, None]
+    rng_assign = rng if cfg.seed_assign is None else np.random.default_rng(cfg.seed_assign)
+    T = (rng_assign.uniform(size=n) < p).astype(np.float64)[:, None]
     Y = np.where(T == 1, Y1, Y0)
 
     treated = T[:, 0].astype(bool)
@@ -536,6 +543,32 @@ def build_experiment(cfg: ExpConfig) -> dict:
     }
 
 
+def dataset_identity(name: str, cfg: "ExpConfig", data: dict) -> dict:
+    """Two fingerprints every consumer of a dataset records, so runs on the same data
+    can be joined and the join can be checked.
+
+    ``dataset_id``: sha1 of the preset name and every generator knob (size, radius,
+    digit, n, seed and all effect/confounding settings) -- same inputs, same id.
+    ``data_hash``: md5 of the bytes of ``Y``, ``X`` and ``ATE`` -- same id must give
+    the same hash; if it ever does not, the generator has changed underneath a
+    result and the comparison is invalid.
+    """
+    import hashlib
+    import json
+
+    knobs = {"preset": name, **asdict(cfg)}
+    # hash a canonical form: every number as a float, so base_shift=0 (int, from one
+    # config) and base_shift=0.0 (float, from another) give the same id; knobs left at
+    # None are dropped, so adding an optional knob later never changes existing ids
+    canon = {k: (float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v)
+             for k, v in knobs.items() if v is not None}
+    dataset_id = hashlib.sha1(json.dumps(canon, sort_keys=True, default=str).encode()).hexdigest()[:12]
+    h = hashlib.md5()
+    for key in ("Y", "X", "ATE"):
+        h.update(np.ascontiguousarray(np.asarray(data[key], dtype=np.float64)).tobytes())
+    return {"dataset_id": dataset_id, "data_hash": h.hexdigest()[:12], "generator_config": knobs}
+
+
 def build_preset(name: str, **overrides) -> dict:
     """``build_experiment`` on a named preset, with optional knob overrides."""
     if name not in PRESETS:
@@ -543,6 +576,7 @@ def build_preset(name: str, **overrides) -> dict:
     cfg = ExpConfig(**{**asdict(PRESETS[name]), **overrides})
     data = build_experiment(cfg)
     data["preset"] = name
+    data.update(dataset_identity(name, cfg, data))
     return data
 
 

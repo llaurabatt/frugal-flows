@@ -230,6 +230,32 @@ def read_run(d: str) -> dict:
                  cop_note="" if c.get("copula_nn_width") is not None else " (not in config; the copula ran at the library default)")
         if c.get("copula_nn_width") is None:
             R.update(cop_width=50, cop_depth=1, cop_layers=4, cop_knots=8)
+    # ---- the maps against the images themselves (observed difference, imbalance, and each
+    # sampled arm mean against the mean of that arm's images), for any layout. The batch
+    # and margin_only layouts did not store Y, so their data is rebuilt from config through
+    # the same build_data the fit used.
+    R.update(obs_diff=None, imbalance=None, d0=None, d1=None)
+    try:
+        import exp_ate_recovery as E
+        if R["layout"] == "exp_ate_recovery":
+            Yd, Xd, ITEd = a["Y"], a["X"], a["ITE"]
+            m0 = a["mc_mean0"] if "mc_mean0" in a.files else None
+            m1 = a["mc_mean1"] if "mc_mean1" in a.files else None
+        else:
+            kw = {k: c[k] for k in ("preset", "size", "seed_data", "seed_assign", "base_shift", "digit", "n", "radius")
+                  if k in c and c[k] is not None}
+            kw.setdefault("digit", 0)
+            dd = E.build_data(E.Config(arm="flexible_continuous", **kw))
+            Yd, Xd, ITEd = dd["Y"], dd["X"], dd["ITE"]
+            m0 = m1 = None
+            if R["e0"] is not None:            # batch layout: arm error maps against the population means
+                Y0d = np.asarray(Yd) - np.asarray(Xd)[:, :1] * np.asarray(ITEd)
+                m0 = np.asarray(R["e0"]) + Y0d.mean(0)
+                m1 = np.asarray(R["e1"]) + (Y0d + np.asarray(ITEd)).mean(0)
+        om = E.observed_maps({"Y": Yd, "X": Xd, "ATE": R["ate"]}, m0, m1)
+        R.update(obs_diff=om["obs_diff"], imbalance=om["imbalance"], d0=om["d0"], d1=om["d1"])
+    except Exception as exc:  # noqa: BLE001 -- a table must still come out; say what is missing
+        R["obs_error"] = f"{type(exc).__name__}: {exc}"
     R["n_params"] = param_count_from_log(f"{d}/log.txt")
     R["ps_slope"] = PRESETS[R["preset"]].ps_slope if R["preset"] in PRESETS else None
     if R["radius"] is None:
@@ -323,6 +349,35 @@ def table2(R):
             val = fmt(se)
         rows.append((f"Monte Carlo standard error, {r}",
                      f"standard error of the {r} signed error due to the finite number of draws", val))
+    # ---- against the images themselves
+    if R.get("obs_diff") is not None:
+        imb = np.where(np.isfinite(R["imbalance"]), R["imbalance"], np.nan)
+        vs = np.where(np.isfinite(R["tau"] - R["obs_diff"]), R["tau"] - R["obs_diff"], np.nan)
+        for r, m, _ in reg:
+            rows.append((f"Imbalance, {r}",
+                         f"observed treated-minus-untreated difference over all {R['n']:,} images, minus the true effect, "
+                         f"averaged over the {n_[r]} {r} pixels: what a raw group comparison gets wrong here",
+                         fmt(np.nanmean(imb[m]), signed=True)))
+        rows.append(("MAE vs observed, all pixels",
+                     f"mean absolute difference between the estimated effect and the observed difference over the {K} pixels",
+                     fmt(np.nanmean(np.abs(vs)))))
+        for r, m, _ in reg:
+            rows.append((f"Signed error vs observed, {r}",
+                         f"mean of (estimated effect − observed difference) over the {n_[r]} {r} pixels",
+                         fmt(np.nanmean(vs[m]), signed=True)))
+        for r, m, _ in reg:
+            if R.get("d0") is not None:
+                d0 = np.where(np.isfinite(R["d0"]), R["d0"], np.nan)
+                d1 = np.where(np.isfinite(R["d1"]), R["d1"], np.nan)
+                u, t = fmt(np.nanmean(d0[m]), signed=True), fmt(np.nanmean(d1[m]), signed=True)
+            else:
+                u = t = "not recorded"
+            rows.append((f"Untreated-arm error vs untreated images, {r}",
+                         f"sampled mean under T = 0 minus the mean of the untreated images, averaged over the {n_[r]} {r} pixels", u))
+            rows.append((f"Treated-arm error vs treated images, {r}",
+                         f"sampled mean under T = 1 minus the mean of the treated images, averaged over the {n_[r]} {r} pixels", t))
+    elif R.get("obs_error"):
+        rows.append(("Comparison with the images", "could not rebuild the dataset from this folder's config", R["obs_error"]))
     if R["layout"] == "overnight":
         rows.append(("Non-finite draws", "number of infinite or NaN values among the sampled outputs", fmt(R["nonfinite"])))
     elif R["layout"] == "margin_only":
@@ -488,7 +543,8 @@ def draw_ate_maps(d: str, R: dict) -> str:
     os.makedirs(f"{d}/plots", exist_ok=True)
     path = f"{d}/plots/ate_maps.png"
     plot_ate_maps(R["size"], R["radius"], np.asarray(R["tau"]), np.asarray(R["ate"]), path,
-                  title=R["run"], e0=R["e0"], e1=R["e1"])
+                  title=R["run"], e0=R["e0"], e1=R["e1"],
+                  obs_diff=R.get("obs_diff"), d0=R.get("d0"), d1=R.get("d1"))
     return path
 
 

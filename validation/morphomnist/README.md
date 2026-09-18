@@ -111,8 +111,10 @@ model's initialisation. The learned-model sweep is long and sequential;
 python exp_ate_recovery.py --selftest
 python exp_frengression_recovery.py --selftest
 
-# 1. Existing classical estimators: naive, IPW, OLS, AIPW and oracle IPW.
-python baselines.py --all --size 8 --seeds 1 2 3 4 5
+# 1. Classical estimators (naive, IPW, OLS, AIPW, oracle IPW), one dataset per call
+#    or every dataset the flow runs used that has no baseline folder yet:
+python baselines.py --preset exp1_rct_homogeneous --size 8 --seed-data 1
+python baselines.py --from-index
 
 # 2. E1-E6 x FF location translation, FF MLP, FF transformer and Frengression.
 for seed in 1 2 3 4 5; do
@@ -137,7 +139,7 @@ python compare_frengression_ff.py \
 ```
 
 The learned models write below `runs/exp_ate_recovery/`; the classical methods
-write below `runs/baselines/`. The final commands create:
+write below `runs/baselines/` (see "Baselines" below). The final commands create:
 
 - `runs/comparison-ate/{runs.csv,summary.csv,summary.md,ate_maps_*.png}`
 - `runs/comparison-tau/{runs.csv,summary.csv,summary.md}`
@@ -380,6 +382,16 @@ the treated fraction (0 ⇒ ~50/50).
 | `--all-digits` | all ten classes ⇒ n = 60000, `Z` 11-dimensional, mixed continuous/discrete stage exercised. A different, harder experiment. |
 | `--n` | cap the sample size. |
 
+### 8. `--seed-data` / `--seed-assign` / `--seed-fit` — what each seed decides
+
+| flag | decides |
+|---|---|
+| `--seed-data` | one generator, used in order for: the shuffle of the digit's images (and which are kept under `--n`); the dequantisation noise added to every pixel before the logit; and, unless `--seed-assign` is set, the treatment assignment `T = (uniform < propensity)`. Two data seeds differ in all three. |
+| `--seed-assign` | default `None`: the assignment is drawn from the continuation of the `--seed-data` stream — every dataset before 2026-09-18 was built this way, and this keeps them reproducible. An integer: an independent generator for the assignment only, with the images and their noise held fixed by `--seed-data`. To bootstrap over assignments, fix `--seed-data` and vary `--seed-assign`. The run name gets an `sa<k>` tag and the dataset a different `dataset_id`. |
+| `--seed-fit` | network initialisation and batch order. Never touches the data. |
+
+The effect map `ATE` is deterministic given the preset and size; no seed changes it.
+
 ### ⚠️ The one rule to remember
 
 **Keep the coefficients summing below 1:**
@@ -482,6 +494,66 @@ python run_index.py --query "preset == 'E1' and variant.isna() and termination =
 or in pandas: `pd.read_csv("runs/exp_ate_recovery/index.csv")` and `groupby`. A plain
 fit has an empty `variant`; `coplam4`, `copw200`, `bs0.5`, `rct`, … name what was
 changed from it.
+
+### The effect-map figure (`plots/ate_maps.png`) and the "against the images" metrics
+
+Two rows of five panels, the disc outlined in black, region averages printed under
+every error panel (signed error over all pixels, disc, ring, far; MAE and RMSE under
+the two signed-error panels).
+
+Row 1 is against the **truth**: the estimated effect, the true effect, their
+difference, and — when the model samples both arms — each arm's sampled mean minus
+that arm's true population mean.
+
+Row 2 is against the **images**: the observed treated-minus-untreated difference over
+all `n` images; the finite-sample imbalance (observed minus true — what a raw group
+comparison gets wrong on this dataset); the estimate minus the observed difference;
+and each arm's sampled mean minus the mean of that arm's images. The last two differ by
+exactly the panel before them.
+
+The same quantities are in `metrics.json` (`imb_*`, `vsobs_*`, `d0_*`, `d1_*`),
+in Table 2 of `tables.md`, and as columns of both indexes, so "does the model reproduce
+the imbalance in its data, and by how much does it depart from it" is a query, not a
+new script. A panel whose input the folder does not hold (no sampled arms for
+`loctrans` and the baselines other than `naive`) says so instead of drawing.
+
+### Baselines: `baselines.py`, `runs/baselines/`
+
+The classical per-pixel estimators — naive difference in means, Hajek IPW with an
+estimated propensity, per-pixel OLS on `[T, basis(Z)]`, 5-fold cross-fitted AIPW,
+and oracle IPW with the true propensity — run on **one dataset per call**, built by
+the very function and `Config` class the flow runs use (`exp_ate_recovery.build_data`),
+with the same defaults (radius `round(size/4)`, digit 0, …) and the same generator
+overrides (`--base-shift`, `--ps-slope`, …). One call writes one run folder:
+
+```
+runs/baselines/<UTC stamp>_baselines_<preset>_[<variant>_]k<K>_sd<seed>_d<digit>_<uid>/
+    config.json    run_id, uid, dataset_id, data_hash, the generator config, basis
+    arrays.npz     ATE, ATT, ATC, Y, X, ITE, PROPENSITY, tau_hat_<method> (x5)
+    metrics.json   whole-image and regional scores per method
+    plots/         ate_maps_<method>.png
+```
+
+`sd<seed>` is the *data* seed — a baseline has no fit seed. `--from-index` runs every
+distinct dataset in the flow index that has no baseline folder yet.
+
+**Joining baselines to flow runs.** Every dataset carries two fingerprints, computed
+in `prepare_morphomnist_exps.dataset_identity` and recorded in every `config.json`,
+`metrics.json` and both indexes: `dataset_id`, a hash of the preset and every
+generator knob (so the same arguments give the same id, on either side), and
+`data_hash`, an md5 of the built `Y`, `X` and `ATE` arrays (so equal ids can be
+checked to have produced identical bytes). `runs/baselines/index.csv` has one row per
+(dataset, method) with the same column names as the flow index wherever the meaning is
+the same, and
+
+```bash
+python run_index.py --compare "preset == 'E1' and K == 64"   # every method on every dataset
+python run_index.py --baselines                               # rebuild runs/baselines/index.csv
+```
+
+joins the two on `dataset_id`, warning if any dataset's `data_hash` disagrees between
+rows. A flow row is labelled `<model>_<arm>[-trf]_[<variant>_]s<fit seed>`, a baseline
+row by its method.
 
 ⚠️ `--skip-done` keys on `metrics.json` existing, so a run that finished with a
 non-finite score still counts as done and **will be skipped**. Delete such

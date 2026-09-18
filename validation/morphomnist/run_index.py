@@ -56,6 +56,10 @@ def row_for(d: str) -> dict:
         "run_id": base, "uid": R["record"].get("uid", base[-6:]), "stamp": base[:20],
         "wandb_name": R["record"].get("wandb_name", wj.get("name")), "wandb_id": wj.get("id") or "",
         "wandb_url": wj.get("url", ""), "layout": R["layout"],
+        # dataset fingerprints (prepare_morphomnist_exps.dataset_identity): the join key to
+        # baselines and to other fits on the same data, and the proof the bytes matched
+        "dataset_id": R["record"].get("dataset_id") or R["metrics"].get("dataset_id", ""),
+        "data_hash": R["record"].get("data_hash") or R["metrics"].get("data_hash", ""),
         # the model tag as the name carries it (check_runs.py verifies it against the config);
         # the raw config uses different words per layout (fullff / standalone / ...)
         "model": re.match(r"^(ff|margin_sep|margin_zero|margin)_", base[21:]).group(1),
@@ -68,6 +72,7 @@ def row_for(d: str) -> dict:
         "digit": "" if R["digit"] is None and R["n"] != 5923 else (0 if R["digit"] is None else R["digit"]),
         "n": R["n"], "n_train": R["n_train"], "n_val": R["n_val"],
         "seed_data": R["seed_data"], "seed_fit": R["seed_fit"],
+        "seed_assign": R["cfg"].get("seed_assign") if R["cfg"].get("seed_assign") is not None else "",
         "size": R["size"], "K": R["K"], "radius": R["radius"],
         "ps_slope": R["ps_slope"], "base_shift": R["base_shift"],
         "true_effect_disc": _f(R["ate"][disc].mean()),
@@ -102,6 +107,18 @@ def row_for(d: str) -> dict:
         "e1_ring": _f(np.nanmean(e1[ring])) if e1 is not None else "",
         "e1_far": _f(np.nanmean(e1[far])) if e1 is not None else "",
         "se_disc": _f(R["se"]["reference_disc"]), "se_ring": _f(R["se"]["reference_ring"]), "se_far": _f(R["se"]["far_region"]),
+        # against the images: imbalance (observed − true), estimate − observed, sampled arm
+        # means − that arm's images (all over the full dataset)
+        **{f"imb_{r}": _f(np.nanmean(np.where(np.isfinite(R["imbalance"]), R["imbalance"], np.nan)[m]))
+           if R.get("imbalance") is not None else "" for r, m in (("disc", disc), ("ring", ring), ("far", far))},
+        **({"vsobs_mae_all": _f(np.nanmean(np.abs(np.where(np.isfinite(R["tau"] - R["obs_diff"]), R["tau"] - R["obs_diff"], np.nan))))}
+           if R.get("obs_diff") is not None else {"vsobs_mae_all": ""}),
+        **{f"vsobs_signed_{r}": _f(np.nanmean(np.where(np.isfinite(R["tau"] - R["obs_diff"]), R["tau"] - R["obs_diff"], np.nan)[m]))
+           if R.get("obs_diff") is not None else "" for r, m in (("disc", disc), ("ring", ring), ("far", far))},
+        **{f"d0_{r}": _f(np.nanmean(np.where(np.isfinite(R["d0"]), R["d0"], np.nan)[m])) if R.get("d0") is not None else ""
+           for r, m in (("disc", disc), ("ring", ring), ("far", far))},
+        **{f"d1_{r}": _f(np.nanmean(np.where(np.isfinite(R["d1"]), R["d1"], np.nan)[m])) if R.get("d1") is not None else ""
+           for r, m in (("disc", disc), ("ring", ring), ("far", far))},
         "nonfinite_values": R["nonfinite"] if R["nonfinite"] is not None else "",
         "nonfinite_pixels": int((~np.isfinite(err)).sum()),
     }
@@ -120,14 +137,14 @@ def row_for(d: str) -> dict:
     return row
 
 
-def _read_index():
-    if not os.path.exists(INDEX):
+def _read_index(path=INDEX):
+    if not os.path.exists(path):
         return []
-    with open(INDEX, newline="") as f:
+    with open(path, newline="") as f:
         return list(csv.DictReader(f))
 
 
-def _write_index(rows):
+def _write_index(rows, path=INDEX):
     cols = []
     for r in rows:
         for k in r:
@@ -135,7 +152,7 @@ def _write_index(rows):
                 cols.append(k)
     # config columns last, everything else in first-seen order
     cols = [c for c in cols if not c.startswith("cfg.")] + sorted(c for c in cols if c.startswith("cfg."))
-    with open(INDEX, "w", newline="") as f:
+    with open(path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)
         w.writeheader()
         for r in rows:
@@ -157,6 +174,108 @@ def upsert(run_dir: str) -> str:
     return row["run_id"]
 
 
+# ----------------------------------------------------------------------------- baselines
+BASELINES_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs", "baselines")
+BASELINES_INDEX = os.path.join(BASELINES_ROOT, "index.csv")
+
+
+def baseline_rows_for(d: str) -> list:
+    """One row per estimator in a baselines run folder, with the same column names as the
+    flow index wherever the meaning is the same, so the two join on dataset_id."""
+    cj = json.load(open(f"{d}/config.json"))
+    mj = json.load(open(f"{d}/metrics.json"))
+    c, g = cj["config"], cj.get("generator_config", {})
+    base = os.path.basename(d.rstrip("/"))
+    a = np.load(f"{d}/arrays.npz")
+    ate = a["ATE"]
+    size = int(c["size"])
+    radius = c.get("radius") if c.get("radius") is not None else max(1, round(size / 4))
+    disc, ring, far = regions(size, radius)
+    rows = []
+    for method, m in mj["methods"].items():
+        row = {
+            "run_id": base, "uid": cj["uid"], "stamp": base[:20], "method": method, "basis": c["basis"],
+            "dataset_id": cj["dataset_id"], "data_hash": cj["data_hash"],
+            "model": f"baseline_{method}",
+            "preset": PRESET_TAG.get(c["preset"], c["preset"]), "preset_full": c["preset"],
+            "variant": (re.search(r"^baselines_e\d_(.*?)_k\d+_sd\d+_", base[21:]) or [None, ""])[1],
+            "digit": "" if c.get("digit") is None else c["digit"],
+            "n": mj["n_units"], "seed_data": c["seed_data"],
+            "seed_assign": c.get("seed_assign") if c.get("seed_assign") is not None else "",
+            "size": size, "K": size * size,
+            "radius": radius, "ps_slope": g.get("ps_slope", ""), "base_shift": c.get("base_shift"),
+            "true_effect_disc": _f(ate[disc].mean()),
+            "n_disc": int(disc.sum()), "n_ring": int(ring.sum()), "n_far": int(far.sum()),
+            "mae_all": _f(m["mae_all"]), "rmse_all": _f(m["rmse_all"]),
+            "signed_disc": _f(m["signed_disc"]), "signed_ring": _f(m["signed_ring"]), "signed_far": _f(m["signed_far"]),
+            "mae_disc": _f(m["mae_disc"]), "mae_ring": _f(m["mae_ring"]), "mae_far": _f(m["mae_far"]),
+            "ate_mae_on_support": _f(m["ate_mae_on_support"]), "ate_mae_off_support": _f(m["ate_mae_off_support"]),
+            "ate_corr": _f(m["ate_corr"]), "att_mae": _f(m["att_mae"]), "atc_mae": _f(m["atc_mae"]),
+            "nonfinite_pixels": int((~np.isfinite(a[f"tau_hat_{method}"])).sum()),
+            "seconds": _f(m.get("seconds")),
+            # against the images (same names as the flow index)
+            **{f"imb_{r}": _f(mj.get("imbalance", {}).get(f"imb_signed_{r}")) for r in ("disc", "ring", "far")},
+            "vsobs_mae_all": _f(m.get("vsobs_mae_all")),
+            **{f"vsobs_signed_{r}": _f(m.get(f"vsobs_signed_{r}")) for r in ("disc", "ring", "far")},
+        }
+        if method == "naive" and "e0_naive" in a.files:
+            e0, e1 = a["e0_naive"], a["e1_naive"]
+            for reg, mk in (("disc", disc), ("ring", ring), ("far", far)):
+                row[f"e0_{reg}"] = _f(e0[mk].mean())
+                row[f"e1_{reg}"] = _f(e1[mk].mean())
+        for k, val in sorted(g.items()):
+            row[f"cfg.{k}"] = "" if val is None else (json.dumps(val) if isinstance(val, (dict, list)) else val)
+        rows.append(row)
+    return rows
+
+
+def rebuild_baselines() -> int:
+    rows = []
+    for d in sorted(glob.glob(f"{BASELINES_ROOT}/2*/")):
+        rows += baseline_rows_for(d.rstrip("/"))
+    _write_index(rows, BASELINES_INDEX)
+    return len(rows)
+
+
+def upsert_baselines(run_dir: str) -> str:
+    new = baseline_rows_for(run_dir)
+    uid = new[0]["uid"]
+    rows = [r for r in _read_index(BASELINES_INDEX) if r.get("uid") != uid] + new
+    rows.sort(key=lambda r: (r["run_id"], r["method"]))
+    _write_index(rows, BASELINES_INDEX)
+    return new[0]["run_id"]
+
+
+def compare(where: str | None = None, columns=("mae_all", "signed_disc", "signed_ring", "signed_far")):
+    """Join the two indexes on dataset_id and print every method on every dataset."""
+    import warnings
+
+    import pandas as pd
+    warnings.simplefilter("ignore")   # pandas/numpy notices about string concatenation and concat
+    ff = pd.read_csv(INDEX)
+    bl = pd.read_csv(BASELINES_INDEX) if os.path.exists(BASELINES_INDEX) else pd.DataFrame()
+    # a flow row's label: model, arm (-trf), variant, fit seed -- everything that tells two
+    # fits on the same dataset apart, e.g. ff_loctrans_s101, ff_flexcont_coplam4_s101
+    var = ff["variant"].fillna("").astype(str)
+    trf = np.where(ff["conditioner"].fillna("") == "transformer", "-trf", "")
+    ff = ff.assign(method=ff["model"] + "_" + ff["arm"] + trf
+                   + np.where(var != "", "_" + var, "") + "_s" + ff["seed_fit"].astype(str))
+    both = pd.concat([ff, bl], ignore_index=True, sort=False)
+    both = both[both["dataset_id"].notna()]
+    if where:
+        both = both.query(where)
+    # the join is only valid where the bytes agree
+    for did, grp in both.groupby("dataset_id"):
+        if grp["data_hash"].nunique() > 1:
+            print(f"WARNING dataset {did}: differing data_hash across runs -> {sorted(grp['data_hash'].unique())}")
+    keys = ["dataset_id", "preset", "K", "seed_data", "base_shift", "ps_slope"]
+    keys = [k for k in keys if k in both.columns]
+    out = both[keys + ["method", "termination"] + list(columns)] if "termination" in both.columns else both[keys + ["method"] + list(columns)]
+    with pd.option_context("display.width", 250, "display.max_rows", 1000, "display.max_columns", 40):
+        print(out.sort_values(keys + ["method"]).to_string(index=False))
+    print(f"{both['dataset_id'].nunique()} datasets, {len(both)} rows", file=sys.stderr)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--upsert", metavar="RUN_DIR", default=None)
@@ -164,8 +283,16 @@ def main():
                     help="pandas .query() expression over the index; prints the matching rows' key columns")
     ap.add_argument("--columns", default="run_id,model,preset,K,seed_fit,termination,mae_all,signed_disc,signed_ring,signed_far",
                     help="columns to print with --query (comma-separated)")
+    ap.add_argument("--baselines", action="store_true", help="rebuild runs/baselines/index.csv instead")
+    ap.add_argument("--compare", nargs="?", const="", default=None, metavar="EXPR",
+                    help="join both indexes on dataset_id and print every method per dataset; "
+                         "optional pandas expression to filter, e.g. \"preset == 'E1'\"")
     args = ap.parse_args()
-    if args.upsert:
+    if args.baselines:
+        print(f"rebuilt {BASELINES_INDEX}: {rebuild_baselines()} rows", file=sys.stderr)
+    elif args.compare is not None:
+        compare(args.compare or None)
+    elif args.upsert:
         print(f"indexed {upsert(args.upsert)}", file=sys.stderr)
     elif args.query is not None:
         import pandas as pd

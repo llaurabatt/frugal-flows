@@ -40,14 +40,27 @@ covariate is therefore mapped to its rank and expanded:
 
 Usage
 -----
-    python baselines.py --preset exp4_covariate_cate --size 8
-    python baselines.py --all --size 8 --seeds 1 2 3 4 5
-    python baselines.py --all --size 8 --seeds 1 2 3 --csv results.csv
+    python baselines.py --preset exp4_covariate_cate --size 8 --seed-data 101
+    python baselines.py --preset exp1_rct_homogeneous --size 8 --seed-data 101 --base-shift 0
+    python baselines.py --from-index        # every dataset the flow runs used, not yet done
+
+Every invocation builds ONE dataset through exp_ate_recovery.build_data -- the same
+class, the same function, the same defaults a flow run uses, so the bytes are the ones
+the flow saw -- and writes one run folder under runs/baselines/:
+    <UTC stamp>_baselines_<preset>_[<variant>_]k<K>_sd<seed>_d<digit>_<uid>/
+        config.json    run_id, uid, dataset_id, data_hash, the generator config, basis
+        arrays.npz     ATE, ATT, ATC, Y, X, ITE, PROPENSITY, tau_hat_<method> x5
+        metrics.json   whole-image and regional scores per method
+        plots/         ate_maps_<method>.png
+        log.txt, wandb.json (baselines are not logged to wandb)
+and one row per (dataset, method) into runs/baselines/index.csv. dataset_id and
+data_hash are the join keys to runs/exp_ate_recovery/index.csv.
 """
 
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import sys
@@ -57,10 +70,9 @@ import numpy as np
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
+from prepare_morphomnist_exps import PRESETS
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import KFold
-
-from prepare_morphomnist_exps import PRESETS, build_preset
 
 METHODS = ("naive", "ipw", "ols", "aipw", "oracle_ipw")
 BASES = ("linear", "poly3", "poly5")
@@ -177,7 +189,18 @@ ESTIMATORS = {"naive": est_naive, "ipw": est_ipw, "ols": est_ols,
 # --------------------------------------------------------------------------- #
 # scoring -- identical keys to exp_ate_recovery.evaluate
 # --------------------------------------------------------------------------- #
-def score(tau_hat: np.ndarray, data: dict) -> dict:
+def _regional(err: np.ndarray, masks) -> dict:
+    disc, ring, far = masks
+    e = np.where(np.isfinite(err), err, np.nan)
+    out = {"mae_all": float(np.nanmean(np.abs(e))), "rmse_all": float(np.sqrt(np.nanmean(e ** 2)))}
+    for name, m in (("disc", disc), ("ring", ring), ("far", far)):
+        out[f"signed_{name}"] = float(np.nanmean(e[m]))
+        out[f"mae_{name}"] = float(np.nanmean(np.abs(e[m])))
+    return out
+
+
+def score(tau_hat: np.ndarray, data: dict, masks) -> dict:
+    """The whole-image scores exp_ate_recovery reports, plus the regional ones."""
     ATE = np.asarray(data["ATE"])
     support = ATE != 0
     err = tau_hat - ATE
@@ -190,82 +213,192 @@ def score(tau_hat: np.ndarray, data: dict) -> dict:
         "ate_corr": float(np.corrcoef(tau_hat, ATE)[0, 1]),
         "att_mae": float(np.abs(tau_hat - np.asarray(data["ATT"])).mean()),
         "atc_mae": float(np.abs(tau_hat - np.asarray(data["ATC"])).mean()),
+        **_regional(err, masks),
     }
 
 
-def run_one(preset: str, size: int, seed: int, basis: str, n: int | None,
-            digit: int | None) -> list[dict]:
-    """Every estimator on one dataset. Returns one row per method."""
-    data = build_preset(preset, size=size, seed=seed, n=n, digit=digit)
+def dataset_config(preset: str, size: int, seed_data: int, radius=None, digit=0, n=None,
+                   seed_assign=None, **generator_overrides):
+    """The exp_ate_recovery.Config that builds this dataset -- the same class, the same
+    build_data, so the bytes are the ones a flow run on these arguments saw."""
+    import exp_ate_recovery as E
+    return E.Config(preset=preset, size=size, radius=radius, digit=digit, n=n,
+                    seed_data=seed_data, seed_assign=seed_assign, arm="flexible_continuous",
+                    **{k: v for k, v in generator_overrides.items() if v is not None})
+
+
+def run_name(cfg, uid: str) -> str:
+    """``baselines_<preset>_[<variant>_]k<K>_sd<seed>_d<digit>_<uid>``. ``sd`` is the DATA seed:
+    a baseline has no fit seed. ``bs<shift>`` whenever base_shift was set (``bs0`` for a
+    zero effect), ``rct`` when confounding was switched off on a confounded preset,
+    ``sa<k>`` when the assignment was re-drawn with its own seed."""
+    import exp_ate_recovery as E
+    var = []
+    if cfg.base_shift is not None:
+        var.append(f"bs{cfg.base_shift:g}")
+    if cfg.ps_slope == 0 and E.PRESET_SHORT[cfg.preset][:2] != "e1":
+        var.append("rct")
+    if cfg.seed_assign is not None:
+        var.append(f"sa{cfg.seed_assign}")
+    return "_".join(["baselines", E.PRESET_SHORT[cfg.preset][:2]] + var
+                    + [f"k{cfg.size ** 2}", f"sd{cfg.seed_data}", E.digit_tag(cfg), uid])
+
+
+def run_one(cfg, basis: str, runs_root: str = RUNS_ROOT, plots: bool = True) -> dict:
+    """Every estimator on one dataset, written as one run folder (one dataset, five
+    tau_hat arrays, five score blocks). Returns the metrics record."""
+    import secrets
+    import time
+    from dataclasses import asdict
+    from datetime import datetime, timezone
+
+    import exp_ate_recovery as E
+
+    t0 = time.monotonic()
+    data = E.build_data(cfg)
+    uid = secrets.token_hex(3)
+    name = run_name(cfg, uid)
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+    run_dir = os.path.join(runs_root, f"{stamp}_{name}")
+    os.makedirs(run_dir, exist_ok=False)
+    with open(os.path.join(run_dir, "config.json"), "w") as f:
+        json.dump({"run_id": os.path.basename(run_dir), "wandb_name": name, "uid": uid,
+                   "dataset_id": data["dataset_id"], "data_hash": data["data_hash"],
+                   "config": {**asdict(cfg), "basis": basis, "methods": list(ESTIMATORS)},
+                   "generator_config": data["generator_config"]}, f, indent=2)
+
     Y = np.asarray(data["Y"], dtype=np.float64)
-    T = np.asarray(data["X"])[:, 0].astype(bool)
+    Tb = np.asarray(data["X"])[:, 0].astype(bool)
     X = design_matrix(np.asarray(data["Z"]), basis)
     true_p = np.asarray(data["PROPENSITY"])
+    masks = E.region_masks(cfg.size, cfg.effective_radius)
+    ITE = np.asarray(data["ITE"])
+    Y0 = Y - Tb[:, None] * ITE
+    Y1 = Y0 + ITE
 
-    rows = []
-    for name, fn in ESTIMATORS.items():
-        tau = np.asarray(fn(Y, T, X, true_p, seed=seed))
-        rows.append({"preset": preset, "seed": seed, "method": name,
-                     "basis": basis, "n_pixels": Y.shape[1],
-                     "n_units": Y.shape[0], **score(tau, data)})
-    return rows
+    log_lines = [f"{os.path.basename(run_dir)}", f"dataset_id {data['dataset_id']}  data_hash {data['data_hash']}",
+                 f"{Y.shape[0]} units x {Y.shape[1]} pixels, basis {basis}, seed_data {cfg.seed_data}"]
+    metrics = {"run_id": os.path.basename(run_dir), "dataset_id": data["dataset_id"],
+               "data_hash": data["data_hash"], "basis": basis, "n_units": int(Y.shape[0]),
+               "n_pixels": int(Y.shape[1]), "methods": {}}
+    arrays = {k: np.asarray(data[k]) for k in ("ATE", "ATT", "ATC", "Y", "X", "ITE", "PROPENSITY")}
+    om = E.observed_maps(data)                 # observed difference and imbalance, all images
+    arrays["obs_diff"] = om["obs_diff"]
+    metrics["imbalance"] = E._regional_metrics("imb", om["imbalance"], masks)
+    for mname, fn in ESTIMATORS.items():
+        t1 = time.monotonic()
+        tau = np.asarray(fn(Y, Tb, X, true_p, seed=cfg.seed_data))
+        m = score(tau, data, masks)
+        m.update(E._regional_metrics("vsobs", tau - om["obs_diff"], masks))   # estimate − observed
+        m["seconds"] = time.monotonic() - t1
+        e0 = e1 = None
+        if mname == "naive":      # the only estimator with per-arm means to compare
+            e0 = Y[~Tb].mean(axis=0) - Y0.mean(axis=0)
+            e1 = Y[Tb].mean(axis=0) - Y1.mean(axis=0)
+            arrays["e0_naive"], arrays["e1_naive"] = e0, e1
+        metrics["methods"][mname] = m
+        arrays[f"tau_hat_{mname}"] = tau
+        if plots:
+            os.makedirs(os.path.join(run_dir, "plots"), exist_ok=True)
+            E.plot_ate_maps(cfg.size, cfg.effective_radius, tau, arrays["ATE"],
+                            os.path.join(run_dir, "plots", f"ate_maps_{mname}.png"),
+                            title=f"{name}  |  {mname}", e0=e0, e1=e1, obs_diff=om["obs_diff"])
+        log_lines.append(f"  {mname:10s} mae {m['mae_all']:.4f}  signed disc {m['signed_disc']:+.4f} "
+                         f"ring {m['signed_ring']:+.4f} far {m['signed_far']:+.4f}  ({m['seconds']:.1f}s)")
+    metrics["wall_s"] = time.monotonic() - t0
+    np.savez(os.path.join(run_dir, "arrays.npz"), **arrays)
+    with open(os.path.join(run_dir, "metrics.json"), "w") as f:
+        json.dump(metrics, f, indent=2)
+    with open(os.path.join(run_dir, "wandb.json"), "w") as f:
+        json.dump({"id": None, "name": name, "note": "baselines are not logged to wandb"}, f, indent=2)
+    with open(os.path.join(run_dir, "log.txt"), "w") as f:
+        f.write("\n".join(log_lines) + "\n")
+    print("\n".join(log_lines), flush=True)
+    if os.path.realpath(runs_root) == os.path.realpath(RUNS_ROOT):
+        import run_index
+        run_index.upsert_baselines(run_dir)
+        print(f"indexed in {run_index.BASELINES_INDEX}")
+    else:
+        print("not indexed: run folder is outside runs/baselines")
+    return metrics
 
 
-# --------------------------------------------------------------------------- #
-# reporting
-# --------------------------------------------------------------------------- #
-def print_table(rows: list[dict], metric: str = "ate_mae"):
-    """preset x method, mean +- sd over seeds."""
-    presets = sorted({r["preset"] for r in rows}, key=lambda p: p[:4])
-    w = max(len(p) for p in presets) + 2
-    print(f"\n{metric}  (mean +- sd over seeds)\n")
-    print("preset".ljust(w) + "".join(m.rjust(18) for m in METHODS))
-    for p in presets:
-        line = p.ljust(w)
-        for m in METHODS:
-            v = [r[metric] for r in rows if r["preset"] == p and r["method"] == m]
-            line += (f"{np.mean(v):.4f}+-{np.std(v):.4f}".rjust(18) if v
-                     else "-".rjust(18))
-        print(line)
-    print(f"\n(oracle_ipw is the sampling-noise floor, not a competitor: it uses "
-          f"the TRUE propensity)")
+def existing_dataset_ids(runs_root: str = RUNS_ROOT) -> set:
+    ids = set()
+    for p in glob.glob(os.path.join(runs_root, "*", "config.json")):
+        with open(p) as f:
+            ids.add(json.load(f).get("dataset_id"))
+    return ids
+
+
+def datasets_from_flow_index(index_csv: str) -> list:
+    """One Config per distinct dataset the flow runs used, read from their index."""
+    import csv
+
+    import exp_ate_recovery as E
+    seen, out = set(), []
+    with open(index_csv, newline="") as f:
+        for r in csv.DictReader(f):
+            if not r.get("dataset_id"):
+                continue
+            if r["dataset_id"] in seen:
+                continue
+            seen.add(r["dataset_id"])
+            kw = {}
+            for k in ("size", "radius", "digit", "n", "seed_data", "seed_assign", *E.GENERATOR_OVERRIDE_KEYS):
+                v = r.get(f"cfg.{k}", "")
+                if v in ("", None):
+                    continue
+                try:
+                    kw[k] = int(float(v)) if k in ("size", "radius", "digit", "n", "seed_data", "seed_assign") else float(v)
+                except ValueError:
+                    kw[k] = v
+            if "size" not in kw:            # the batch layout's config has size but not radius/digit
+                kw["size"] = int(r["size"])
+            kw.setdefault("seed_data", int(r["seed_data"]))
+            kw.setdefault("digit", 0 if r.get("digit", "") == "" else int(float(r["digit"])))
+            out.append((r["dataset_id"], dataset_config(r["preset_full"], **kw)))
+    return out
 
 
 def main(argv=None):
+    import exp_ate_recovery as E
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--preset", default="exp4_covariate_cate", choices=list(PRESETS))
-    ap.add_argument("--all", action="store_true", help="every preset")
-    ap.add_argument("--seeds", type=int, nargs="+", default=[0])
+    ap.add_argument("--preset", default="exp1_rct_homogeneous", choices=list(PRESETS))
     ap.add_argument("--size", type=int, default=8)
-    ap.add_argument("--n", type=int, default=None)
+    ap.add_argument("--radius", type=int, default=None, help="effect-map radius; default round(size/4), as exp_ate_recovery")
     ap.add_argument("--digit", type=int, default=0)
     ap.add_argument("--all-digits", action="store_true")
+    ap.add_argument("--n", type=int, default=None)
+    ap.add_argument("--seed-data", type=int, default=101)
+    ap.add_argument("--seed-assign", type=int, default=None,
+                    help="re-draw the treatment assignment with its own seed, images and noise fixed by --seed-data")
+    for k in E.GENERATOR_OVERRIDE_KEYS:
+        ap.add_argument(f"--{k.replace('_', '-')}", default=None,
+                        type=(str if k in ("effect_mode", "h_shape", "g_shape", "effect") else float))
     ap.add_argument("--basis", default="poly3", choices=BASES)
-    ap.add_argument("--metric", default="ate_mae")
-    ap.add_argument("--csv", default=None, help="also write a tidy CSV here")
+    ap.add_argument("--runs-root", default=RUNS_ROOT)
+    ap.add_argument("--no-plots", action="store_true")
+    ap.add_argument("--from-index", action="store_true",
+                    help="run on every distinct dataset in runs/exp_ate_recovery/index.csv "
+                         "that has no baseline folder yet")
     args = ap.parse_args(argv)
 
-    presets = list(PRESETS) if args.all else [args.preset]
-    digit = None if args.all_digits else args.digit
+    if args.from_index:
+        import run_index
+        have = existing_dataset_ids(args.runs_root)
+        todo = [(i, c) for i, c in datasets_from_flow_index(run_index.INDEX) if i not in have]
+        print(f"{len(todo)} dataset(s) without a baseline folder")
+        for i, cfg in todo:
+            run_one(cfg, args.basis, args.runs_root, plots=not args.no_plots)
+        return
 
-    rows = []
-    for p in presets:
-        for s in args.seeds:
-            rows += run_one(p, args.size, s, args.basis, args.n, digit)
-            print(f"  done: {p} seed {s}", flush=True)
-
-    print_table(rows, args.metric)
-
-    os.makedirs(RUNS_ROOT, exist_ok=True)
-    out = args.csv or os.path.join(
-        RUNS_ROOT, f"baselines_k{args.size**2}_{args.basis}.csv")
-    keys = list(rows[0])
-    with open(out, "w") as f:
-        f.write(",".join(keys) + "\n")
-        for r in rows:
-            f.write(",".join(str(r[k]) for k in keys) + "\n")
-    print(f"\nwrote {out}  ({len(rows)} rows)")
+    overrides = {k: getattr(args, k) for k in E.GENERATOR_OVERRIDE_KEYS}
+    cfg = dataset_config(args.preset, args.size, args.seed_data, radius=args.radius,
+                         digit=None if args.all_digits else args.digit, n=args.n,
+                         seed_assign=args.seed_assign, **overrides)
+    run_one(cfg, args.basis, args.runs_root, plots=not args.no_plots)
 
 
 if __name__ == "__main__":

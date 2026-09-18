@@ -199,7 +199,8 @@ def load_ff(root: str) -> list[dict]:
 def load_baselines(root: str) -> list[dict]:
     rows = []
     for name in sorted(os.listdir(root)) if os.path.isdir(root) else []:
-        if not name.endswith(".csv"):
+        if not name.endswith(".csv") or name == "index.csv":
+            # index.csv is run_index.py's per-(dataset, method) table, not this format
             continue
         path = os.path.join(root, name)
         with open(path, encoding="utf-8", newline="") as handle:
