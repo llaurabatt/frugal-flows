@@ -278,7 +278,7 @@ def table1(R):
         ("Far region", f"{int(far.sum())} pixels"),
         ("Monte Carlo draws", fmt(R["n_mc"])),
     ]
-    return "**Table 1. Setup**\n\n" + md_table(rows)
+    return "Table 1. Setup", None, rows
 
 
 def table2(R):
@@ -334,7 +334,7 @@ def table2(R):
     if (~fin).sum():
         rows.append(("Non-finite pixels in the effect map", "pixels of the estimated effect that are ±inf or NaN; "
                      "excluded from every average above", fmt(int((~fin).sum()))))
-    return "**Table 2. Performance**\n\n" + md_table(rows, ("Metric", "Definition", "Result"))
+    return "Table 2. Performance", ("Metric", "Definition", "Result"), rows
 
 
 def _curve_rows(v, t, label=""):
@@ -390,7 +390,7 @@ def table3(R):
     else:
         rows += _curve_rows(R["val"], R["train"])
     rows.append(("Training time", "wall-clock seconds", fmt(round(R["wall_s"])) if R["wall_s"] else NR))
-    return "**Table 3. Training and convergence**\n\n" + md_table(rows, ("Metric", "Definition", "Result"))
+    return "Table 3. Training and convergence", ("Metric", "Definition", "Result"), rows
 
 
 def table4(R):
@@ -435,22 +435,119 @@ def table4(R):
         ("Objective", obj),
         ("Checkpoint selection", "lowest validation loss"),
     ]
-    return "**Table 4. Architecture and optimisation**\n\n" + md_table(rows)
+    return "Table 4. Architecture and optimisation", None, rows
+
+
+WANDB_KEY = "tables/summary"
+HTML_STYLE = """
+<style>
+body { font-family: -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; font-size: 13px;
+       color: #222; margin: 8px 12px; }
+h2 { font-size: 15px; margin: 18px 0 6px; }
+h1 { font-size: 15px; font-family: ui-monospace, Menlo, Consolas, monospace; margin: 4px 0 10px; }
+table { border-collapse: collapse; width: 100%; margin-bottom: 6px; table-layout: auto; }
+th, td { text-align: left; vertical-align: top; padding: 4px 8px; border-bottom: 1px solid #ddd;
+         word-wrap: break-word; }
+th { background: #f2f2f2; font-weight: 600; }
+td.metric { font-weight: 600; white-space: nowrap; width: 1%; }
+td.definition { color: #555; }
+td.result { font-family: ui-monospace, Menlo, Consolas, monospace; white-space: nowrap;
+            text-align: right; width: 1%; }
+</style>
+"""
+
+
+def html_escape(s):
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def html_tables(run_name: str, tables) -> str:
+    """The four tables as one HTML document: full width, wrapping cells, numbers right-aligned."""
+    parts = [HTML_STYLE, f"<h1>{html_escape(run_name)}</h1>"]
+    for title, header, rows in tables:
+        parts.append(f"<h2>{html_escape(title)}</h2><table>")
+        if header:
+            parts.append("<tr>" + "".join(f"<th>{html_escape(h)}</th>" for h in header) + "</tr>")
+            for r in rows:
+                parts.append(f"<tr><td class='metric'>{html_escape(r[0])}</td>"
+                             f"<td class='definition'>{html_escape(r[1])}</td>"
+                             f"<td class='result'>{html_escape(r[2])}</td></tr>")
+        else:
+            for r in rows:
+                parts.append(f"<tr><td class='metric'>{html_escape(r[0])}</td>"
+                             f"<td>{html_escape(r[1])}</td></tr>")
+        parts.append("</table>")
+    return "\n".join(parts)
+
+
+def draw_ate_maps(d: str, R: dict) -> str:
+    """Redraw plots/ate_maps.png for any layout through exp_ate_recovery.plot_ate_maps:
+    estimated, true, signed error, and the two arm errors when the folder has them,
+    with region averages under each error panel."""
+    from exp_ate_recovery import plot_ate_maps
+    os.makedirs(f"{d}/plots", exist_ok=True)
+    path = f"{d}/plots/ate_maps.png"
+    plot_ate_maps(R["size"], R["radius"], np.asarray(R["tau"]), np.asarray(R["ate"]), path,
+                  title=R["run"], e0=R["e0"], e1=R["e1"])
+    return path
+
+
+def log_to_wandb(d: str, run_name: str, tables, image: str | None = None) -> str:
+    """Attach the four tables to the folder's wandb run as one HTML panel (key tables/summary).
+
+    wandb.Table panels squeeze every column to the same narrow width and cut long cells,
+    which makes the Definition column unreadable; an HTML block renders at full width.
+    Returns a one-line status. Skips folders whose wandb.json says there is no run.
+    """
+    wj = load_json(f"{d}/wandb.json")
+    if not wj.get("id"):
+        return "no wandb run for this folder; nothing logged"
+    import wandb
+    m = re.match(r"https://wandb\.ai/([^/]+)/([^/]+)/runs/", wj.get("url", ""))
+    if not m:
+        return f"wandb.json has no parsable url; nothing logged ({wj.get('url')!r})"
+    entity, project = m.group(1), m.group(2).replace("%20", " ")
+    html = html_tables(run_name, tables)
+    run = wandb.init(entity=entity, project=project, id=wj["id"], resume="must")
+    payload = {WANDB_KEY: wandb.Html(html, inject=False)}
+    if image:
+        payload["plots/ate_maps"] = wandb.Image(image)
+    run.log(payload)
+    run.finish(quiet=True)
+    return (f"logged {', '.join(payload)} to wandb run {wj['name']} ({wj['id']}); "
+            "also wrote tables.html")
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("run_dir")
     ap.add_argument("--out", default=None, help="output markdown path (default: <run_dir>/tables.md)")
+    ap.add_argument("--wandb", action="store_true",
+                    help="also log the four tables as wandb.Table panels to the run named in wandb.json")
+    ap.add_argument("--quiet", action="store_true", help="do not print the tables")
+    ap.add_argument("--plots", action="store_true",
+                    help="redraw plots/ate_maps.png (estimated, true, signed error, arm errors, "
+                         "with region averages) and, with --wandb, log it as plots/ate_maps")
     args = ap.parse_args()
     d = args.run_dir.rstrip("/")
     R = read_run(d)
-    text = f"# {R['run']}\n\n" + "\n\n".join([table1(R), table2(R), table3(R), table4(R)]) + "\n"
+    image = None
+    if args.plots:
+        image = draw_ate_maps(d, R)
+        print(f"drew {image}", file=sys.stderr)
+    tables = [table1(R), table2(R), table3(R), table4(R)]
+    text = f"# {R['run']}\n\n" + "\n\n".join(
+        f"**{title}**\n\n" + md_table(rows, header) for title, header, rows in tables) + "\n"
     out = args.out or f"{d}/tables.md"
     with open(out, "w") as f:
         f.write(text)
-    print(text)
-    print(f"written to {out}", file=sys.stderr)
+    with open(f"{d}/tables.html", "w") as f:       # the same four tables, readable in a browser
+        f.write(html_tables(R["run"], tables))
+    if not args.quiet:
+        print(text)
+    print(f"written to {out} and tables.html", file=sys.stderr)
+    if args.wandb:
+        print(log_to_wandb(d, R["run"], tables, image), file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -1056,6 +1056,89 @@ def evaluate(cfg: Config, flow, data: dict, losses: dict, wall_time_s: float,
 # --------------------------------------------------------------------------- #
 # plots (all read from plain arrays, so --replot needs no refit)
 # --------------------------------------------------------------------------- #
+def region_masks(size: int, radius: int):
+    """Disc / ring / far as flat boolean masks over the ``size x size`` image.
+
+    Disc: pixels within ``radius`` of the centre (the support of the effect map).
+    Ring: pixels outside the disc that share an edge with a disc pixel.
+    Far: everything else. The same geometry ``run_tables.py`` and ``check_runs.py`` use.
+    """
+    xx, yy = np.meshgrid(np.arange(size), np.arange(size), indexing="ij")
+    c = (size - 1) / 2
+    disc = ((xx - c) ** 2 + (yy - c) ** 2) <= radius ** 2
+    ring = np.zeros_like(disc)
+    for i in range(size):
+        for j in range(size):
+            if disc[i, j]:
+                continue
+            for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                ii, jj = i + di, j + dj
+                if 0 <= ii < size and 0 <= jj < size and disc[ii, jj]:
+                    ring[i, j] = True
+    return disc.ravel(), ring.ravel(), (~disc & ~ring).ravel()
+
+
+def _region_lines(err: np.ndarray, masks, with_mae_rmse: bool) -> str:
+    """The text block under an error panel: region averages of a per-pixel error."""
+    e = np.where(np.isfinite(err), err, np.nan)
+    disc, ring, far = masks
+
+    def two_lines(label, v, fmt):
+        return (f"{label:<7}all {fmt(np.nanmean(v))}  disc {fmt(np.nanmean(v[disc]))}\n"
+                f"{'':<7}ring {fmt(np.nanmean(v[ring]))}  far {fmt(np.nanmean(v[far]))}")
+
+    lines = [two_lines("signed", e, lambda x: f"{x:+.4f}")]
+    if with_mae_rmse:
+        lines.append(two_lines("MAE", np.abs(e), lambda x: f"{x:.4f}"))
+        lines.append(f"{'RMSE':<7}all {np.sqrt(np.nanmean(e ** 2)):.4f}")
+    return "\n".join(lines)
+
+
+def plot_ate_maps(size: int, radius: int, tau_hat: np.ndarray, ate_true: np.ndarray,
+                  path: str, title: str = "", e0: np.ndarray | None = None,
+                  e1: np.ndarray | None = None):
+    """The effect-map figure: estimated, true, signed error, and -- when the arm means
+    are available -- each arm's error against its own true mean. Under every error
+    panel, that error averaged over all pixels, the disc, the ring and the far region
+    (plus MAE and RMSE under the signed-error panel). The disc is outlined in black.
+    Non-finite pixels are left blank and excluded from the averages."""
+    masks = region_masks(size, radius)
+    disc2d = masks[0].reshape(size, size)
+    fin = lambda z: np.where(np.isfinite(z), z, np.nan)  # noqa: E731
+    err = fin(tau_hat - ate_true)
+    panels = [(fin(tau_hat), r"Estimated $\hat{\tau}$ per pixel", "viridis", None, None),
+              (ate_true, "True ATE per pixel (exact)", "viridis", None, None),
+              (err, r"Signed error $\hat{\tau} -$ truth", "RdBu_r", err, True)]
+    if e0 is not None and e1 is not None:
+        panels += [(fin(e0), "Untreated-arm error (T=0 mean − true)", "RdBu_r", fin(e0), False),
+                   (fin(e1), "Treated-arm error (T=1 mean − true)", "RdBu_r", fin(e1), False)]
+    # three colour scales: estimated/true share one; the signed error has its own; the two
+    # arm errors share a third (they are usually several times larger than the signed error)
+    vmax = float(max(np.nanmax(np.abs(fin(tau_hat))), np.abs(ate_true).max())) or 1.0
+    lim_err = float(np.nanmax(np.abs(err))) or 1.0
+    lim_arm = (float(np.nanmax(np.abs(np.concatenate([fin(e0), fin(e1)])))) or 1.0) if len(panels) > 3 else 1.0
+    n = len(panels)
+    fig, axes = plt.subplots(1, n, figsize=(4.4 * n, 5.4))
+    for i, (ax, (arr, name, cmap, stats, full)) in enumerate(zip(axes, panels)):
+        lim = vmax if i < 2 else (lim_err if i == 2 else lim_arm)
+        im = ax.imshow(np.asarray(arr).reshape(size, size), cmap=cmap, vmin=-lim, vmax=lim,
+                       interpolation="nearest")
+        ax.contour(disc2d, levels=[0.5], colors="k", linewidths=1.0)
+        ax.set_title(name, fontsize=9.5)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        fig.colorbar(im, ax=ax, shrink=0.7, pad=0.03)
+        if stats is not None:
+            ax.text(0.0, -0.05, _region_lines(stats, masks, full), transform=ax.transAxes,
+                    ha="left", va="top", fontsize=8, family="monospace", linespacing=1.3)
+    nonfinite = int((~np.isfinite(tau_hat)).sum())
+    if nonfinite:
+        title += f"   [{nonfinite} non-finite pixel(s) blank, excluded from averages]"
+    fig.suptitle(title + "   (black outline: disc)", fontsize=11)
+    fig.savefig(path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+
+
 def make_plots(cfg: Config, data: dict, losses: dict, tau_hat: np.ndarray,
                u_z: np.ndarray, plots_dir: str, extras: dict | None = None):
     os.makedirs(plots_dir, exist_ok=True)
@@ -1068,23 +1151,19 @@ def make_plots(cfg: Config, data: dict, losses: dict, tau_hat: np.ndarray,
         fig.savefig(os.path.join(plots_dir, name), dpi=120, bbox_inches="tight")
         plt.close(fig)
 
-    # 1. the headline: estimated vs true ATE map, and their difference
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
-    vmax = float(max(np.abs(tau_hat).max(), np.abs(ate_true).max()))
-    im0 = axes[0].imshow(tau_hat.reshape(size, size), vmin=-vmax, vmax=vmax)
-    axes[0].set_title(r"Estimated $\hat{\tau}$ per pixel")
-    fig.colorbar(im0, ax=axes[0])
-    im1 = axes[1].imshow(ate_true.reshape(size, size), vmin=-vmax, vmax=vmax)
-    axes[1].set_title("True ATE per pixel (exact)")
-    fig.colorbar(im1, ax=axes[1])
-    err = (tau_hat - ate_true).reshape(size, size)
-    lim = float(np.abs(err).max()) or 1.0
-    im2 = axes[2].imshow(err, cmap="RdBu_r", vmin=-lim, vmax=lim)
-    axes[2].set_title(r"Error $\hat{\tau} -$ truth")
-    fig.colorbar(im2, ax=axes[2])
-    fig.suptitle(f"{cfg.preset}  |  {cfg.arm}"
-                 + (f" / {cfg.conditioner}" if cfg.arm == "flexible_continuous" else ""))
-    save(fig, "ate_maps.png")
+    # 1. the headline: estimated vs true ATE map, the signed error, and (when the
+    #    arm means were sampled) each arm's error against its own true mean
+    e0 = e1 = None
+    if "mc_mean0" in extras and "mc_mean1" in extras:
+        Y, X, ITE = np.asarray(data["Y"]), np.asarray(data["X"])[:, 0], np.asarray(data["ITE"])
+        Y0 = Y - X[:, None] * ITE
+        e0 = np.asarray(extras["mc_mean0"]) - Y0.mean(axis=0)
+        e1 = np.asarray(extras["mc_mean1"]) - (Y0 + ITE).mean(axis=0)
+    plot_ate_maps(size, cfg.effective_radius, np.asarray(tau_hat), ate_true,
+                  os.path.join(plots_dir, "ate_maps.png"),
+                  title=f"{cfg.preset}  |  {cfg.model}  |  {cfg.arm}"
+                  + (f" / {cfg.conditioner}" if cfg.arm == "flexible_continuous" else ""),
+                  e0=e0, e1=e1)
 
     # 2. per-pixel scatter, and which estimand the fit landed on
     fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
@@ -1466,6 +1545,15 @@ def _run_one_inner(cfg: Config, run_id: str, run_dir: str, wb) -> dict:
                 json.dump({"run_id": run_id, **metrics}, f, indent=2)
             if wb is not None:
                 _wandb_log(wb, data, losses, metrics, run_dir)
+            # One row per run in runs/exp_ate_recovery/index.csv, written the moment the
+            # run finishes. Only for runs in the real runs folder: a --runs-root trial
+            # must not enter the index.
+            if os.path.realpath(os.path.dirname(run_dir)) == os.path.realpath(RUNS_ROOT):
+                import run_index
+                run_index.upsert(run_dir)
+                print(f"indexed in {run_index.INDEX}")
+            else:
+                print("not indexed: run folder is outside runs/exp_ate_recovery")
             for k, v in metrics.items():
                 print(f"  {k}: {v:.4g}" if isinstance(v, float) else f"  {k}: {v}")
 

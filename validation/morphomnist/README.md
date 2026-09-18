@@ -460,6 +460,29 @@ python check_runs.py [--no-wandb] [--root DIR]             # naming/config/wandb
 `--runs-root DIR` writes the run folder under `DIR` instead of `runs/exp_ate_recovery/`;
 use it for any fit that must not land among the real runs.
 
+### The run index: `runs/exp_ate_recovery/index.csv`
+
+One row per run, every column a query can need: identity (run id, uid, launch stamp,
+wandb name/id/url, model, preset, arm, conditioner, `variant`), setup (digit, n,
+split sizes, seeds, size, K, radius, region sizes, treatment slope, effect size,
+draws), architecture and optimisation, training (stopping rule, epochs, best epoch,
+loss values, wall time), performance (MAE/RMSE, signed error and MAE per region, both
+arm errors per region, standard errors, non-finite counts), then every raw config key
+as `cfg.<key>`. Missing values are empty cells, so numeric columns stay numeric.
+
+The folders are the source of truth; the index is derived from them and can always
+be rebuilt. Every finished run appends or replaces its own row automatically.
+
+```bash
+python run_index.py                                   # rebuild from every folder
+python run_index.py --upsert runs/exp_ate_recovery/<run-id>
+python run_index.py --query "preset == 'E1' and variant.isna() and termination == 'patience'"
+```
+
+or in pandas: `pd.read_csv("runs/exp_ate_recovery/index.csv")` and `groupby`. A plain
+fit has an empty `variant`; `coplam4`, `copw200`, `bs0.5`, `rct`, … name what was
+changed from it.
+
 ⚠️ `--skip-done` keys on `metrics.json` existing, so a run that finished with a
 non-finite score still counts as done and **will be skipped**. Delete such
 folders before resuming.
