@@ -491,7 +491,7 @@ class Config:
     # ---- experiment tracking (off by default; run folders stay authoritative) ----
     wandb: bool = False
     wandb_entity: str | None = None      # the team; None -> your default entity
-    wandb_project: str = "morphomnist-ate"
+    wandb_project: str = "Frugal Images"   # where every run of this project lives (proj-lb)
     wandb_group: str | None = None       # None -> the preset name
     wandb_tags: str | None = None        # comma-separated, appended to the auto tags
 
@@ -1027,6 +1027,7 @@ def evaluate(cfg: Config, flow, data: dict, losses: dict, wall_time_s: float,
         # this run can be joined to baselines and other fits on the same data
         "dataset_id": data.get("dataset_id"),
         "data_hash": data.get("data_hash"),
+        "z_hash": data.get("z_hash"),
         "conditioner": cfg.conditioner if cfg.arm == "flexible_continuous" else "n/a",
         # recovery against the primary estimand
         "ate_mae": float(np.abs(err).mean()),
@@ -1375,25 +1376,33 @@ def digit_tag(cfg: Config) -> str:
     return "d0-9" if cfg.digit is None else f"d{cfg.digit}"
 
 
-def model_tag(cfg: Config) -> str:
-    """``ff`` (margin + copula), ``margin``, ``margin_sep``, or ``margin_zero`` for a
-    margin fit on data whose treatment effect is set to zero."""
-    if cfg.model == "margin" and cfg.base_shift == 0.0:
-        return "margin_zero"
-    return cfg.model
+DEFAULT_EFFECT = 1.0   # the generator's base_shift default; only a different value is named
+
+
+def variant_tag(cfg: Config) -> str:
+    """What differs from the plain fit, as it appears in the run name. Data settings only:
+    ``effect<size>`` when the treatment effect is not the generator's default of 1.0
+    (``effect0`` = no effect anywhere), ``sa<k>`` when the assignment was re-drawn with
+    its own seed. A plain fit has no tag."""
+    var = []
+    if cfg.base_shift is not None and cfg.base_shift != DEFAULT_EFFECT:
+        var.append(f"effect{cfg.base_shift:g}")
+    if cfg.seed_assign is not None:
+        var.append(f"sa{cfg.seed_assign}")
+    return "_".join(var)
 
 
 def wandb_name_for(cfg: Config, uid: str) -> str:
     """The wandb run name:
-    ``<model>_<preset>_<arm>[-trf]_[bs<shift>_]k<K>_s<seed>_d<digit>_<uid>``.
+    ``<model>_<preset>_<arm>[-trf]_[<variant>_]k<K>_s<seed>_d<digit>_<uid>``.
 
-    ``uid`` is the six-hex-character id that also ends the run folder's name.
+    ``model`` is ``ff`` (margin + copula), ``margin`` or ``margin_sep`` -- what was fitted;
+    the variant names the data it was fitted on (see ``variant_tag``). ``uid`` is the
+    six-hex-character id that also ends the run folder's name.
     """
     arm_tag = ARM_SHORT[cfg.arm] + ("-trf" if cfg.conditioner == "transformer" else "")
-    variant = f"_bs{cfg.base_shift:g}" if cfg.base_shift not in (None, 0.0) else ""
-    if cfg.seed_assign is not None:        # assignment re-drawn with its own seed
-        variant += f"_sa{cfg.seed_assign}"
-    return (f"{model_tag(cfg)}_{PRESET_SHORT[cfg.preset][:2]}_{arm_tag}{variant}"
+    var = variant_tag(cfg)
+    return (f"{cfg.model}_{PRESET_SHORT[cfg.preset][:2]}_{arm_tag}{'_' + var if var else ''}"
             f"_k{cfg.size**2}_s{cfg.seed_fit}_{digit_tag(cfg)}_{uid}")
 
 
@@ -1612,12 +1621,12 @@ def _run_one_inner(cfg: Config, run_id: str, run_dir: str, wb) -> dict:
             print(f"data built: {Y.shape[0]} units x {Y.shape[1]} pixels "
                   f"(size={cfg.size}, radius={cfg.effective_radius}) "
                   f"in {timings['build_data_s']:.0f}s   dataset_id {data['dataset_id']} "
-                  f"data_hash {data['data_hash']}")
+                  f"data_hash {data['data_hash']} z_hash {data['z_hash']}")
             # record the dataset fingerprints next to the config, written at launch
             cfg_path = os.path.join(run_dir, "config.json")
             with open(cfg_path) as f:
                 record = json.load(f)
-            record.update(dataset_id=data["dataset_id"], data_hash=data["data_hash"])
+            record.update(dataset_id=data["dataset_id"], data_hash=data["data_hash"], z_hash=data["z_hash"])
             with open(cfg_path, "w") as f:
                 json.dump(record, f, indent=2)
             t0 = time.monotonic()

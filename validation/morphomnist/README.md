@@ -435,7 +435,7 @@ covariate ranks, after the stage-1 quantile fit. Every run before 2026-09-18 is 
 quantiles, no copula. The same spline blocks `ff` puts after its copula, fitted
 directly to `p(y | t)` with the same `fit_to_data` call. A baseline for what the
 copula adds; `flexible_continuous` only. With `--base-shift 0` (no treatment
-effect anywhere) the run is named `margin_zero_…`.
+effect anywhere) the run carries the `effect0` tag, like any model on that data.
 
 **`--model margin_sep`** — one unconditional margin per treatment arm, each fitted
 on that arm's images only; the effect is the difference of their paired samples.
@@ -492,7 +492,7 @@ python run_index.py --query "preset == 'E1' and variant.isna() and termination =
 ```
 
 or in pandas: `pd.read_csv("runs/exp_ate_recovery/index.csv")` and `groupby`. A plain
-fit has an empty `variant`; `coplam4`, `copw200`, `bs0.5`, `rct`, … name what was
+fit has an empty `variant`; `coplam4`, `copw200`, `effect0.5`, `rct`, … name what was
 changed from it.
 
 ### The effect-map figure (`plots/ate_maps.png`) and the "against the images" metrics
@@ -542,7 +542,12 @@ in `prepare_morphomnist_exps.dataset_identity` and recorded in every `config.jso
 `metrics.json` and both indexes: `dataset_id`, a hash of the preset and every
 generator knob (so the same arguments give the same id, on either side), and
 `data_hash`, an md5 of the built `Y`, `X` and `ATE` arrays (so equal ids can be
-checked to have produced identical bytes). `runs/baselines/index.csv` has one row per
+checked to have produced identical bytes). `data_hash` does not cover `Z`: with the
+effect switched off, exp2/exp3/exp5 build the same `Y` and `X` with `Z` = thickness,
+and exp4/exp6 the same `Y` and `X` with `Z` = thickness + brightness, so five presets
+share one `data_hash` while giving two different fits. A third field, `z_hash` (md5 of
+`Z`), records that difference; runs made before 2026-09-20 have no `z_hash` and the
+index leaves the column empty for them. `runs/baselines/index.csv` has one row per
 (dataset, method) with the same column names as the flow index wherever the meaning is
 the same, and
 
@@ -575,10 +580,10 @@ its wandb run with the launch time in front:
 ```
 
 The wandb name is `<model>_<preset>_<arm>[-trf]_[<variant>_]k<K>_s<seed>_d<digit>_<uid>`:
-`ff` because this script fits margin **and** copula (`margin`, `margin_sep`, `margin_zero`
+`ff` because this script fits margin **and** copula (`margin`, `margin_sep`
 are reserved for copula-free fits from other scripts); `e1`…`e6` the preset; `flexcont` or
 `loctrans` the arm, `-trf` for a transformer conditioner; a variant tag only when a setting
-differs from the plain fit (`copw<W>`, `coplam<λ>`, `copwd<v>`, `bs<shift>`, `rct`, …); `s<seed>`
+differs from the plain fit (`copw<W>`, `coplam<λ>`, `copwd<v>`, `effect<size>`, `sa<k>`, `rct`, …); `s<seed>`
 the fit seed; `d0` for the single digit class, `d0-9` for all ten; `uid` six hex characters.
 The stamp is UTC (`2026-09-10T14-29-26Z` = 10 Sep 2026, 14:29:26). Built by `run_id_for` /
 `wandb_name_for`; what a run *is* should always be read from `config.json`, not from its name.

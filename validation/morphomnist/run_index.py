@@ -60,9 +60,10 @@ def row_for(d: str) -> dict:
         # baselines and to other fits on the same data, and the proof the bytes matched
         "dataset_id": R["record"].get("dataset_id") or R["metrics"].get("dataset_id", ""),
         "data_hash": R["record"].get("data_hash") or R["metrics"].get("data_hash", ""),
+        "z_hash": R["record"].get("z_hash") or R["metrics"].get("z_hash", ""),   # empty before 2026-09-20
         # the model tag as the name carries it (check_runs.py verifies it against the config);
         # the raw config uses different words per layout (fullff / standalone / ...)
-        "model": re.match(r"^(ff|margin_sep|margin_zero|margin)_", base[21:]).group(1),
+        "model": re.match(r"^(ff|margin_sep|margin)_", base[21:]).group(1),
         "model_desc": R["model"],
         # what differs from the plain fit, as the name carries it (empty for a plain fit):
         # everything between the arm and the k<K> field, e.g. "coplam4", "copw200", "bs0.5"
@@ -195,7 +196,7 @@ def baseline_rows_for(d: str) -> list:
     for method, m in mj["methods"].items():
         row = {
             "run_id": base, "uid": cj["uid"], "stamp": base[:20], "method": method, "basis": c["basis"],
-            "dataset_id": cj["dataset_id"], "data_hash": cj["data_hash"],
+            "dataset_id": cj["dataset_id"], "data_hash": cj["data_hash"], "z_hash": cj.get("z_hash", ""),
             "model": f"baseline_{method}",
             "preset": PRESET_TAG.get(c["preset"], c["preset"]), "preset_full": c["preset"],
             "variant": (re.search(r"^baselines_e\d_(.*?)_k\d+_sd\d+_", base[21:]) or [None, ""])[1],
@@ -268,6 +269,11 @@ def compare(where: str | None = None, columns=("mae_all", "signed_disc", "signed
     for did, grp in both.groupby("dataset_id"):
         if grp["data_hash"].nunique() > 1:
             print(f"WARNING dataset {did}: differing data_hash across runs -> {sorted(grp['data_hash'].unique())}")
+        if "z_hash" in grp.columns:
+            zh = grp["z_hash"].dropna()
+            zh = zh[zh != ""]
+            if zh.nunique() > 1:
+                print(f"WARNING dataset {did}: differing z_hash across runs -> {sorted(zh.unique())}")
     keys = ["dataset_id", "preset", "K", "seed_data", "base_shift", "ps_slope"]
     keys = [k for k in keys if k in both.columns]
     out = both[keys + ["method", "termination"] + list(columns)] if "termination" in both.columns else both[keys + ["method"] + list(columns)]

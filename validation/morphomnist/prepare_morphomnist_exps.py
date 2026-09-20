@@ -552,6 +552,12 @@ def dataset_identity(name: str, cfg: "ExpConfig", data: dict) -> dict:
     ``data_hash``: md5 of the bytes of ``Y``, ``X`` and ``ATE`` -- same id must give
     the same hash; if it ever does not, the generator has changed underneath a
     result and the comparison is invalid.
+    ``z_hash``: md5 of the bytes of ``Z``, kept separate because ``data_hash`` was
+    defined without ``Z`` and is already recorded in every run. Two presets can share
+    ``Y``, ``X`` and ``ATE`` and still give different fits when their ``Z`` differ:
+    with the effect switched off, exp2/exp3/exp5 and exp4/exp6 build the same ``Y``
+    and ``X`` (thickness only vs thickness + brightness in ``Z``). Added 2026-09-20;
+    runs before that date carry no ``z_hash``.
     """
     import hashlib
     import json
@@ -566,7 +572,9 @@ def dataset_identity(name: str, cfg: "ExpConfig", data: dict) -> dict:
     h = hashlib.md5()
     for key in ("Y", "X", "ATE"):
         h.update(np.ascontiguousarray(np.asarray(data[key], dtype=np.float64)).tobytes())
-    return {"dataset_id": dataset_id, "data_hash": h.hexdigest()[:12], "generator_config": knobs}
+    hz = hashlib.md5(np.ascontiguousarray(np.asarray(data["Z"], dtype=np.float64)).tobytes())
+    return {"dataset_id": dataset_id, "data_hash": h.hexdigest()[:12], "z_hash": hz.hexdigest()[:12],
+            "generator_config": knobs}
 
 
 def build_preset(name: str, **overrides) -> dict:

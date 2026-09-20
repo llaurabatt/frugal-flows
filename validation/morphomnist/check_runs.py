@@ -28,7 +28,7 @@ from collections import Counter
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs", "exp_ate_recovery")
 STAMP = r"\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z"
 NAME = re.compile(
-    r"^(?P<model>ff|margin|margin_sep|margin_zero)_(?P<preset>e[1-6])_(?P<arm>flexcont|loctrans)(?P<trf>-trf)?"
+    r"^(?P<model>ff|margin|margin_sep)_(?P<preset>e[1-6])_(?P<arm>flexcont|loctrans)(?P<trf>-trf)?"
     r"(?P<variants>(?:_[a-z]+[0-9.]*(?:ep)?)*)_k(?P<k>\d+)_s(?P<seed>\d+)_d(?P<digit>\d|0-9)_(?P<uid>[0-9a-f]{6})$")
 PRESET_OF = {"exp1_rct_homogeneous": "e1", "exp2_confounded_homogeneous": "e2", "exp3_confounded_heterogeneous": "e3",
              "exp4_covariate_cate": "e4", "exp5_quantile_effect": "e5", "exp6_spatial_cate": "e6"}
@@ -98,8 +98,7 @@ def main():
                 bad(d, f"name digit {nm['digit']} vs config digit {c['digit']}")
         model = c.get("model")
         want_model = {"fullff": "ff", None: "ff", "ff": "ff", "separate": "margin_sep", "margin_sep": "margin_sep",
-                      "standalone": "margin_zero" if c.get("base_shift") == 0.0 else "margin",
-                      "margin": "margin_zero" if c.get("base_shift") == 0.0 else "margin"}.get(model)
+                      "standalone": "margin", "margin": "margin"}.get(model)
         if model and "no copula" in str(model):
             want_model = "margin"
         if want_model and nm["model"] != want_model:
@@ -111,11 +110,18 @@ def main():
             bad(d, f"config copula_nn_width={w} but name has no copw{w}")
         if copw and (w is None or f"copw{w}" != copw[0]):
             bad(d, f"name has {copw[0]} but config copula_nn_width={w}")
-        bs = [v for v in variants if v.startswith("bs")]
-        if c.get("base_shift") not in (None, 0.0) and f"bs{c['base_shift']}" not in variants:
-            bad(d, f"config base_shift={c['base_shift']} but name has no bs tag")
-        if bs and (c.get("base_shift") is None or f"bs{c['base_shift']}" != bs[0]):
-            bad(d, f"name has {bs[0]} but config base_shift={c.get('base_shift')}")
+        # effect<size>: present iff base_shift is set to something other than the default 1.0
+        eff = [v for v in variants if v.startswith("effect")]
+        bshift = c.get("base_shift")
+        if bshift is not None and float(bshift) != 1.0 and f"effect{float(bshift):g}" not in variants:
+            bad(d, f"config base_shift={bshift} but name has no effect{float(bshift):g} tag")
+        if eff and (bshift is None or f"effect{float(bshift):g}" != eff[0]):
+            bad(d, f"name has {eff[0]} but config base_shift={bshift}")
+        sa = [v for v in variants if v.startswith("sa")]
+        if c.get("seed_assign") is not None and f"sa{c['seed_assign']}" not in variants:
+            bad(d, f"config seed_assign={c['seed_assign']} but name has no sa tag")
+        if sa and (c.get("seed_assign") is None or f"sa{c['seed_assign']}" != sa[0]):
+            bad(d, f"name has {sa[0]} but config seed_assign={c.get('seed_assign')}")
         if ("rct" in variants) != (c.get("ps_slope") == 0 and nm["preset"] != "e1"):
             bad(d, f"rct tag {'present' if 'rct' in variants else 'absent'} but config ps_slope={c.get('ps_slope')}")
         # 4. metrics.json

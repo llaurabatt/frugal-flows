@@ -229,17 +229,13 @@ def dataset_config(preset: str, size: int, seed_data: int, radius=None, digit=0,
 
 def run_name(cfg, uid: str) -> str:
     """``baselines_<preset>_[<variant>_]k<K>_sd<seed>_d<digit>_<uid>``. ``sd`` is the DATA seed:
-    a baseline has no fit seed. ``bs<shift>`` whenever base_shift was set (``bs0`` for a
-    zero effect), ``rct`` when confounding was switched off on a confounded preset,
-    ``sa<k>`` when the assignment was re-drawn with its own seed."""
+    a baseline has no fit seed. The variant is exp_ate_recovery's (``effect<size>`` when the
+    effect is not the default 1.0, ``sa<k>`` for a re-drawn assignment) plus ``rct`` when
+    confounding was switched off on a confounded preset."""
     import exp_ate_recovery as E
-    var = []
-    if cfg.base_shift is not None:
-        var.append(f"bs{cfg.base_shift:g}")
+    var = [v for v in E.variant_tag(cfg).split("_") if v]
     if cfg.ps_slope == 0 and E.PRESET_SHORT[cfg.preset][:2] != "e1":
-        var.append("rct")
-    if cfg.seed_assign is not None:
-        var.append(f"sa{cfg.seed_assign}")
+        var.insert(0, "rct")
     return "_".join(["baselines", E.PRESET_SHORT[cfg.preset][:2]] + var
                     + [f"k{cfg.size ** 2}", f"sd{cfg.seed_data}", E.digit_tag(cfg), uid])
 
@@ -264,6 +260,7 @@ def run_one(cfg, basis: str, runs_root: str = RUNS_ROOT, plots: bool = True) -> 
     with open(os.path.join(run_dir, "config.json"), "w") as f:
         json.dump({"run_id": os.path.basename(run_dir), "wandb_name": name, "uid": uid,
                    "dataset_id": data["dataset_id"], "data_hash": data["data_hash"],
+                   "z_hash": data["z_hash"],
                    "config": {**asdict(cfg), "basis": basis, "methods": list(ESTIMATORS)},
                    "generator_config": data["generator_config"]}, f, indent=2)
 
@@ -276,10 +273,11 @@ def run_one(cfg, basis: str, runs_root: str = RUNS_ROOT, plots: bool = True) -> 
     Y0 = Y - Tb[:, None] * ITE
     Y1 = Y0 + ITE
 
-    log_lines = [f"{os.path.basename(run_dir)}", f"dataset_id {data['dataset_id']}  data_hash {data['data_hash']}",
+    log_lines = [f"{os.path.basename(run_dir)}",
+                 f"dataset_id {data['dataset_id']}  data_hash {data['data_hash']}  z_hash {data['z_hash']}",
                  f"{Y.shape[0]} units x {Y.shape[1]} pixels, basis {basis}, seed_data {cfg.seed_data}"]
     metrics = {"run_id": os.path.basename(run_dir), "dataset_id": data["dataset_id"],
-               "data_hash": data["data_hash"], "basis": basis, "n_units": int(Y.shape[0]),
+               "data_hash": data["data_hash"], "z_hash": data["z_hash"], "basis": basis, "n_units": int(Y.shape[0]),
                "n_pixels": int(Y.shape[1]), "methods": {}}
     arrays = {k: np.asarray(data[k]) for k in ("ATE", "ATT", "ATC", "Y", "X", "ITE", "PROPENSITY")}
     om = E.observed_maps(data)                 # observed difference and imbalance, all images
