@@ -59,6 +59,8 @@ exits non-zero on failure.
 | `exp_frengression_recovery.py` | isolated official-package Frengression adapter used by the public interface. |
 | `compare_frengression_ff.py` | fail-closed complete-grid comparison across estimators. |
 | `dataset.py` | MorphoMNIST loader (images + thickness/intensity morphometrics). |
+| `copula_diagnostics.py` | the copula checks `exp_ate_recovery.py` runs at the end of every fit with a copula (section below). |
+| `baselines.py`, `run_index.py`, `run_tables.py`, `check_runs.py` | baselines as run folders, the two indexes, the per-run summary tables, the consistency check. |
 
 Other scripts in this directory are earlier single-purpose versions. Do not
 extend them for the Frengression comparison.
@@ -516,6 +518,59 @@ in Table 2 of `tables.md`, and as columns of both indexes, so "does the model re
 the imbalance in its data, and by how much does it depart from it" is a query, not a
 new script. A panel whose input the folder does not hold (no sampled arms for
 `loctrans` and the baselines other than `naive`) says so instead of drawing.
+
+### Copula diagnostics (`copula_diagnostics.py`, `plots/copula_*.png`, `cop_*` metrics)
+
+Every fit with a copula (`--model ff`) ends with a set of checks on the copula alone,
+computed while the flow is still in memory (the fitted flow is not saved, so they
+cannot be computed afterwards; the arrays behind the figures are, so `--replot`
+redraws them). They run on flowjax's held-out rows when
+`exp_ate_recovery._fit_val_indices` can reconstruct that split, otherwise on all rows;
+`cop_rows` says which, and every caption repeats it. If the checks themselves fail,
+the fit's normal outputs are still written and the error text is stored as
+`cop_error`. They add about 30 s at 8×8 (`--copula-diag-n-mc`, default 20, sets the
+number of conditional draws).
+
+Notation. Before the main flow is trained, each covariate gets its own
+one-dimensional flow; an observation's covariate value is replaced by its position in
+that fitted distribution, a number in [0, 1] called the covariate rank `U_Z`. The main
+flow's causal margin turns each pixel value into an outcome rank `R` given the
+treatment, so `R` has one entry per pixel. The copula part learns how `U_Z` depends on
+the whole `R`; the treatment does not enter it (its conditioning input is fully
+masked). Running the copula backwards on an actual observation returns the noise it
+would have needed to produce that observation's `U_Z` from its `R`; that noise is the
+base coordinate `v`, again in [0, 1], and uniform if the copula has learned the
+dependence.
+
+Four figures, with their numbers printed on them:
+
+* `copula_margins.png`, one row per covariate: histogram and uniform Q-Q plot of `U_Z`
+  (does the covariate's own margin fit?) and of `v` (does the copula explain that
+  covariate?), each with its KS distance from uniform.
+* `copula_dependence.png`: scatter plots of one covariate rank against the other
+  (E4/E6 only) and of one pixel's `R` against each covariate rank, for the pixel with
+  the largest signed error in the disc, the ring and the far region. Three columns per
+  covariate: the actual ranks; ranks the copula draws given that observation's whole
+  `R` (one of the `cop_n_mc` draws); the base coordinate after the inverse. Spearman
+  correlations in the titles, with the spread over draws for the predicted ones.
+* `copula_dependence_maps.png`, one row per covariate: per pixel, the Spearman
+  correlation between `R_k` and the covariate rank in the data; the same for ranks
+  drawn from the copula given `R` (mean over draws); their difference, with disc, ring
+  and far averages and the largest pixel under it; the correlation between `R_k` and
+  `v` after the inverse (should be zero); and the signed error of the effect map for
+  comparison. The difference map is the direct test of whether the copula misses
+  dependence where the effect is wrong.
+* `copula_calibration.png`, one row per covariate, six groups: untreated, treated, and
+  the four quartiles of the mean logit intensity over the disc. Each panel plots the
+  fraction of `v` at or below `q` against `q` for `q = 0.1 .. 0.9`, with a ±1.96
+  binomial band for that group's size, the group's `n` and the largest gap.
+
+In `metrics.json` and the wandb summary every scalar is under the `cop_` prefix. The
+index keeps, per covariate, `cop_ks_u_*`, `cop_ks_v_*`, `cop_rho_ru_*_gap_{disc,ring,far,maxabs}`,
+`cop_rho_rv_*_maxabs`, `cop_cal_*_{t0,t1,qmax}`, plus `cop_rows`, `cop_n`, `cop_error`
+and the three thickness–brightness correlations; the per-quartile values, group sizes
+and Monte Carlo spreads stay in `metrics.json`. Table 5 of `tables.md` lists them with
+definitions. Runs before 2026-09-20 and margin-only runs have these columns empty.
 
 ### Baselines: `baselines.py`, `runs/baselines/`
 

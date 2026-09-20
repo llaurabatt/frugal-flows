@@ -338,6 +338,7 @@ import secrets
 import subprocess
 import sys
 import time
+import traceback
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timezone
 
@@ -472,6 +473,8 @@ class Config:
     # ---- interventional read-out (flexible_continuous only) ----
     n_mc: int = 5000
     seed_mc: int = 0
+    # ---- copula diagnostics (copula_diagnostics.py; model "ff" only) ----
+    copula_diag_n_mc: int = 20   # conditional draws of U_Z given R, for the predicted correlations
     # ---- Frengression adapter (used only when arm == "frengression") ----
     # Prefixing these fields preserves every existing Frugal Flow default.
     frengression_num_iters: int = 5000
@@ -1222,12 +1225,25 @@ def plot_ate_maps(size: int, radius: int, tau_hat: np.ndarray, ate_true: np.ndar
 
 
 def make_plots(cfg: Config, data: dict, losses: dict, tau_hat: np.ndarray,
-               u_z: np.ndarray, plots_dir: str, extras: dict | None = None):
+               u_z: np.ndarray, plots_dir: str, extras: dict | None = None,
+               metrics: dict | None = None):
     os.makedirs(plots_dir, exist_ok=True)
     size = cfg.size
     extras = extras or {}
     ate_true = np.asarray(data["ATE"])
     support = ate_true != 0
+
+    # 0. copula diagnostics, drawn from the arrays compute() left in extras; the captions
+    #    need the cop_* metrics, so metrics.json is read when the caller did not pass them
+    if "cop_R" in extras:
+        import copula_diagnostics as cd
+        if metrics is None:
+            with open(os.path.join(os.path.dirname(plots_dir), "metrics.json")) as f:
+                metrics = json.load(f)
+        disc = region_masks(size, cfg.effective_radius)[0]
+        cd.plot_all({k: np.asarray(extras[k]) for k in cd.COP_ARRAY_KEYS if k in extras}, metrics,
+                    size, disc, np.asarray(tau_hat) - ate_true, plots_dir,
+                    f"{cfg.preset}  |  {cfg.model}  |  {cfg.arm}")
 
     def save(fig, name):
         fig.savefig(os.path.join(plots_dir, name), dpi=120, bbox_inches="tight")
@@ -1334,7 +1350,11 @@ RUNS_ROOT = os.path.join(SCRIPT_DIR, "runs", "exp_ate_recovery")
 # Arm-specific arrays in arrays.npz, listed explicitly so --replot can pick them
 # out of an npz that may or may not contain them.
 EXTRA_ARRAY_KEYS = ("tau_u", "tau_curves", "mc_mean0", "mc_mean1",
-                    "mc_var0", "mc_var1", "mc_tau_sd", "obs_diff")
+                    "mc_var0", "mc_var1", "mc_tau_sd", "obs_diff",
+                    # copula diagnostics (copula_diagnostics.COP_ARRAY_KEYS), so --replot
+                    # can redraw those figures without the flow
+                    "cop_idx", "cop_R", "cop_u", "cop_v", "cop_u_pred", "cop_T", "cop_ysum",
+                    "cop_rho_obs", "cop_rho_pred", "cop_rho_pred_sd", "cop_rho_v", "cop_cal")
 # Truth arrays needed to rebuild every plot without regenerating the dataset.
 TRUTH_ARRAY_KEYS = ("ATE", "ATT", "ATC", "TAU_U", "TAU_PAIRED", "TAU_MARGINAL",
                     "THICKNESS", "PROPENSITY")
@@ -1465,7 +1485,7 @@ def save_run(cfg: Config, data: dict, losses: dict, tau_hat: np.ndarray,
         **{k: np.asarray(data[k]) for k in TRUTH_ARRAY_KEYS},
         **{k: np.asarray(v) for k, v in (extras or {}).items()},
     )
-    make_plots(cfg, data, losses, tau_hat, u_z, os.path.join(run_dir, "plots"), extras)
+    make_plots(cfg, data, losses, tau_hat, u_z, os.path.join(run_dir, "plots"), extras, metrics)
 
 
 def replot(run_dir: str):
@@ -1565,7 +1585,8 @@ def _wandb_log(run, data: dict, losses: dict, metrics: dict, run_dir: str):
     # group separately in the UI and can be used to filter/facet a sweep.
     payload.update({f"design/{k}": v for k, v in _numeric(summarise(data)).items()})
     for name in ("ate_maps", "recovery_scatter", "tau_curves",
-                 "loss_curves", "design_check", "truth_panels"):
+                 "loss_curves", "design_check", "truth_panels",
+                 "copula_margins", "copula_dependence", "copula_dependence_maps", "copula_calibration"):
         p = os.path.join(run_dir, "plots", f"{name}.png")
         if os.path.exists(p):
             payload[f"plots/{name}"] = wandb.Image(p)
@@ -1638,6 +1659,31 @@ def _run_one_inner(cfg: Config, run_id: str, run_dir: str, wb) -> dict:
                   f"{timings['flow_fit_s']:.0f}s, ~{timings['flow_fit_s'] / n_ep:.1f}s/epoch)")
             tau_hat, metrics, extras = evaluate(cfg, flow, data, losses, wall, timings,
                                                 u_z=u_z)
+            if cfg.model == "ff" and u_z is not None and metrics.get("copula_term_verified"):
+                # copula diagnostics (copula_diagnostics.py): needs the flow, so only here.
+                # A failure inside them must not lose the fit: the run's normal outputs are
+                # still written and the error text is recorded under cop_error.
+                import copula_diagnostics as cd
+                _t = time.monotonic()
+                try:
+                    x_all = jnp.hstack([jnp.asarray(data["Y"]), jnp.asarray(u_z)])
+                    nll_all = -np.asarray(jax.vmap(flow.log_prob)(x_all, jnp.asarray(data["X"])))
+                    idx, _, _ = _fit_val_indices(cfg, x_all.shape[0], losses, nll_all)
+                    masks = region_masks(cfg.size, cfg.effective_radius)
+                    cop_met, cop_arr = cd.compute(flow, data, u_z, idx, masks[0],
+                                                  tau_hat - np.asarray(data["ATE"]), masks,
+                                                  n_mc=cfg.copula_diag_n_mc, seed=cfg.seed_fit)
+                except Exception as exc:  # noqa: BLE001 -- recorded, not swallowed
+                    metrics["cop_error"] = f"{type(exc).__name__}: {exc}"
+                    print(f"copula diagnostics FAILED after {time.monotonic() - _t:.0f}s: "
+                          f"{metrics['cop_error']}")
+                    traceback.print_exc()
+                else:
+                    cop_met["cop_seconds"] = float(time.monotonic() - _t)
+                    metrics.update(cop_met)
+                    extras.update(cop_arr)
+                    print(f"copula diagnostics on {cop_met['cop_rows']} rows (n={cop_met['cop_n']}) "
+                          f"in {cop_met['cop_seconds']:.0f}s")
             save_run(cfg, data, losses, tau_hat, u_z, metrics, extras, run_dir)
             # Written last, so it covers everything including plotting and the
             # npz write -- this is the number to multiply when sizing a sweep.

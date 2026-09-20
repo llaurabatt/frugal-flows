@@ -493,6 +493,60 @@ def table4(R):
     return "Table 4. Architecture and optimisation", None, rows
 
 
+def table5(R):
+    """Copula diagnostics (copula_diagnostics.py), for runs that have them."""
+    m = R["metrics"]
+    if not m.get("cop_rows") and not m.get("cop_error"):
+        rows = [("Copula diagnostics", "computed at the end of a fit with a copula (model ff), "
+                 "from 2026-09-20 on", "not available for this run")]
+        return "Table 5. Copula diagnostics", ("Metric", "Definition", "Result"), rows
+    if m.get("cop_error"):
+        return "Table 5. Copula diagnostics", ("Metric", "Definition", "Result"), [
+            ("Copula diagnostics", "failed inside copula_diagnostics.compute; the fit's other outputs are intact",
+             m["cop_error"])]
+    rows_used = ("flowjax's held-out rows" if m["cop_rows"] == "heldout"
+                 else "all rows (the held-out split could not be reconstructed)")
+    m = dict(m)
+    for z in ("thickness", "brightness"):   # the worst quartile, for runs computed before it was stored
+        if f"cop_cal_{z}_q1" in m and f"cop_cal_{z}_qmax" not in m:
+            m[f"cop_cal_{z}_qmax"] = max(m[f"cop_cal_{z}_{g}"] for g in ("q1", "q2", "q3", "q4"))
+    rows = [
+        ("Rows used", "which observations every number below is computed on", f"{rows_used}, n = {m['cop_n']}"),
+        ("Conditional draws", "how many times U_Z was drawn from the copula given each observation's R, "
+         "for the predicted correlations", fmt(m["cop_n_mc"])),
+    ]
+    names = [z for z in ("thickness", "brightness") if f"cop_ks_u_{z}" in m]
+    for z in names:
+        rows += [
+            (f"KS of U_Z {z}", f"largest gap between the empirical CDF of the stage-1 rank of {z} and the uniform CDF; "
+             "checks the covariate's own margin fit", fmt(m[f"cop_ks_u_{z}"])),
+            (f"KS of v {z}", f"the same for the base coordinate the copula's inverse returns for {z} given the whole R; "
+             "uniform if the copula explains that covariate", fmt(m[f"cop_ks_v_{z}"])),
+            (f"Correlation gap {z}, disc / ring / far", f"per pixel, Spearman(R_k, U_Z {z}) in the data minus the same "
+             "correlation for U_Z drawn from the copula given R (mean over the draws); averaged over the region",
+             f"{m[f'cop_rho_ru_{z}_gap_disc']:+.3f} / {m[f'cop_rho_ru_{z}_gap_ring']:+.3f} / {m[f'cop_rho_ru_{z}_gap_far']:+.3f}"),
+            (f"Correlation gap {z}, largest pixel", "largest absolute value of that difference on any pixel",
+             fmt(m[f"cop_rho_ru_{z}_gap_maxabs"])),
+            (f"Remaining correlation {z}", f"largest absolute Spearman(R_k, v {z}) over pixels after the copula's inverse; "
+             "zero if the inverse removed the dependence", fmt(m[f"cop_rho_rv_{z}_maxabs"])),
+            (f"Calibration gap {z}, T=0 / T=1 / worst quartile", f"largest |fraction of v {z} <= q minus q| over "
+             "q = 0.1..0.9, within the untreated, the treated, and the worst of the four quartiles of the disc-mean "
+             f"logit intensity (n = {m['cop_cal_n_t0']} / {m['cop_cal_n_t1']} / ~{m['cop_cal_n_q1']})",
+             f"{m[f'cop_cal_{z}_t0']:.3f} / {m[f'cop_cal_{z}_t1']:.3f} / {m[f'cop_cal_{z}_qmax']:.3f}"),
+        ]
+    if "cop_rho_u_thickness_brightness_obs" in m:
+        rows += [
+            ("Spearman(thickness, brightness), observed / copula / after inverse",
+             "between the two covariate ranks in the data; between the two ranks the copula draws given R "
+             f"(± sd over draws {m['cop_rho_u_thickness_brightness_pred_sd']:.3f}); between the two base coordinates",
+             f"{m['cop_rho_u_thickness_brightness_obs']:+.3f} / {m['cop_rho_u_thickness_brightness_pred']:+.3f} / "
+             f"{m['cop_rho_v_thickness_brightness']:+.3f}"),
+        ]
+    rows.append(("Figures", "plots/copula_margins, copula_dependence, copula_dependence_maps, copula_calibration",
+                 f"{m.get('cop_seconds', float('nan')):.0f} s to compute"))
+    return "Table 5. Copula diagnostics", ("Metric", "Definition", "Result"), rows
+
+
 WANDB_KEY = "tables/summary"
 HTML_STYLE = """
 <style>
@@ -591,7 +645,7 @@ def main():
     if args.plots:
         image = draw_ate_maps(d, R)
         print(f"drew {image}", file=sys.stderr)
-    tables = [table1(R), table2(R), table3(R), table4(R)]
+    tables = [table1(R), table2(R), table3(R), table4(R), table5(R)]
     text = f"# {R['run']}\n\n" + "\n\n".join(
         f"**{title}**\n\n" + md_table(rows, header) for title, header, rows in tables) + "\n"
     out = args.out or f"{d}/tables.md"

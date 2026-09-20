@@ -122,6 +122,31 @@ def row_for(d: str) -> dict:
            for r, m in (("disc", disc), ("ring", ring), ("far", far))},
         "nonfinite_values": R["nonfinite"] if R["nonfinite"] is not None else "",
         "nonfinite_pixels": int((~np.isfinite(err)).sum()),
+        # ---- copula diagnostics (copula_diagnostics.py; empty for margin-only runs and for
+        # runs made before 2026-09-20). Per covariate: KS of the rank going in and of the
+        # base coordinate coming out; observed-minus-predicted Spearman(R_k, U_Z) by region
+        # and its largest pixel; largest remaining Spearman(R_k, v); calibration gap by
+        # treatment group and the worst outcome quartile. Once per run: rows used and their
+        # count; the covariate-pair correlations (E4/E6 only).
+        "cop_rows": R["metrics"].get("cop_rows", ""),
+        "cop_n": R["metrics"].get("cop_n", ""),
+        "cop_error": R["metrics"].get("cop_error", ""),
+        **{f"cop_{k}_{z}": _f(R["metrics"].get(f"cop_{k}_{z}"))
+           for z in ("thickness", "brightness")
+           for k in ("ks_u", "ks_v")},
+        **{f"cop_rho_ru_{z}_gap_{s}": _f(R["metrics"].get(f"cop_rho_ru_{z}_gap_{s}"))
+           for z in ("thickness", "brightness") for s in ("disc", "ring", "far", "maxabs")},
+        **{f"cop_rho_rv_{z}_maxabs": _f(R["metrics"].get(f"cop_rho_rv_{z}_maxabs"))
+           for z in ("thickness", "brightness")},
+        **{f"cop_cal_{z}_{g}": _f(R["metrics"].get(f"cop_cal_{z}_{g}"))
+           for z in ("thickness", "brightness") for g in ("t0", "t1")},
+        **{f"cop_cal_{z}_qmax": _f(R["metrics"].get(f"cop_cal_{z}_qmax",
+                                   max((R["metrics"][f"cop_cal_{z}_{g}"] for g in ("q1", "q2", "q3", "q4")), default=None)
+                                   if f"cop_cal_{z}_q1" in R["metrics"] else None))
+           for z in ("thickness", "brightness")},
+        "cop_rho_u_thickness_brightness_obs": _f(R["metrics"].get("cop_rho_u_thickness_brightness_obs")),
+        "cop_rho_u_thickness_brightness_pred": _f(R["metrics"].get("cop_rho_u_thickness_brightness_pred")),
+        "cop_rho_v_thickness_brightness": _f(R["metrics"].get("cop_rho_v_thickness_brightness")),
     }
     if R["layout"] == "margin_only" and R.get("arm_regional"):
         for reg, key in (("disc", "disc"), ("ring", "ring")):
