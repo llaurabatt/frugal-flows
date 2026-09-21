@@ -374,7 +374,7 @@ from frugal_flows.causal_flows import (
     get_independent_quantiles,
     train_frugal_flow,
 )
-from frugal_flows.interventions import interventional_samples, tau_curve
+from frugal_flows.interventions import interventional_samples, sample_clamped, tau_curve
 from prepare_morphomnist_exps import PRESETS, build_preset, inverse_logit, summarise
 
 ARMS = ("location_translation", "flexible_continuous", "frengression")
@@ -797,9 +797,10 @@ def _tau_hat_flexible_continuous(cfg: Config, flow, data: dict, K: int):
         # margin_sep: one unconditional flow per arm; the same key gives both
         # arms the same base draws, so the difference is paired as above.
         f0, f1 = flow
-        y0 = np.asarray(f0.sample(jr.key(cfg.seed_mc), sample_shape=(cfg.n_mc,)))
-        y1 = np.asarray(f1.sample(jr.key(cfg.seed_mc), sample_shape=(cfg.n_mc,)))
-        readout = {"y0": y0, "y1": y1,
+        s0, c0 = sample_clamped(jr.key(cfg.seed_mc), f0, cfg.n_mc)
+        s1, c1 = sample_clamped(jr.key(cfg.seed_mc), f1, cfg.n_mc)
+        y0, y1 = np.asarray(s0), np.asarray(s1)
+        readout = {"y0": y0, "y1": y1, "n_clamped": c0 + c1,
                    "anynan": bool(not (np.isfinite(y0).all() and np.isfinite(y1).all()))}
     else:
         readout = interventional_samples(
@@ -844,6 +845,10 @@ def _tau_hat_flexible_continuous(cfg: Config, flow, data: dict, K: int):
         "mc_var0": y0.var(axis=0),
         "mc_var1": y1.var(axis=0),
         "mc_tau_sd": (y1 - y0).std(axis=0),
+        # the filtered draws themselves, for the sample diagnostics; popped before the
+        # npz is written (leading underscore = not an archive key)
+        "_y0": y0,
+        "_y1": y1,
     }
 
     # The generator's TAU_MARGINAL is Q1(u) - Q0(u), which is what a flow with a
@@ -858,6 +863,7 @@ def _tau_hat_flexible_continuous(cfg: Config, flow, data: dict, K: int):
         "mc_n": int(cfg.n_mc),
         "mc_n_used": int(keep.sum()),
         "mc_frac_dropped": frac_dropped,   # >0 means the margin has heavy tails
+        "mc_n_clamped": int(readout.get("n_clamped", 0)),   # base draws moved off the boundary
         "mc_anynan": bool(readout["anynan"]),
         "readout_s": float(readout_s),
         "tau_u_rmse_vs_marginal": float(np.sqrt((curve_err**2).mean())),
@@ -1244,6 +1250,14 @@ def make_plots(cfg: Config, data: dict, losses: dict, tau_hat: np.ndarray,
         cd.plot_all({k: np.asarray(extras[k]) for k in cd.COP_ARRAY_KEYS if k in extras}, metrics,
                     size, disc, np.asarray(tau_hat) - ate_true, plots_dir,
                     f"{cfg.preset}  |  {cfg.model}  |  {cfg.arm}")
+    if "gen_idx" in extras:
+        import sample_diagnostics as sd
+        if metrics is None:
+            with open(os.path.join(os.path.dirname(plots_dir), "metrics.json")) as f:
+                metrics = json.load(f)
+        disc = region_masks(size, cfg.effective_radius)[0]
+        sd.plot_all({k: np.asarray(extras[k]) for k in sd.GEN_ARRAY_KEYS if k in extras}, metrics,
+                    data, size, disc, plots_dir, f"{cfg.preset}  |  {cfg.model}  |  {cfg.arm}")
 
     def save(fig, name):
         fig.savefig(os.path.join(plots_dir, name), dpi=120, bbox_inches="tight")
@@ -1354,7 +1368,12 @@ EXTRA_ARRAY_KEYS = ("tau_u", "tau_curves", "mc_mean0", "mc_mean1",
                     # copula diagnostics (copula_diagnostics.COP_ARRAY_KEYS), so --replot
                     # can redraw those figures without the flow
                     "cop_idx", "cop_R", "cop_u", "cop_v", "cop_u_pred", "cop_T", "cop_ysum",
-                    "cop_rho_obs", "cop_rho_pred", "cop_rho_pred_sd", "cop_rho_v", "cop_cal")
+                    "cop_rho_obs", "cop_rho_pred", "cop_rho_pred_sd", "cop_rho_v", "cop_cal",
+                    # sample diagnostics (sample_diagnostics.GEN_ARRAY_KEYS)
+                    "gen_idx", "gen_nb_pairs",
+                    *[f"gen_{k}_t{t}" for t in (0, 1)
+                      for k in ("ref_mean", "gen_mean", "ref_sd", "gen_sd", "ks", "nb_ref", "nb_gen", "sub",
+                                "roc_fpr", "roc_tpr", "gallery_ref", "gallery_gen")])
 # Truth arrays needed to rebuild every plot without regenerating the dataset.
 TRUTH_ARRAY_KEYS = ("ATE", "ATT", "ATC", "TAU_U", "TAU_PAIRED", "TAU_MARGINAL",
                     "THICKNESS", "PROPENSITY")
@@ -1586,7 +1605,8 @@ def _wandb_log(run, data: dict, losses: dict, metrics: dict, run_dir: str):
     payload.update({f"design/{k}": v for k, v in _numeric(summarise(data)).items()})
     for name in ("ate_maps", "recovery_scatter", "tau_curves",
                  "loss_curves", "design_check", "truth_panels",
-                 "copula_margins", "copula_dependence", "copula_dependence_maps", "copula_calibration"):
+                 "copula_margins", "copula_dependence", "copula_dependence_maps", "copula_calibration",
+                 "samples_gallery", "samples_moments", "samples_distributions"):
         p = os.path.join(run_dir, "plots", f"{name}.png")
         if os.path.exists(p):
             payload[f"plots/{name}"] = wandb.Image(p)
@@ -1684,6 +1704,32 @@ def _run_one_inner(cfg: Config, run_id: str, run_dir: str, wb) -> dict:
                     extras.update(cop_arr)
                     print(f"copula diagnostics on {cop_met['cop_rows']} rows (n={cop_met['cop_n']}) "
                           f"in {cop_met['cop_seconds']:.0f}s")
+            y0_draws, y1_draws = extras.pop("_y0", None), extras.pop("_y1", None)
+            if y0_draws is not None:
+                # generated-outcome quality per arm (sample_diagnostics.py), from the same
+                # draws the effect read-out used; same guard as above, error under gen_error
+                import sample_diagnostics as sd
+                _t = time.monotonic()
+                try:
+                    if cfg.model == "ff" and u_z is not None:
+                        x_all = jnp.hstack([jnp.asarray(data["Y"]), jnp.asarray(u_z)])
+                        nll_all = -np.asarray(jax.vmap(flow.log_prob)(x_all, jnp.asarray(data["X"])))
+                        idx, _, _ = _fit_val_indices(cfg, x_all.shape[0], losses, nll_all)
+                    else:
+                        idx = None    # margin-only fits: no joint likelihood to recover the split from
+                    masks = region_masks(cfg.size, cfg.effective_radius)
+                    gen_met, gen_arr = sd.compute(data, y0_draws, y1_draws, idx, cfg.size,
+                                                  tau_hat - np.asarray(data["ATE"]), masks, seed=cfg.seed_fit)
+                except Exception as exc:  # noqa: BLE001 -- recorded, not swallowed
+                    metrics["gen_error"] = f"{type(exc).__name__}: {exc}"
+                    print(f"sample diagnostics FAILED after {time.monotonic() - _t:.0f}s: {metrics['gen_error']}")
+                    traceback.print_exc()
+                else:
+                    gen_met["gen_seconds"] = float(time.monotonic() - _t)
+                    metrics.update(gen_met)
+                    extras.update(gen_arr)
+                    print(f"sample diagnostics on {gen_met['gen_rows']} rows (n={gen_met['gen_n_ref']}) "
+                          f"in {gen_met['gen_seconds']:.0f}s")
             save_run(cfg, data, losses, tau_hat, u_z, metrics, extras, run_dir)
             # Written last, so it covers everything including plotting and the
             # npz write -- this is the number to multiply when sizing a sweep.

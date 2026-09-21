@@ -147,6 +147,19 @@ def row_for(d: str) -> dict:
         "cop_rho_u_thickness_brightness_obs": _f(R["metrics"].get("cop_rho_u_thickness_brightness_obs")),
         "cop_rho_u_thickness_brightness_pred": _f(R["metrics"].get("cop_rho_u_thickness_brightness_pred")),
         "cop_rho_v_thickness_brightness": _f(R["metrics"].get("cop_rho_v_thickness_brightness")),
+        # ---- generated-outcome quality (sample_diagnostics.py; empty before 2026-09-21).
+        # Per arm t: MAE between generated and reference mean images and SD images (logit
+        # scale), largest per-pixel two-sample KS, mean absolute discrepancy of the
+        # adjacent-pixel correlations, out-of-fold AUC of a linear real-vs-generated
+        # classifier. Once per run: rows used, their count, error, and the read-out's
+        # dropped / clamped draws.
+        "gen_rows": R["metrics"].get("gen_rows", ""),
+        "gen_n_ref": R["metrics"].get("gen_n_ref", ""),
+        "gen_error": R["metrics"].get("gen_error", ""),
+        "mc_frac_dropped": _f(R["metrics"].get("mc_frac_dropped")),
+        "mc_n_clamped": R["metrics"].get("mc_n_clamped", ""),
+        **{f"gen_{k}_t{t}": _f(R["metrics"].get(f"gen_{k}_t{t}"))
+           for t in (0, 1) for k in ("mean_mae", "sd_mae", "ks_max", "nbcorr_mad", "auc")},
     }
     if R["layout"] == "margin_only" and R.get("arm_regional"):
         for reg, key in (("disc", "disc"), ("ring", "ring")):

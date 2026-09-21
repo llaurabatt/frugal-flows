@@ -547,6 +547,54 @@ def table5(R):
     return "Table 5. Copula diagnostics", ("Metric", "Definition", "Result"), rows
 
 
+def table6(R):
+    """Generated-outcome quality per arm (sample_diagnostics.py), for runs that have it."""
+    m = R["metrics"]
+    hdr = ("Metric", "Definition", "Result")
+    if not m.get("gen_rows") and not m.get("gen_error"):
+        return "Table 6. Generated-outcome quality", hdr, [
+            ("Sample diagnostics", "computed at the end of every fit from the interventional draws, from 2026-09-21 on",
+             "not available for this run")]
+    if m.get("gen_error"):
+        return "Table 6. Generated-outcome quality", hdr, [
+            ("Sample diagnostics", "failed inside sample_diagnostics.compute; the fit's other outputs are intact",
+             m["gen_error"])]
+    rows_used = ("flowjax's held-out units" if m["gen_rows"] == "heldout"
+                 else "all units (the held-out split could not be reconstructed)")
+    rows = [
+        ("Reference", "the true potential outcomes Y(0) and Y(1) of these units, exact from the generator",
+         f"{rows_used}, n = {m['gen_n_ref']}"),
+        ("Generated", "finite draws of Y | do(T=0) / do(T=1) from the fitted margin, the same draws the effect "
+         "read-out used", f"{m['gen_n_mc_t0']} / {m['gen_n_mc_t1']}"),
+        ("Dropped / clamped draws", "draws discarded for a non-finite value; base coordinates moved off the "
+         "support boundary before sampling", f"{m.get('mc_frac_dropped', float('nan')):.4f} / {m.get('mc_n_clamped', 'NR')}"),
+    ]
+    for t in (0, 1):
+        a = f"do(T={t})"
+        rows += [
+            (f"{a}: mean image MAE / RMSE", "between the generated and the reference per-pixel mean, logit scale; "
+             f"Monte Carlo s.e. of the generated mean, averaged over pixels, {m[f'gen_mean_mcse_t{t}']:.4f}",
+             f"{m[f'gen_mean_mae_t{t}']:.4f} / {m[f'gen_mean_rmse_t{t}']:.4f}"),
+            (f"{a}: SD image MAE / RMSE", "between the generated and the reference per-pixel SD, logit scale",
+             f"{m[f'gen_sd_mae_t{t}']:.4f} / {m[f'gen_sd_rmse_t{t}']:.4f}"),
+            (f"{a}: KS, largest / mean over pixels", "two-sample Kolmogorov-Smirnov distance between reference and "
+             "generated values of one pixel, over all pixels", f"{m[f'gen_ks_max_t{t}']:.3f} / {m[f'gen_ks_mean_t{t}']:.3f}"),
+            (f"{a}: KS at the disc / ring / far pixel", "the same at the pixel with the largest |signed error| in each "
+             f"region (pixels {m['gen_pix_disc']} / {m['gen_pix_ring']} / {m['gen_pix_far']})",
+             f"{m[f'gen_ks_disc_t{t}']:.3f} / {m[f'gen_ks_ring_t{t}']:.3f} / {m[f'gen_ks_far_t{t}']:.3f}"),
+            (f"{a}: adjacent-pixel correlation gap, mean / largest", f"|generated minus reference Pearson correlation| "
+             f"over the {m['gen_n_pairs']} edge-adjacent pixel pairs",
+             f"{m[f'gen_nbcorr_mad_t{t}']:.3f} / {m[f'gen_nbcorr_maxabs_t{t}']:.3f}"),
+            (f"{a}: classifier AUC", "out-of-fold ROC AUC of a logistic regression on the logit pixels, reference "
+             "units against the same number of draws, five-fold stratified cross-validation; 0.5 = "
+             f"indistinguishable by a linear rule (sd over folds {m[f'gen_auc_fold_sd_t{t}']:.3f})",
+             f"{m[f'gen_auc_t{t}']:.3f}"),
+        ]
+    rows.append(("Figures", "plots/samples_gallery, samples_moments, samples_distributions",
+                 f"{m.get('gen_seconds', float('nan')):.0f} s to compute"))
+    return "Table 6. Generated-outcome quality", hdr, rows
+
+
 WANDB_KEY = "tables/summary"
 HTML_STYLE = """
 <style>
@@ -645,7 +693,7 @@ def main():
     if args.plots:
         image = draw_ate_maps(d, R)
         print(f"drew {image}", file=sys.stderr)
-    tables = [table1(R), table2(R), table3(R), table4(R), table5(R)]
+    tables = [table1(R), table2(R), table3(R), table4(R), table5(R), table6(R)]
     text = f"# {R['run']}\n\n" + "\n\n".join(
         f"**{title}**\n\n" + md_table(rows, header) for title, header, rows in tables) + "\n"
     out = args.out or f"{d}/tables.md"

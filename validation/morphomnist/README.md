@@ -572,6 +572,37 @@ and the three thickness–brightness correlations; the per-quartile values, grou
 and Monte Carlo spreads stay in `metrics.json`. Table 5 of `tables.md` lists them with
 definitions. Runs before 2026-09-20 and margin-only runs have these columns empty.
 
+### Generated-outcome quality (`sample_diagnostics.py`, `plots/samples_*.png`, `gen_*` metrics)
+
+Every fit that samples its arms (all three models on the flexible arm) also checks the
+samples themselves, per treatment arm, from the same draws the effect read-out used.
+The reference is the true potential outcome `Y(t)` of the held-out units for both `t`,
+exact from the generator, so the check does not depend on which arm a unit was observed
+in. Reference and generated are two samples of one population distribution, not paired
+individuals. Everything numeric is on the logit scale; only the gallery is shown in
+pixel intensity. Same conventions as the copula diagnostics: held-out rows when the
+split can be reconstructed (margin-only fits have no joint likelihood to reconstruct it
+from and use all rows), `gen_rows` says which, a failure is stored as `gen_error`.
+
+Three figures: `samples_gallery.png` (random reference and generated images per arm,
+one intensity scale); `samples_moments.png` (reference and generated per-pixel mean and
+SD maps and their differences, with MAE, RMSE and the Monte Carlo standard error of the
+generated mean); `samples_distributions.png` (CDF overlays at the disc, ring and far
+pixels the copula figure uses, with the two-sample KS distance; Pearson correlation of
+every edge-adjacent pixel pair, generated against reference; the ROC of a logistic
+regression telling reference units from an equal number of draws, five-fold
+cross-validated, whose AUC is 0.5 when a linear rule cannot tell them apart).
+
+The read-out now draws through `frugal_flows.interventions.sample_clamped`, which is
+`flow.sample` with base coordinates on the support boundary moved inward (an exact 0
+from the uniform sampler otherwise reaches arctanh and returns −inf); `mc_n_clamped`
+counts how many were moved, `mc_frac_dropped` the draws still discarded as non-finite.
+
+The index keeps, per arm, `gen_mean_mae_t*`, `gen_sd_mae_t*`, `gen_ks_max_t*`,
+`gen_nbcorr_mad_t*`, `gen_auc_t*`, plus `gen_rows`, `gen_n_ref`, `gen_error`,
+`mc_frac_dropped` and `mc_n_clamped`; Table 6 of `tables.md` has the full set with
+definitions. Runs before 2026-09-21 have these columns empty.
+
 ### Baselines: `baselines.py`, `runs/baselines/`
 
 The classical per-pixel estimators — naive difference in means, Hajek IPW with an

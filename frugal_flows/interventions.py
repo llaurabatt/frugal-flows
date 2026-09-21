@@ -23,12 +23,57 @@ samples, not on the difference of means.
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 import numpy as np
+from paramax import unwrap
 
 from frugal_flows.outcome_transforms import as_outcome_transform
 
 Y_INDEX = 0  # the frugal flow stores the causal margin (Y) in output dim 0
+
+# How far inside the base support a base draw is pushed. ``jax.random.uniform`` draws
+# on [0, 1) and can return exactly 0, which the Uniform(-1, 1) base maps to exactly -1;
+# the chain then sends that boundary point through arctanh and returns -inf. 2**-25 of
+# the base range (2**-24 on [-1, 1]) is the smallest floor whose image stays strictly
+# inside the support in float32; the sampler's grid is 2**-23, so only exact endpoints
+# move.
+BASE_CLAMP = 2.0**-25
+
+
+def sample_clamped(key, flow, n, condition=None, clamp=BASE_CLAMP):
+    """``flow.sample`` with the base draws clamped inward, plus how many were clamped.
+
+    Reproduces ``flow.sample(key, (n,), condition)`` exactly (same key splitting, same
+    base draws) except that base coordinates on the support boundary are moved inward
+    by ``clamp`` times the support width. Returns ``(samples, n_clamped)`` where
+    ``n_clamped`` counts the base coordinates that were moved (0 for almost every call).
+    Only for a flow whose base distribution is a Uniform.
+    """
+    flow = unwrap(flow)
+    base = unwrap(flow.base_dist)
+    # after merge_transforms the base is flowjax's _StandardUniform on [0, 1) (its affine
+    # to [-1, 1] has become the first block of the chain); a plain Uniform keeps its bounds
+    lo, hi = jnp.asarray(getattr(base, "minval", 0.0)), jnp.asarray(getattr(base, "maxval", 1.0))
+    eps = clamp * (hi - lo)
+    if condition is None:
+        # unconditional: n draws come from sample_shape=(n,)
+        keys = flow._get_sample_keys(key, (n,), None)
+    else:
+        # conditional: flowjax makes one draw per condition row, so the n rows of the
+        # condition ARE the sample dimension and sample_shape must stay ()
+        condition = jnp.asarray(condition)
+        assert condition.shape[0] == n, (condition.shape, n)
+        keys = flow._get_sample_keys(key, (), condition)
+    u = jax.vmap(base._sample)(keys)
+    # upper bound: 2 eps, because in float32 (1 - 2**-25) rounds back up to exactly 1
+    u_c = jnp.clip(u, lo + eps, hi - 2 * eps)
+    n_clamped = int(jnp.sum(u_c != u))
+    if condition is None:
+        y = jax.vmap(flow.bijection.transform)(u_c)
+    else:
+        y = jax.vmap(flow.bijection.transform)(u_c, condition)
+    return y, n_clamped
 
 
 def interventional_samples(
@@ -63,14 +108,17 @@ def interventional_samples(
     """
     t = as_outcome_transform(outcome_transform)
     cols = slice(y_index, y_index + dim_y)
-    y0 = np.asarray(t.inverse(flow.sample(key, condition=jnp.zeros((n_mc, cond_dim)))[:, cols]))
-    y1 = np.asarray(t.inverse(flow.sample(key, condition=jnp.ones((n_mc, cond_dim)))[:, cols]))
+    s0, c0 = sample_clamped(key, flow, n_mc, jnp.zeros((n_mc, cond_dim)))
+    s1, c1 = sample_clamped(key, flow, n_mc, jnp.ones((n_mc, cond_dim)))
+    y0 = np.asarray(t.inverse(s0[:, cols]))
+    y1 = np.asarray(t.inverse(s1[:, cols]))
     if dim_y == 1:
         y0, y1 = y0[:, 0], y1[:, 0]
     tau = y1 - y0
     stat = float if dim_y == 1 else (lambda a: np.asarray(a))
     return {
         "y0": y0, "y1": y1,
+        "n_clamped": c0 + c1,   # base coordinates moved off the support boundary
         "mean0": stat(np.mean(y0, axis=0)), "mean1": stat(np.mean(y1, axis=0)),
         "var0": stat(np.var(y0, axis=0)), "var1": stat(np.var(y1, axis=0)),
         "ate": stat(np.mean(tau, axis=0)), "tau_sd": stat(np.std(tau, axis=0)),
