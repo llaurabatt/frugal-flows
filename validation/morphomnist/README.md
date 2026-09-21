@@ -467,12 +467,40 @@ python exp_ate_recovery.py --collect                        # table of completed
 python exp_ate_recovery.py --replot runs/exp_ate_recovery/<run-id>
 python exp_ate_recovery.py --selftest
 python exp_ate_recovery.py --model margin --runs-root /some/scratch/dir   # trial run kept OUT of runs/
-python run_tables.py runs/exp_ate_recovery/<run-id>        # the four summary tables -> tables.md
+python run_tables.py runs/exp_ate_recovery/<run-id>        # the six summary tables -> tables.md
 python check_runs.py [--no-wandb] [--root DIR]             # naming/config/wandb consistency of every run
 ```
 
 `--runs-root DIR` writes the run folder under `DIR` instead of `runs/exp_ate_recovery/`;
 use it for any fit that must not land among the real runs.
+
+### The training loop: `frugal_flows.training.fit_to_data`
+
+Since 2026-09-21 every fit trains through `frugal_flows.training.fit_to_data`, a drop-in
+replacement for flowjax's routine. With the default options it reproduces the library bit
+for bit (same key sequence, same step, same batching, same best-epoch and patience rule;
+asserted by `tests/test_training_loop.py` and by refitting a grid cell), so runs made
+before and after the switch are comparable. What it adds:
+
+* **The validation split is recorded.** flowjax shuffles the rows and keeps the last 10 %
+  for early stopping without saying which; the loop now stores them (`train_idx`,
+  `val_idx` in `arrays.npz`, `n_train` / `n_val` in `metrics.json`). Everything computed
+  "on the held-out rows" (the copula term, the copula and sample diagnostics) uses them.
+  Older runs fall back to `_fit_val_indices`, which replays the key sequence and checks the
+  result by the train/held-out loss gap; `val_split_source` says which (`recorded` /
+  `reconstructed` / `none`).
+* `--wall-cap-s S`: stop after the first epoch that ends past `S` seconds
+  (`termination = wall_cap`; otherwise `patience` or `epoch_cap`, now recorded rather than
+  inferred from the epoch count).
+* `--select-on {joint,copula}`: what early stopping and the reported checkpoint follow.
+  `joint` is the library rule (the batched validation loss). `copula` uses the validation
+  copula NLL on the whole validation set after every epoch, the term that carries
+  deconfounding (see "The copula is what buys identification"); the series is saved as
+  `loss_select`, the joint loss at the chosen epoch as `val_loss_at_best`, and `best_select`
+  is the criterion's minimum.
+* `--track-every N` (with `--track-n-mc`): every `N` epochs, a small interventional
+  read-out (`ate_mae`, signed disc / ring / far error against the truth) is stored under
+  `metrics["track"]`, so the effect's path during training can be seen without refits.
 
 ### The run index: `runs/exp_ate_recovery/index.csv`
 

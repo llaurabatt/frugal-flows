@@ -210,10 +210,15 @@ def read_run(d: str) -> dict:
         R.update(tau=a["tau_hat"], ate=a["ATE"], e0=e0, e1=e1, val=a["loss_val"], train=a["loss_train"])
         ep = int(met["n_epochs_run"])
         cap = c.get("max_epochs")
-        R.update(termination="patience" if cap and ep < cap else "epoch cap", epochs=ep,
-                 best_epoch=int(np.argmin(a["loss_val"])) + 1,
-                 converged=bool(cap and ep < cap), wall_s=met.get("flow_fit_s"),
-                 patience=c.get("max_patience"), epoch_cap=cap, wall_cap_s=None)
+        # from 2026-09-21 the loop records how it ended and which epoch it kept; before
+        # that, infer: fewer epochs than the cap means the patience rule stopped it
+        term = met.get("termination") or ("patience" if cap and ep < cap else "epoch cap")
+        R.update(termination=term, epochs=ep,
+                 best_epoch=int(met.get("best_epoch") or (int(np.argmin(a["loss_val"])) + 1)),
+                 converged=(term == "patience"), wall_s=met.get("flow_fit_s"),
+                 patience=c.get("max_patience"), epoch_cap=cap, wall_cap_s=c.get("wall_cap_s"))
+        if met.get("n_val"):
+            R.update(n_train=int(met["n_train"]), n_val=int(met["n_val"]))
         R.update(se={r: None for r in ("reference_disc", "reference_ring", "far_region")},
                  nonfinite=None,
                  dropped=(met.get("mc_n") or 0) - (met.get("mc_n_used") or 0), anynan=met.get("mc_anynan"))
@@ -423,11 +428,18 @@ def table3(R):
     caps = f"patience ({R['patience']} epochs), epoch cap ({fmt(R['epoch_cap'])})"
     if R["wall_cap_s"]:
         caps += f", wall clock ({R['wall_cap_s'] / 3600:g} h)"
+    met = R.get("metrics") or {}
+    sel = {"val_loss": "the batched validation loss (the library rule)",
+           "select_fn": "the validation copula NLL on the whole validation set"}.get(met.get("selected_on"))
+    split = {"recorded": "recorded by the training loop", "reconstructed": "reconstructed by replaying the "
+             "key sequence (runs before 2026-09-21)", "none": "not recovered"}.get(met.get("val_split_source"))
     rows = [
         ("Stopping rule", f"condition that ended training, out of: {caps}", fmt(R["termination"])),
         ("Converged", "training ended on the patience rule rather than a cap", fmt(R["converged"])),
         ("Epochs run", "number of epochs trained", fmt(R["epochs"])),
-        ("Best epoch", "epoch with the lowest validation loss; its checkpoint is the one reported", fmt(R["best_epoch"])),
+        ("Best epoch", "epoch whose checkpoint is reported: the lowest value of the selection criterion", fmt(R["best_epoch"])),
+        ("Selection criterion", "what early stopping and the best epoch followed", sel or NR),
+        ("Validation rows", f"{R['n_val']} of {R['n']} rows held out from training; how they are known", split or NR),
     ]
     if R["sep"]:
         ai = R["arm_info"]

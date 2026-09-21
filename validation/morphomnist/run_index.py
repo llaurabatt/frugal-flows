@@ -91,6 +91,9 @@ def row_for(d: str) -> dict:
         "precision": R["precision"] if "not recorded" not in str(R["precision"]) else "",
         # ---- training (Table 3)
         "termination": R["termination"] or "", "converged": R["converged"],
+        # from 2026-09-21 the loop records these; empty for older runs
+        "selected_on": R["metrics"].get("selected_on", ""),
+        "val_split_source": R["metrics"].get("val_split_source", ""),
         "epochs_run": R["epochs"], "best_epoch": R["best_epoch"],
         "val_loss_best": _f(v[b]), "train_loss_best": _f(t[b]), "train_val_gap_best": _f(t[b] - v[b]),
         "val_loss_first": _f(v[0]), "val_loss_last": _f(v[-1]),

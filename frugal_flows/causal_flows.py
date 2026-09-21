@@ -17,7 +17,7 @@ from flowjax.bijections import (
 from flowjax.bijections.utils import Identity
 from flowjax.distributions import Transformed, Uniform, _StandardUniform
 from flowjax.flows import masked_autoregressive_flow
-from flowjax.train import fit_to_data
+from frugal_flows.training import fit_to_data  # drop-in for flowjax.train.fit_to_data, records the split
 from jaxtyping import ArrayLike
 from paramax import NonTrainable
 
@@ -304,6 +304,7 @@ def train_frugal_flow_flexible_continuous(
     mask_condition: bool = True,
     causal_model_args: dict | None = None,
     pretrained_margin=None,  # AbstractBijection | None: warm-start graft (see below)
+    fit_kwargs: dict | None = None,  # extras for frugal_flows.training.fit_to_data (wall cap, select_fn, on_epoch)
 ):
     nvars = u_z.shape[1]
     dim_y = y.shape[1]
@@ -430,6 +431,7 @@ def train_frugal_flow_flexible_continuous(
         max_epochs=max_epochs,
         max_patience=max_patience,
         batch_size=batch_size,
+        **(fit_kwargs or {}),
     )
 
     return frugal_flow, losses
@@ -779,6 +781,7 @@ def train_frugal_flow(
     causal_model="gaussian",
     causal_model_args: dict | None = None,
     pretrained_margin=None,  # AbstractBijection | None: warm-start graft (flexible_continuous only)
+    fit_kwargs: dict | None = None,  # extras for the training loop (flexible_continuous only)
 ):
     valid_causal_models = [
         "gaussian",
@@ -859,6 +862,7 @@ def train_frugal_flow(
             mask_condition=mask_condition,
             causal_model_args=causal_model_args,
             pretrained_margin=pretrained_margin,
+            fit_kwargs=fit_kwargs,
         )
 
     elif causal_model == "location_translation":

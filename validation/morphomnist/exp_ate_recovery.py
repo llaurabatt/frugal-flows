@@ -368,13 +368,15 @@ from flowjax.bijections import (
 )
 from flowjax.distributions import Transformed, Uniform
 from flowjax.flows import _add_default_permute
-from flowjax.train import fit_to_data
 from frugal_flows.causal_flows import (
     _build_flexible_margin,
     get_independent_quantiles,
     train_frugal_flow,
 )
 from frugal_flows.interventions import interventional_samples, sample_clamped, tau_curve
+from frugal_flows.training import (
+    fit_to_data,  # drop-in for flowjax's; records the split, wall cap
+)
 from prepare_morphomnist_exps import PRESETS, build_preset, inverse_logit, summarise
 
 ARMS = ("location_translation", "flexible_continuous", "frengression")
@@ -465,6 +467,13 @@ class Config:
     learning_rate: float = 1e-2
     max_epochs: int = 100
     max_patience: int = 30
+    # ---- training loop extras (frugal_flows.training.fit_to_data; defaults reproduce
+    #      flowjax's fit_to_data bit for bit) ----
+    wall_cap_s: float | None = None    # stop after the first epoch ending past this many seconds
+    select_on: str = "joint"           # early stopping + best epoch on: "joint" (batched val loss,
+                                       # the library rule) or "copula" (val copula NLL, whole val set)
+    track_every: int = 0               # >0: effect read-out every N epochs (track_n_mc draws) -> metrics["track"]
+    track_n_mc: int = 500
     batch_size: int = 100
     marginal_max_epochs: int = 70
     marginal_max_patience: int = 10
@@ -678,13 +687,15 @@ def _fit_margin_only(cfg: Config, data: dict, timings: dict | None = None):
     T = jnp.asarray(data["X"])
     K = int(Y.shape[1])
     fit_kw = dict(learning_rate=cfg.learning_rate, max_epochs=cfg.max_epochs,
-                  max_patience=cfg.max_patience, batch_size=cfg.batch_size)
+                  max_patience=cfg.max_patience, batch_size=cfg.batch_size,
+                  wall_cap_s=cfg.wall_cap_s)
     _t = time.monotonic()
     if cfg.model == "margin":
         key, bkey, fkey = jr.split(key, 3)
         flow, losses = fit_to_data(key=fkey, dist=_margin_dist(cfg, bkey, K, T),
                                    data=(Y, T), **fit_kw)
-        losses = {"train": np.asarray(losses["train"]), "val": np.asarray(losses["val"])}
+        losses = {"train": np.asarray(losses["train"]), "val": np.asarray(losses["val"]),
+                  "info": losses["info"]}
     else:                                   # margin_sep
         flows, losses = [], {}
         arms = np.asarray(data["X"])[:, 0]
@@ -696,10 +707,88 @@ def _fit_margin_only(cfg: Config, data: dict, timings: dict | None = None):
             sfx = "" if t == 0 else "_arm1"       # arm 0 fills the standard keys
             losses[f"train{sfx}"] = np.asarray(l["train"])
             losses[f"val{sfx}"] = np.asarray(l["val"])
+            info = dict(l["info"])
+            # the split indices are positions within that arm's rows; map to dataset rows
+            rows = np.flatnonzero(arms == t)
+            info["train_idx"], info["val_idx"] = rows[info["train_idx"]], rows[info["val_idx"]]
+            losses[f"info{sfx}"] = info
         flow = tuple(flows)
     if timings is not None:
         timings["flow_fit_s"] = time.monotonic() - _t
     return flow, losses, None
+
+
+def _copula_ll_rows(flow, x, cond, K: int):
+    """Per-row copula log-likelihood: joint log p(y, u_z | t) minus the margin blocks'
+    inverse log-determinants (plus K log 2 for the y-dims' support affine). Same
+    arithmetic as ``copula_term``; the u_z columns must pass the margin blocks untouched,
+    which ``copula_term`` asserts once per run. Jitted, so it can run every epoch."""
+    B = flow.bijection.bijections
+    total = jax.vmap(flow.log_prob)(x, cond)
+
+    def inv_ld(b, xs):
+        b = paramax.unwrap(b)
+        if b.cond_shape is not None:
+            return jax.vmap(lambda xi, ci: b.inverse_and_log_det(xi, ci))(xs, cond)
+        return jax.vmap(lambda xi: b.inverse_and_log_det(xi))(xs)
+
+    xs, ld_margin = x, jnp.zeros(x.shape[0])
+    for b in reversed(B[3:]):               # data -> base, margin blocks only
+        xs, ld = inv_ld(b, xs)
+        ld_margin = ld_margin + ld
+    return total - (ld_margin - K * jnp.log(2.0))
+
+
+_copula_ll_rows_jit = equinox.filter_jit(_copula_ll_rows)
+
+
+def _fit_kwargs(cfg: Config, data: dict) -> dict:
+    """The extras handed to ``frugal_flows.training.fit_to_data`` for the joint fit:
+    wall-clock cap, the selection criterion, and the tracking hook."""
+    if cfg.select_on not in ("joint", "copula"):
+        raise ValueError(f"select_on must be 'joint' or 'copula', got {cfg.select_on!r}")
+    kw: dict = {"wall_cap_s": cfg.wall_cap_s}
+    K = int(np.asarray(data["Y"]).shape[1])
+    if cfg.select_on == "copula":
+        def select_fn(params, static, x_val, cond_val):
+            flow = paramax.unwrap(equinox.combine(params, static))
+            return -float(_copula_ll_rows_jit(flow, x_val, cond_val, K).mean())
+        kw["select_fn"] = select_fn
+    if cfg.track_every > 0:
+        truth = np.asarray(data["ATE"])
+        masks = region_masks(cfg.size, cfg.effective_radius)
+        cond_dim = int(np.asarray(data["X"]).shape[1])
+
+        def on_epoch(epoch, params, static):
+            if epoch % cfg.track_every:
+                return None
+            flow = equinox.combine(params, static)
+            r = interventional_samples(jr.key(cfg.seed_mc), flow, cond_dim=cond_dim,
+                                       n_mc=cfg.track_n_mc, dim_y=K)
+            y0, y1 = np.asarray(r["y0"]), np.asarray(r["y1"])
+            keep = np.isfinite(y0).all(1) & np.isfinite(y1).all(1)
+            if not keep.any():
+                return {"ate_mae": float("nan"), "n_used": 0}
+            err = (y1[keep] - y0[keep]).mean(0) - truth
+            return {"ate_mae": float(np.abs(err).mean()), "n_used": int(keep.sum()),
+                    **{f"signed_{n}": float(err[m].mean()) for n, m in zip(("disc", "ring", "far"), masks)}}
+        kw["on_epoch"] = on_epoch
+    return kw
+
+
+def heldout_idx(cfg: Config, flow, data: dict, u_z, losses: dict):
+    """The validation rows: recorded by the training loop when it ran (``losses["info"]``),
+    otherwise reconstructed from the key sequence (``_fit_val_indices``; needs the joint
+    likelihood, so margin-only fits get ``None``). Returns ``(idx or None, source)``."""
+    info = losses.get("info") or {}
+    if info.get("val_idx") is not None:
+        return np.asarray(info["val_idx"]), "recorded"
+    if cfg.model != "ff" or u_z is None:
+        return None, "none"
+    x_all = jnp.hstack([jnp.asarray(data["Y"]), jnp.asarray(u_z)])
+    nll_all = -np.asarray(jax.vmap(flow.log_prob)(x_all, jnp.asarray(data["X"])))
+    idx, _, _ = _fit_val_indices(cfg, x_all.shape[0], losses, nll_all)
+    return idx, ("reconstructed" if idx is not None else "none")
 
 
 def fit_flow(cfg: Config, data: dict, timings: dict | None = None):
@@ -763,6 +852,7 @@ def fit_flow(cfg: Config, data: dict, timings: dict | None = None):
         max_epochs=cfg.max_epochs,
         max_patience=cfg.max_patience,
         batch_size=cfg.batch_size,
+        fit_kwargs=_fit_kwargs(cfg, data) if cfg.arm == "flexible_continuous" else None,
         causal_model_args=causal_model_args,
         # copula capacity (the dispatcher forwards these to every arm's
         # masked_autoregressive_flow_first_uniform); the margin's capacity
@@ -967,14 +1057,25 @@ def copula_term(cfg: Config, flow, data: dict, u_z, losses: dict) -> dict:
         "all_margin_nll": float(-margin_ll.mean()),
         "all_copula_nll": float(-copula_ll.mean()),
     }
-    idx, depth, gap_z = _fit_val_indices(cfg, x.shape[0], losses, -total)
-    out["val_split_gap_z"] = float(gap_z)          # held-out minus train NLL, in SEs
+    info = losses.get("info") or {}
+    if info.get("val_idx") is not None:            # the loop recorded its split (from 2026-09-21)
+        idx, depth, gap_z = np.asarray(info["val_idx"]), 0, float("nan")
+        out["val_split_source"] = "recorded"
+        tr = np.setdiff1d(np.arange(x.shape[0]), idx)
+        out["val_split_gap_z"] = float((-total[idx].mean() + total[tr].mean())
+                                       / max(float(np.std(-total)) * np.sqrt(1 / len(idx) + 1 / len(tr)), 1e-12))
+    else:                                          # older runs: replay the key sequence
+        idx, depth, gap_z = _fit_val_indices(cfg, x.shape[0], losses, -total)
+        out["val_split_source"] = "reconstructed" if idx is not None else "none"
+        out["val_split_gap_z"] = float(gap_z)      # held-out minus train NLL, in SEs
     if idx is not None:
         out.update({
             "val_split_key_depth": int(depth),
             "val_total_nll": float(-total[idx].mean()),      # ~ best_val_loss (see docstring)
             "val_margin_nll": float(-margin_ll[idx].mean()),
             "val_copula_nll": float(-copula_ll[idx].mean()),  # <- select on this
+            "train_copula_nll": float(-np.delete(copula_ll, idx).mean()),
+            "train_margin_nll": float(-np.delete(margin_ll, idx).mean()),
         })
     else:
         out["val_split_key_depth"] = -1
@@ -1064,6 +1165,18 @@ def evaluate(cfg: Config, flow, data: dict, losses: dict, wall_time_s: float,
         # fit diagnostics
         "best_val_loss": float(np.min(losses["val"])),
         "n_epochs_run": int(len(losses["train"])),
+        # from the training loop (frugal_flows.training.fit_to_data): how it ended and on
+        # what; best_epoch is 1-based; val_loss_at_best is the batched val loss at that epoch
+        # (equals best_val_loss when selecting on it, not necessarily when selecting on the copula)
+        **({"termination": losses["info"]["termination"],
+            "best_epoch": int(losses["info"]["best_epoch"]),
+            "selected_on": losses["info"]["selected_on"],
+            "val_loss_at_best": float(losses["val"][losses["info"]["best_epoch"] - 1]) if losses["info"]["best_epoch"] else float("nan"),
+            "best_select": float(np.min(losses["select"])) if "select" in losses else float("nan"),
+            "n_train": int(losses["info"]["n_train"]), "n_val": int(losses["info"]["n_val"]),
+            "wall_cap_s": cfg.wall_cap_s if cfg.wall_cap_s is not None else float("nan"),
+            "track": losses.get("track", [])}
+           if losses.get("info") else {}),
         "n_units": int(np.asarray(data["Y"]).shape[0]),
         "n_pixels": int(K),
         # wall_time_s brackets BOTH fits (stage-1 margins + the frugal flow);
@@ -1500,7 +1613,15 @@ def save_run(cfg: Config, data: dict, losses: dict, tau_hat: np.ndarray,
         # u_z exists only for the frugal flow; the margin baselines fit nothing to Z.
         **({"u_z": np.asarray(u_z)} if u_z is not None else {}),
         # margin_sep: the second arm's loss curves, next to arm 0's standard ones
-        **{f"loss_{k}": np.asarray(v) for k, v in losses.items() if k.endswith("_arm1")},
+        **{f"loss_{k}": np.asarray(v) for k, v in losses.items()
+           if k.endswith("_arm1") and not k.startswith("info")},
+        # the training loop's own records (from 2026-09-21): the rows it held out, and the
+        # selection series when early stopping did not follow the batched val loss
+        **({"train_idx": np.asarray(losses["info"]["train_idx"]), "val_idx": np.asarray(losses["info"]["val_idx"])}
+           if losses.get("info") else {}),
+        **({"train_idx_arm1": np.asarray(losses["info_arm1"]["train_idx"]), "val_idx_arm1": np.asarray(losses["info_arm1"]["val_idx"])}
+           if losses.get("info_arm1") else {}),
+        **({"loss_select": np.asarray(losses["select"])} if "select" in losses else {}),
         **{k: np.asarray(data[k]) for k in TRUTH_ARRAY_KEYS},
         **{k: np.asarray(v) for k, v in (extras or {}).items()},
     )
@@ -1686,9 +1807,7 @@ def _run_one_inner(cfg: Config, run_id: str, run_dir: str, wb) -> dict:
                 import copula_diagnostics as cd
                 _t = time.monotonic()
                 try:
-                    x_all = jnp.hstack([jnp.asarray(data["Y"]), jnp.asarray(u_z)])
-                    nll_all = -np.asarray(jax.vmap(flow.log_prob)(x_all, jnp.asarray(data["X"])))
-                    idx, _, _ = _fit_val_indices(cfg, x_all.shape[0], losses, nll_all)
+                    idx, _ = heldout_idx(cfg, flow, data, u_z, losses)
                     masks = region_masks(cfg.size, cfg.effective_radius)
                     cop_met, cop_arr = cd.compute(flow, data, u_z, idx, masks[0],
                                                   tau_hat - np.asarray(data["ATE"]), masks,
@@ -1711,12 +1830,9 @@ def _run_one_inner(cfg: Config, run_id: str, run_dir: str, wb) -> dict:
                 import sample_diagnostics as sd
                 _t = time.monotonic()
                 try:
-                    if cfg.model == "ff" and u_z is not None:
-                        x_all = jnp.hstack([jnp.asarray(data["Y"]), jnp.asarray(u_z)])
-                        nll_all = -np.asarray(jax.vmap(flow.log_prob)(x_all, jnp.asarray(data["X"])))
-                        idx, _, _ = _fit_val_indices(cfg, x_all.shape[0], losses, nll_all)
-                    else:
-                        idx = None    # margin-only fits: no joint likelihood to recover the split from
+                    # recorded by the loop for every model from 2026-09-21; margin_sep holds
+                    # one split per arm, and the sample check uses arm 0's held-out rows
+                    idx, _ = heldout_idx(cfg, flow, data, u_z, losses)
                     masks = region_masks(cfg.size, cfg.effective_radius)
                     gen_met, gen_arr = sd.compute(data, y0_draws, y1_draws, idx, cfg.size,
                                                   tau_hat - np.asarray(data["ATE"]), masks, seed=cfg.seed_fit)
