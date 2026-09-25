@@ -1534,6 +1534,7 @@ def digit_tag(cfg: Config) -> str:
 
 
 DEFAULT_EFFECT = 1.0   # the generator's base_shift default; only a different value is named
+DEFAULT_LR = 1e-2      # Config.learning_rate's default; only a different value is named
 
 # How the package's masked autoregressive layers number their hidden units
 # (frugal_flows/bijections/ranks.py). "spread" from 2026-09-25; runs before used "legacy"
@@ -1556,6 +1557,9 @@ def variant_tag(cfg: Config) -> str:
     # copsel = early stopping and the kept epoch follow the held-out copula loss
     if getattr(cfg, "select_on", "joint") == "copula":
         var.append("copsel")
+    # learning rate, when not the default 1e-2: lr0.001
+    if cfg.learning_rate != DEFAULT_LR:
+        var.append(f"lr{cfg.learning_rate:g}")
     return "_".join(var)
 
 
@@ -1896,7 +1900,7 @@ CELL_IDENTITY = ("preset", "arm", "model", "conditioner", "size", "radius", "dig
                  "copula_nn_width", "copula_nn_depth", "copula_flow_layers",
                  "copula_rqs_knots", "max_epochs", "n_mc",
                  # a copula-stopped fit is not the joint-stopped fit of the same cell
-                 "select_on", "seed_assign", "base_shift")
+                 "select_on", "seed_assign", "base_shift", "learning_rate")
 
 
 def completed_cells(runs_root: str = RUNS_ROOT) -> set[tuple]:

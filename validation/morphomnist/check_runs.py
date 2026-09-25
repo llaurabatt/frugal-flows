@@ -122,6 +122,16 @@ def main():
             bad(d, f"config seed_assign={c['seed_assign']} but name has no sa tag")
         if sa and (c.get("seed_assign") is None or f"sa{c['seed_assign']}" != sa[0]):
             bad(d, f"name has {sa[0]} but config seed_assign={c.get('seed_assign')}")
+        # lr<value>: present iff the learning rate is not the default 1e-2 (runs of the main
+        # script's layout only; older layouts record it elsewhere)
+        # The tag exists from 2026-09-25 (runs whose config.json records hidden_ranks_rule);
+        # 32 earlier 16x16 runs at lr 0.003 / 0.001 are untagged (open item, handoff.md).
+        lrs = [v for v in variants if v.startswith("lr")]
+        lr = c.get("learning_rate") if cj.get("hidden_ranks_rule") else None
+        if lr is not None and float(lr) != 1e-2 and f"lr{float(lr):g}" not in variants:
+            bad(d, f"config learning_rate={lr} but name has no lr{float(lr):g} tag")
+        if lrs and (lr is None or f"lr{float(lr):g}" != lrs[0]):
+            bad(d, f"name has {lrs[0]} but config learning_rate={lr}")
         # copsel: present iff early stopping followed the held-out copula loss
         if ("copsel" in variants) != (c.get("select_on") == "copula"):
             bad(d, f"copsel tag {'present' if 'copsel' in variants else 'absent'} but config select_on={c.get('select_on')}")
