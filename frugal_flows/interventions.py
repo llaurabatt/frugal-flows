@@ -48,10 +48,18 @@ def sample_clamped(key, flow, n, condition=None, clamp=BASE_CLAMP):
     base draws) except that base coordinates on the support boundary are moved inward
     by ``clamp`` times the support width. Returns ``(samples, n_clamped)`` where
     ``n_clamped`` counts the base coordinates that were moved (0 for almost every call).
-    Only for a flow whose base distribution is a Uniform.
+
+    Only a flow whose base distribution is a Uniform (flowjax's ``Uniform`` or, after
+    ``merge_transforms``, its ``_StandardUniform`` on [0, 1)) has a boundary to clamp at.
+    Any other flow, including one without a ``base_dist`` (a test double, a Normal-based
+    flow), is sampled with its own ``sample`` and ``n_clamped`` is 0.
     """
     flow = unwrap(flow)
-    base = unwrap(flow.base_dist)
+    base = getattr(flow, "base_dist", None)
+    base = unwrap(base) if base is not None else None
+    if base is None or type(base).__name__ not in ("Uniform", "_StandardUniform"):
+        y = flow.sample(key, condition=condition) if condition is not None else flow.sample(key, (n,))
+        return y, 0
     # after merge_transforms the base is flowjax's _StandardUniform on [0, 1) (its affine
     # to [-1, 1] has become the first block of the chain); a plain Uniform keeps its bounds
     lo, hi = jnp.asarray(getattr(base, "minval", 0.0)), jnp.asarray(getattr(base, "maxval", 1.0))
