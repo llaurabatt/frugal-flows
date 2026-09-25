@@ -122,6 +122,9 @@ def main():
             bad(d, f"config seed_assign={c['seed_assign']} but name has no sa tag")
         if sa and (c.get("seed_assign") is None or f"sa{c['seed_assign']}" != sa[0]):
             bad(d, f"name has {sa[0]} but config seed_assign={c.get('seed_assign')}")
+        # copsel: present iff early stopping followed the held-out copula loss
+        if ("copsel" in variants) != (c.get("select_on") == "copula"):
+            bad(d, f"copsel tag {'present' if 'copsel' in variants else 'absent'} but config select_on={c.get('select_on')}")
         if ("rct" in variants) != (c.get("ps_slope") == 0 and nm["preset"] != "e1"):
             bad(d, f"rct tag {'present' if 'rct' in variants else 'absent'} but config ps_slope={c.get('ps_slope')}")
         # 4. metrics.json

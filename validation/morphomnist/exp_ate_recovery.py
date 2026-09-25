@@ -1552,6 +1552,10 @@ def variant_tag(cfg: Config) -> str:
         var.append(f"effect{cfg.base_shift:g}")
     if cfg.seed_assign is not None:
         var.append(f"sa{cfg.seed_assign}")
+    # training settings that change the fit, named like the earlier copula tags (copw, coplam):
+    # copsel = early stopping and the kept epoch follow the held-out copula loss
+    if getattr(cfg, "select_on", "joint") == "copula":
+        var.append("copsel")
     return "_".join(var)
 
 
@@ -1890,7 +1894,9 @@ def _run_one_inner(cfg: Config, run_id: str, run_dir: str, wb) -> dict:
 CELL_IDENTITY = ("preset", "arm", "model", "conditioner", "size", "radius", "digit", "n",
                  "seed_data", "seed_fit", "nn_width", "nn_depth", "flow_layers",
                  "copula_nn_width", "copula_nn_depth", "copula_flow_layers",
-                 "copula_rqs_knots", "max_epochs", "n_mc")
+                 "copula_rqs_knots", "max_epochs", "n_mc",
+                 # a copula-stopped fit is not the joint-stopped fit of the same cell
+                 "select_on", "seed_assign", "base_shift")
 
 
 def completed_cells(runs_root: str = RUNS_ROOT) -> set[tuple]:
