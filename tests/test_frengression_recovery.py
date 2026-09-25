@@ -329,9 +329,13 @@ def test_score_parity_with_baselines(cfg, data, fitted, inputs, monkeypatch):
     calls = []
     real = baselines.score
 
-    def spy(tau_hat, d):
+    # baselines.score takes the disc / ring / far masks since 2026-09-18
+    from exp_ate_recovery import region_masks
+    masks = region_masks(cfg.size, cfg.effective_radius)
+
+    def spy(tau_hat, d, m):
         calls.append(tau_hat)
-        out = dict(real(tau_hat, d))
+        out = dict(real(tau_hat, d, m))
         out["ate_corr"] = -0.4242          # sentinel: cannot arise by chance
         return out
 
@@ -342,7 +346,7 @@ def test_score_parity_with_baselines(cfg, data, fitted, inputs, monkeypatch):
     assert metrics["ate_corr"] == -0.4242, "evaluate overwrote or recomputed a score key"
     monkeypatch.undo()
     _, clean, _ = fr.evaluate(cfg, y0, y1, data, losses, info, diag, {})
-    for k, v in real(tau_hat, data).items():
+    for k, v in real(tau_hat, data, masks).items():
         assert clean[k] == v
 
 
@@ -353,7 +357,8 @@ def test_metrics_contract(cfg, data, fitted, inputs):
     required = [
         "status", "method", "preset", "size", "radius", "seed_data", "seed_fit",
         "seed_mc", "device", "threads", "n_units", "n_pixels", "z_dim",
-        *baselines.score(np.zeros(cfg.size ** 2), data).keys(),
+        *baselines.score(np.zeros(cfg.size ** 2), data,
+                         __import__("exp_ate_recovery").region_masks(cfg.size, cfg.effective_radius)).keys(),
         "frac_pixels_on_support", "tau_hat_mean_on_support", "tau_hat_mean_off_support",
         "true_effect_on_support", "design_naive_bias_mae", "design_oracle_ipw_bias_maxabs",
         "design_att_minus_ate_maxabs", "ate_mae_vs_naive", "num_iters", "lr",

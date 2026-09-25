@@ -593,6 +593,7 @@ def _as_frengression_config(cfg: Config):
         digit=cfg.digit,
         n=cfg.n,
         seed_data=cfg.seed_data,
+        seed_assign=cfg.seed_assign,
         base_shift=cfg.base_shift,
         effect_mode=cfg.effect_mode,
         a_cov=cfg.a_cov,

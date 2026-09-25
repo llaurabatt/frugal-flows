@@ -271,12 +271,68 @@ def baseline_rows_for(d: str) -> list:
     return rows
 
 
+FRENGRESSION_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs", "frengression")
+
+
+def frengression_rows_for(d: str) -> list:
+    """One row for an exp_frengression_recovery.py run folder, in the baselines index with
+    method ``frengression``, so it joins the flow runs and the other baselines on
+    dataset_id. Only folders that record dataset_id (made from 2026-09-25) and finished
+    with status ok; anything else returns no row."""
+    cj = json.load(open(f"{d}/config.json"))
+    if not os.path.exists(f"{d}/metrics.json") or not cj.get("dataset_id"):
+        return []
+    m = json.load(open(f"{d}/metrics.json"))
+    if m.get("status") != "ok":
+        return []
+    c = cj["config"]
+    base = os.path.basename(d.rstrip("/"))
+    a = np.load(f"{d}/arrays.npz")
+    size = int(c["size"])
+    radius = cj.get("effective_radius") or max(1, round(size / 4))
+    disc, ring, far = regions(size, radius)
+    row = {
+        "run_id": base, "uid": cj.get("uid", base[-6:]), "stamp": base[:20], "method": "frengression", "basis": "",
+        "dataset_id": cj["dataset_id"], "data_hash": cj["data_hash"], "z_hash": cj.get("z_hash", ""),
+        "model": "baseline_frengression",
+        "preset": PRESET_TAG.get(c["preset"], c["preset"]), "preset_full": c["preset"],
+        "variant": (re.search(r"^frengression_e\d_(.*?)_k\d+_s\d+_", base[21:]) or [None, ""])[1],
+        "digit": "" if c.get("digit") is None else c["digit"],
+        "n": m.get("n_units"), "seed_data": c["seed_data"], "seed_fit": c["seed_fit"],
+        "seed_assign": c.get("seed_assign") if c.get("seed_assign") is not None else "",
+        "size": size, "K": size * size, "radius": radius, "base_shift": c.get("base_shift"),
+        "true_effect_disc": _f(a["ATE"][disc].mean()),
+        "n_disc": int(disc.sum()), "n_ring": int(ring.sum()), "n_far": int(far.sum()),
+        **{k: _f(m.get(k)) for k in ("mae_all", "rmse_all", "signed_disc", "signed_ring", "signed_far",
+                                      "mae_disc", "mae_ring", "mae_far", "ate_mae_on_support",
+                                      "ate_mae_off_support", "ate_corr", "att_mae", "atc_mae")},
+        "nonfinite_pixels": int((~np.isfinite(a["tau_hat"])).sum()),
+        "seconds": _f(m.get("total_s")),
+        "mc_frac_dropped": _f(m.get("mc_frac_dropped")),
+        "num_iters": c.get("num_iters"),
+    }
+    return [row]
+
+
 def rebuild_baselines() -> int:
     rows = []
     for d in sorted(glob.glob(f"{BASELINES_ROOT}/2*/")):
         rows += baseline_rows_for(d.rstrip("/"))
+    for d in sorted(glob.glob(f"{FRENGRESSION_ROOT}/2*/")):
+        rows += frengression_rows_for(d.rstrip("/"))
     _write_index(rows, BASELINES_INDEX)
     return len(rows)
+
+
+def upsert_frengression(run_dir: str) -> str:
+    new = frengression_rows_for(run_dir)
+    if not new:
+        return ""
+    uid = new[0]["uid"]
+    rows = [r for r in _read_index(BASELINES_INDEX) if r.get("uid") != uid] + new
+    rows.sort(key=lambda r: (r["run_id"], r["method"]))
+    _write_index(rows, BASELINES_INDEX)
+    return new[0]["run_id"]
 
 
 def upsert_baselines(run_dir: str) -> str:

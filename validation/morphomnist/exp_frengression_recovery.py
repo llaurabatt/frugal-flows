@@ -141,6 +141,9 @@ class Config:
     digit: int | None = 0
     n: int | None = None
     seed_data: int = 0
+    # None: the assignment is drawn from seed_data's stream (the generator's default);
+    # an int re-draws only the assignment from its own stream, as exp_ate_recovery does
+    seed_assign: int | None = None
     # ---- generator overrides; None keeps the preset's own value ----
     base_shift: float | None = None
     effect_mode: str | None = None
@@ -189,7 +192,7 @@ class Config:
     # ---- experiment tracking (off by default; local archives are authoritative) ----
     wandb: bool = False
     wandb_entity: str | None = None
-    wandb_project: str = "morphomnist-ate"
+    wandb_project: str = "Frugal Images"   # where every run of this project lives (proj-lb)
     wandb_group: str | None = None
     wandb_tags: str | None = None
 
@@ -257,8 +260,12 @@ def build_data(cfg: Config) -> dict:
         "digit": cfg.digit,
         "seed": cfg.seed_data,
     }
-    if cfg.n is not None:
-        overrides["n"] = cfg.n
+    # n is passed even when None, exactly as exp_ate_recovery.build_data does: leaving it
+    # out keeps the preset's nominal n in the generator config, which gives the same bytes
+    # on a digit subset but a different dataset_id, and the index join fails
+    overrides["n"] = cfg.n
+    if cfg.seed_assign is not None:
+        overrides["seed_assign"] = cfg.seed_assign
     for name in ("base_shift", "effect_mode", "a_cov", "a_bright", "a_inter",
                  "h_shape", "g_shape", "b_quant", "ps_slope", "ps_intercept", "effect"):
         value = getattr(cfg, name)
@@ -517,6 +524,10 @@ def evaluate(cfg: Config, y0: np.ndarray, y1: np.ndarray, data: dict,
     truth = np.asarray(data["ATE"])
     support = truth != 0
     n_used = max(1, len(tau))
+    # baselines.score takes the disc / ring / far masks since 2026-09-18; the same geometry
+    # every other estimator is scored on
+    from exp_ate_recovery import region_masks
+    masks = region_masks(cfg.size, cfg.effective_radius)
 
     design = summarise(data)
     naive = None
@@ -542,7 +553,7 @@ def evaluate(cfg: Config, y0: np.ndarray, y1: np.ndarray, data: dict,
         "n_pixels": int(len(truth)),
         "z_dim": int(np.asarray(data["Z"]).shape[1]),
         # ---- recovery: the SAME function every estimator family uses ----
-        **score_effect_map(tau_hat, data),
+        **score_effect_map(tau_hat, data, masks),
         "frac_pixels_on_support": float(support.mean()),
         "tau_hat_mean_on_support": float(tau_hat[support].mean()) if support.any() else float("nan"),
         "tau_hat_mean_off_support": float(tau_hat[~support].mean()) if (~support).any() else float("nan"),
@@ -748,16 +759,37 @@ class _Tee:
         self._file.flush()
 
 
+DEFAULT_EFFECT = 1.0   # the generator's base_shift default; only a different value is named
+
+
+def wandb_name_for(cfg: Config, uid: str) -> str:
+    """``frengression_<preset>_[<variant>_]k<K>_s<seed_fit>_d<digit>_<uid>``, the same
+    fields in the same order as exp_ate_recovery.wandb_name_for (model = frengression, no
+    arm). The variant names the data: ``effect<size>`` when the effect is not the default
+    1.0 (``effect0`` = none), ``sa<k>`` when the assignment was re-drawn."""
+    var = []
+    if cfg.base_shift is not None and cfg.base_shift != DEFAULT_EFFECT:
+        var.append(f"effect{cfg.base_shift:g}")
+    if cfg.seed_assign is not None:
+        var.append(f"sa{cfg.seed_assign}")
+    v = "_".join(var)
+    digit = "d0-9" if cfg.digit is None else f"d{cfg.digit}"
+    return (f"frengression_{PRESET_SHORT[cfg.preset][:2]}{'_' + v if v else ''}"
+            f"_k{cfg.size ** 2}_s{cfg.seed_fit}_{digit}_{uid}")
+
+
 def run_id_for(cfg: Config) -> str:
+    """The run folder's name: the launch timestamp (UTC) in front of the wandb name."""
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
-    return (f"{stamp}_{PRESET_SHORT[cfg.preset]}_freng"
-            f"_s{cfg.seed_fit}_k{cfg.size ** 2}_{secrets.token_hex(3)}")
+    return f"{stamp}_{wandb_name_for(cfg, secrets.token_hex(3))}"
 
 
 def write_config(cfg: Config, run_id: str, run_dir: str, overwrite: bool = False):
     os.makedirs(run_dir, exist_ok=overwrite)
     record = {
-        "run_id": run_id, "config": asdict(cfg), "effective_radius": cfg.effective_radius,
+        "run_id": run_id, "wandb_name": run_id.split("_", 1)[1] if run_id[:2] == "20" else run_id,
+        "uid": run_id[-6:],
+        "config": asdict(cfg), "effective_radius": cfg.effective_radius,
         "git": _git_info(), "versions": _versions(),
         "started_utc": datetime.now(timezone.utc).isoformat(),
     }
@@ -908,7 +940,7 @@ def _wandb_start(cfg: Config, run_id: str):
         project=cfg.wandb_project,
         group=cfg.wandb_group or cfg.preset,
         job_type="frengression",
-        name=run_id,
+        name=run_id.split("_", 1)[1] if run_id[:2] == "20" else run_id,   # without the stamp
         tags=[cfg.preset, "frengression", f"k{cfg.size ** 2}"] + extra,
         config={
             **asdict(cfg),
@@ -981,6 +1013,13 @@ def run_one(cfg: Config, runs_root: str | None = None, run_dir: str | None = Non
     write_config(cfg, run_id, run_dir, overwrite=overwrite)
     print(f"run dir: {run_dir}")
     wb, owned = _wandb_start(cfg, run_id)
+    # the folder-to-wandb link, written even when wandb is off (same layout as exp_ate_recovery)
+    with open(os.path.join(run_dir, "wandb.json"), "w", encoding="utf-8") as f:
+        if wb is not None:
+            json.dump({"id": wb.id, "name": wb.name, "group": wb.group, "url": wb.url}, f, indent=2)
+        else:
+            json.dump({"id": None, "name": run_id.split("_", 1)[1] if run_id[:2] == "20" else run_id,
+                       "note": "not logged to wandb"}, f, indent=2)
 
     try:
         return _run_one_inner(cfg, run_id, run_dir, plots, wb)
@@ -1001,6 +1040,16 @@ def _run_one_inner(cfg: Config, run_id: str, run_dir: str, plots: bool, wb) -> d
             t0 = time.monotonic()
             data = build_data(cfg)
             timings["build_data_s"] = time.monotonic() - t0
+            # the dataset fingerprints, next to the config and in the metrics, so this run
+            # joins the baselines and flow runs on the same data (run_index, dataset_id)
+            ident = {k: data.get(k) for k in ("dataset_id", "data_hash", "z_hash")}
+            print(f"dataset_id {ident['dataset_id']} data_hash {ident['data_hash']} z_hash {ident['z_hash']}")
+            cpath = os.path.join(run_dir, "config.json")
+            with open(cpath, encoding="utf-8") as f:
+                record = json.load(f)
+            record.update(ident)
+            with open(cpath, "w", encoding="utf-8") as f:
+                json.dump(record, f, indent=2)
             guard = OracleGuard(data)
             inputs = prepare_inputs(guard, cfg)
             print(f"data: {inputs.n} units x {inputs.K} pixels (size={cfg.size}, "
@@ -1035,6 +1084,8 @@ def _run_one_inner(cfg: Config, run_id: str, run_dir: str, plots: bool, wb) -> d
             timings["eval_s"] = time.monotonic() - t0
             metrics["eval_s"] = float(timings["eval_s"])
             metrics["wall_time_s"] = float(time.monotonic() - t_start)
+            metrics.update(ident)
+            metrics["seed_assign"] = cfg.seed_assign
             save_run(cfg, data, losses, tau_hat, metrics, extras, run_dir, plots=plots)
             metrics["total_s"] = float(time.monotonic() - t_start)
             metrics = {"run_id": run_id, **metrics}
