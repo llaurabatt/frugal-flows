@@ -1560,6 +1560,9 @@ def variant_tag(cfg: Config) -> str:
     # learning rate, when not the default 1e-2: lr0.001
     if cfg.learning_rate != DEFAULT_LR:
         var.append(f"lr{cfg.learning_rate:g}")
+    # copula hidden width, when not the default 50 (check_runs has always expected this tag)
+    if cfg.copula_nn_width != 50:
+        var.append(f"copw{cfg.copula_nn_width}")
     return "_".join(var)
 
 
