@@ -16,8 +16,10 @@ from flowjax.bijections.utils import Identity
 from flowjax.masks import rank_based_mask
 from flowjax.utils import get_ravelled_pytree_constructor
 from jax import Array
-from paramax import NonTrainable, Parameterize
 from jaxtyping import Array, Int
+from paramax import NonTrainable, Parameterize
+
+from frugal_flows.bijections.ranks import autoregressive_hidden_ranks
 
 
 class MaskedAutoregressiveHeterogeneous(AbstractBijection):
@@ -105,7 +107,9 @@ class MaskedAutoregressiveHeterogeneous(AbstractBijection):
                     )
                 )
 
-        hidden_ranks = jnp.arange(nn_width) % dim
+        # every rank 0..dim-2 at any width (see frugal_flows.bijections.ranks); was
+        # arange(nn_width) % dim, which left inputs >= nn_width unread when nn_width < dim
+        hidden_ranks = autoregressive_hidden_ranks(nn_width, dim)
         out_ranks = jnp.repeat(jnp.arange(dim), num_params)
 
         self.masked_autoregressive_mlp = masked_autoregressive_mlp_heterogeneous(

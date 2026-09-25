@@ -478,6 +478,11 @@ def table4(R):
         ("Margin flow layers", fmt(R["flow_layers"])),
         ("Margin spline knots", fmt(R["knots"])),
     ]
+    rule = R["record"].get("hidden_ranks_rule") or (R.get("metrics") or {}).get("hidden_ranks_rule") or "legacy"
+    rows.append(("Hidden-unit numbering", {
+        "spread": "spread: every copula output reads all outcome ranks (from 2026-09-25)",
+        "legacy": "legacy: the copula ignored outcome ranks at or above its hidden width (before 2026-09-25)",
+    }.get(rule, rule)))
     if R["has_copula"]:
         note = R["cop_note"]
         rows += [

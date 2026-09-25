@@ -83,6 +83,9 @@ def row_for(d: str) -> dict:
         "nn_width": R["nn_width"], "nn_depth": R["nn_depth"], "flow_layers": R["flow_layers"],
         "rqs_knots": R["knots"], "nn_heads": R["heads"] if R["conditioner"] == "transformer" else "",
         "copula": R["has_copula"],
+        # "spread" from 2026-09-25; "legacy" before, when the copula ignored outcome ranks
+        # >= its hidden width (frugal_flows/bijections/ranks.py)
+        "hidden_ranks_rule": R["record"].get("hidden_ranks_rule") or R["metrics"].get("hidden_ranks_rule", "legacy"),
         "copula_nn_width": R["cop_width"] if R["has_copula"] else "",
         "copula_nn_depth": R["cop_depth"] if R["has_copula"] else "",
         "copula_flow_layers": R["cop_layers"] if R["has_copula"] else "",
@@ -356,8 +359,11 @@ def compare(where: str | None = None, columns=("mae_all", "signed_disc", "signed
     # fits on the same dataset apart, e.g. ff_loctrans_s101, ff_flexcont_coplam4_s101
     var = ff["variant"].fillna("").astype(str)
     trf = np.where(ff["conditioner"].fillna("") == "transformer", "-trf", "")
+    # the rank-rule refits (2026-09-25) share variant and seed with the grid cell they redo
+    rule = ff["hidden_ranks_rule"].fillna("legacy") if "hidden_ranks_rule" in ff else pd.Series("legacy", index=ff.index)
     ff = ff.assign(method=ff["model"] + "_" + ff["arm"] + trf
-                   + np.where(var != "", "_" + var, "") + "_s" + ff["seed_fit"].astype(str))
+                   + np.where(var != "", "_" + var, "") + "_s" + ff["seed_fit"].astype(str)
+                   + np.where(rule == "spread", "_spread", ""))
     both = pd.concat([ff, bl], ignore_index=True, sort=False)
     both = both[both["dataset_id"].notna()]
     if where:

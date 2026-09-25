@@ -16,8 +16,10 @@ from flowjax.bijections.utils import Identity
 from flowjax.masks import rank_based_mask
 from flowjax.utils import get_ravelled_pytree_constructor
 from jax import Array
-from paramax import NonTrainable, Parameterize
 from jaxtyping import Array, Int
+from paramax import NonTrainable, Parameterize
+
+from frugal_flows.bijections.ranks import autoregressive_hidden_ranks
 
 
 class MaskedAutoregressiveFirstUniform(AbstractBijection):
@@ -51,6 +53,16 @@ class MaskedAutoregressiveFirstUniform(AbstractBijection):
         nn_width: Neural network width.
         nn_depth: Neural network depth.
         nn_activation: Neural network activation. Defaults to jnn.relu.
+
+    Hidden-unit ranks. A hidden unit of rank r reads inputs of rank <= r and feeds outputs
+    of rank > r. The ranks cycle over ``cond_u_y_dim - 1 .. dim - 2``: those are the only
+    ranks that feed a transformed coordinate (the outputs for the first ``cond_u_y_dim``
+    fixed coordinates are discarded in ``_flat_params_to_transformer``), and every such
+    unit reads all the fixed coordinates. So each transformed coordinate can depend on
+    every earlier coordinate at any width. Until 2026-09-25 the ranks were
+    ``arange(nn_width) % dim``, which, when ``nn_width < dim``, gave no hidden unit a rank
+    of ``nn_width`` or more: with 64 fixed outcome ranks and width 50 the covariate
+    outputs could not depend on outcome ranks 50-63 at all (and at 16x16, on 206 of 256).
     """
 
     shape: tuple[int, ...]
@@ -109,12 +121,12 @@ class MaskedAutoregressiveFirstUniform(AbstractBijection):
                     )
                 )
 
-        hidden_ranks = jnp.arange(nn_width) % dim
+        h_ranks = autoregressive_hidden_ranks(nn_width, dim, lo=max(cond_u_y_dim - 1, 0))
         out_ranks = jnp.repeat(jnp.arange(dim), num_params)
 
         self.masked_autoregressive_mlp = masked_autoregressive_mlp(
             in_ranks,
-            hidden_ranks,
+            h_ranks,
             out_ranks,
             depth=nn_depth,
             activation=nn_activation,

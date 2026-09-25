@@ -1140,6 +1140,10 @@ def evaluate(cfg: Config, flow, data: dict, losses: dict, wall_time_s: float,
         "data_hash": data.get("data_hash"),
         "z_hash": data.get("z_hash"),
         "conditioner": cfg.conditioner if cfg.arm == "flexible_continuous" else "n/a",
+        # which hidden-rank rule the package's autoregressive layers used: "spread" from
+        # 2026-09-25 (frugal_flows.bijections.ranks); runs without this key used "legacy"
+        # (arange(width) % dim), under which the copula ignored outcome ranks >= its width
+        "hidden_ranks_rule": HIDDEN_RANKS_RULE,
         # recovery against the primary estimand
         "ate_mae": float(np.abs(err).mean()),
         "ate_rmse": float(np.sqrt((err**2).mean())),
@@ -1531,6 +1535,12 @@ def digit_tag(cfg: Config) -> str:
 
 DEFAULT_EFFECT = 1.0   # the generator's base_shift default; only a different value is named
 
+# How the package's masked autoregressive layers number their hidden units
+# (frugal_flows/bijections/ranks.py). "spread" from 2026-09-25; runs before used "legacy"
+# (arange(width) % dim), under which the copula ignored outcome ranks >= its hidden width.
+# Written into config.json, metrics.json and the wandb config of every run.
+HIDDEN_RANKS_RULE = "spread"
+
 
 def variant_tag(cfg: Config) -> str:
     """What differs from the plain fit, as it appears in the run name. Data settings only:
@@ -1583,6 +1593,9 @@ def write_config(cfg: Config, run_id: str, run_dir: str):
         "uid": run_id[-6:],
         "config": asdict(cfg),
         "effective_radius": cfg.effective_radius,
+        # not a knob but it changes the fit: the package's hidden-rank rule (see
+        # HIDDEN_RANKS_RULE); runs whose config lacks it used "legacy"
+        "hidden_ranks_rule": HIDDEN_RANKS_RULE,
         "git": _git_info(),
         "versions": {
             "jax": jax.__version__,
@@ -1693,7 +1706,7 @@ def _wandb_start(cfg: Config, run_id: str):
         job_type=f"{ARM_SHORT[cfg.arm]}/{cond}",
         name=wandb_name_of(run_id),
         tags=[cfg.preset, ARM_SHORT[cfg.arm], cond, f"k{cfg.size**2}"] + extra,
-        config={**asdict(cfg),
+        config={**asdict(cfg), "hidden_ranks_rule": HIDDEN_RANKS_RULE,
                 "effective_radius": cfg.effective_radius,
                 "n_pixels": cfg.size**2,
                 **{f"git_{k}": v for k, v in _git_info().items()}},
