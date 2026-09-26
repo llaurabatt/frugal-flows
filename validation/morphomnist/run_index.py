@@ -363,7 +363,7 @@ def compare(where: str | None = None, columns=("mae_all", "signed_disc", "signed
     rule = ff["hidden_ranks_rule"].fillna("legacy") if "hidden_ranks_rule" in ff else pd.Series("legacy", index=ff.index)
     ff = ff.assign(method=ff["model"] + "_" + ff["arm"] + trf
                    + np.where(var != "", "_" + var, "") + "_s" + ff["seed_fit"].astype(str)
-                   + np.where(rule == "spread", "_spread", ""))
+                   + np.where(rule == "spread", "_spread", np.where(rule == "spread_all", "_spreadall", "")))
     both = pd.concat([ff, bl], ignore_index=True, sort=False)
     both = both[both["dataset_id"].notna()]
     if where:

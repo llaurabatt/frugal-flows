@@ -21,16 +21,20 @@ import jax.numpy as jnp
 def autoregressive_hidden_ranks(nn_width: int, dim: int, lo: int = 0):
     """Ranks for ``nn_width`` hidden units covering ``lo .. dim - 2``.
 
-    ``lo`` is the lowest rank worth assigning: the first output that is actually used
-    is ``lo + 1`` (for a layer whose first ``c`` coordinates are held fixed, ``lo = c - 1``).
+    ``lo`` is the lowest rank worth assigning, ``lo = (first output that is used) - 1``:
+    ``-1`` for a layer with an unmasked condition (conditioning inputs have rank -1, and
+    output 0 can only depend on them through units of rank -1, as in flowjax's own
+    conditional layer); ``0`` for an unconditional or fully masked-condition layer; and
+    ``c - 1`` for a layer whose first ``c`` coordinates are held fixed and discarded.
     With at least as many units as ranks, the ranks cycle (``lo, lo+1, ..., dim-2, lo,
-    ...``). With fewer units they are spread evenly and always include ``dim - 2``, so
-    every input still reaches the last output, and every used output can use all inputs
-    up to the highest rank below it.
+    ...``); with ``nn_width >= dim`` and ``lo = -1`` that is exactly flowjax's conditional
+    rule, and with ``lo = 0`` its unconditional rule. With fewer units the ranks are spread
+    evenly and always include ``lo`` and ``dim - 2``, so every input still reaches the last
+    output and every used output can use all inputs up to the highest rank below it.
     """
     hi = dim - 2
-    if dim < 2 or hi < lo:
-        return jnp.zeros(nn_width, dtype=jnp.int32) + max(lo, 0)
+    if hi < lo:                      # dim 1 without condition: no output depends on inputs
+        return jnp.full(nn_width, lo, dtype=jnp.int32)
     n = hi - lo + 1
     if nn_width >= n:
         return lo + jnp.arange(nn_width) % n

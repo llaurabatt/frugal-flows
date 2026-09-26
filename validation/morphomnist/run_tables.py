@@ -480,7 +480,8 @@ def table4(R):
     ]
     rule = R["record"].get("hidden_ranks_rule") or (R.get("metrics") or {}).get("hidden_ranks_rule") or "legacy"
     rows.append(("Hidden-unit numbering", {
-        "spread": "spread: every copula output reads all outcome ranks (from 2026-09-25)",
+        "spread_all": "spread_all: every layer, copula and outcome margin, reaches all inputs (from 2026-09-26)",
+        "spread": "spread: the copula reads all outcome ranks; the margin is flowjax's layer (2026-09-25)",
         "legacy": "legacy: the copula ignored outcome ranks at or above its hidden width (before 2026-09-25)",
     }.get(rule, rule)))
     if R["has_copula"]:

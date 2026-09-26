@@ -101,7 +101,8 @@ class MaskedAutoregressiveMaskedCond(AbstractBijection):
 
         # every rank 0..dim-2 at any width (see frugal_flows.bijections.ranks); was
         # arange(nn_width) % dim, which left inputs >= nn_width unread when nn_width < dim
-        hidden_ranks = autoregressive_hidden_ranks(nn_width, dim)
+        # rank -1 units carry the unmasked condition to output 0 (as flowjax's layer does)
+        hidden_ranks = autoregressive_hidden_ranks(nn_width, dim, lo=-1 if cond_dim_nomask else 0)
         out_ranks = jnp.repeat(jnp.arange(dim), num_params)
 
         self.masked_autoregressive_mlp = masked_autoregressive_mlp(

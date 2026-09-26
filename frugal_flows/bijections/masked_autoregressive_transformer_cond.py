@@ -14,6 +14,8 @@ from flowjax.utils import get_ravelled_pytree_constructor
 from jax import Array
 from paramax import NonTrainable
 
+from frugal_flows.bijections.ranks import autoregressive_hidden_ranks
+
 
 class MaskedAutoregressiveTransformerCond(AbstractBijection):
     """Masked autoregressive bijection with a conditional transformer.
@@ -74,7 +76,9 @@ class MaskedAutoregressiveTransformerCond(AbstractBijection):
             # we give conditioning variables rank -1 (no masking of edges to output)
             in_ranks = jnp.hstack((jnp.arange(dim), -jnp.ones(cond_dim)))
 
-        hidden_ranks = jnp.arange(nn_width) % dim
+        # every rank at any width (frugal_flows.bijections.ranks); rank -1 units carry the
+        # condition to output 0. Was arange(nn_width) % dim: inputs >= nn_width unread.
+        hidden_ranks = autoregressive_hidden_ranks(nn_width, dim, lo=-1 if cond_dim else 0)
         out_ranks = jnp.repeat(jnp.arange(dim), num_params)
 
         self.masked_autoregressive_mlp = masked_autoregressive_mlp(

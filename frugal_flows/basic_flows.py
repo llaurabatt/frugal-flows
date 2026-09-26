@@ -11,7 +11,6 @@ from flowjax.bijections import (
     Affine,
     Chain,
     Invert,
-    MaskedAutoregressive,
     Permute,
     RationalQuadraticSpline,
     Scan,
@@ -30,6 +29,9 @@ from frugal_flows.bijections import (
     MaskedAutoregressiveMaskedCond,
     MaskedAutoregressiveTransformerCond,
     MaskedIndependent,
+)
+from frugal_flows.bijections.masked_autoregressive_spread import (
+    MaskedAutoregressiveSpread,
 )
 
 
@@ -555,7 +557,8 @@ def masked_autoregressive_bijection(
 
     def make_layer(key):  # masked autoregressive layer + permutation
         bij_key, perm_key = jr.split(key)
-        bijection = MaskedAutoregressive(
+        # flowjax's layer with hidden ranks that reach every input (bijections/ranks.py)
+        bijection = MaskedAutoregressiveSpread(
             key=bij_key,
             transformer=transformer,
             dim=dim,

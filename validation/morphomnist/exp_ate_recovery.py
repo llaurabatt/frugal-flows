@@ -360,7 +360,6 @@ import jax.random as jr
 import paramax
 from flowjax.bijections import (
     Invert,
-    MaskedAutoregressive,
     RationalQuadraticSpline,
     Scan,
     Stack,
@@ -368,6 +367,9 @@ from flowjax.bijections import (
 )
 from flowjax.distributions import Transformed, Uniform
 from flowjax.flows import _add_default_permute
+from frugal_flows.bijections.masked_autoregressive_spread import (
+    MaskedAutoregressiveSpread,
+)
 from frugal_flows.causal_flows import (
     _build_flexible_margin,
     get_independent_quantiles,
@@ -641,7 +643,7 @@ def _uncond_margin_bijection(key, dim, RQS_knots, nn_depth, nn_width, flow_layer
 
     def make_layer(k):
         bk, pk = jr.split(k)
-        b = MaskedAutoregressive(key=bk, transformer=transformer, dim=dim, cond_dim=None,
+        b = MaskedAutoregressiveSpread(key=bk, transformer=transformer, dim=dim, cond_dim=None,
                                  nn_width=nn_width, nn_depth=nn_depth)
         return _add_default_permute(b, dim, pk)
 
@@ -1536,11 +1538,16 @@ def digit_tag(cfg: Config) -> str:
 DEFAULT_EFFECT = 1.0   # the generator's base_shift default; only a different value is named
 DEFAULT_LR = 1e-2      # Config.learning_rate's default; only a different value is named
 
-# How the package's masked autoregressive layers number their hidden units
-# (frugal_flows/bijections/ranks.py). "spread" from 2026-09-25; runs before used "legacy"
-# (arange(width) % dim), under which the copula ignored outcome ranks >= its hidden width.
-# Written into config.json, metrics.json and the wandb config of every run.
-HIDDEN_RANKS_RULE = "spread"
+# How the masked autoregressive layers number their hidden units
+# (frugal_flows/bijections/ranks.py). Written into config.json, metrics.json and the wandb
+# config of every run; the index shows "legacy" for runs that do not record it.
+#   legacy      before 2026-09-25: arange(width) % dim everywhere; the copula ignored
+#               outcome ranks >= its hidden width
+#   spread      2026-09-25: the package's copula layer fixed; the outcome margin still
+#               flowjax's MaskedAutoregressive (each layer misses links when width < 64)
+#   spread_all  from 2026-09-26: the outcome margin too (MaskedAutoregressiveSpread), and
+#               rank -1 units restored for layers with an unmasked condition
+HIDDEN_RANKS_RULE = "spread_all"
 
 
 def variant_tag(cfg: Config) -> str:
