@@ -1563,6 +1563,11 @@ def variant_tag(cfg: Config) -> str:
     # copula hidden width, when not the default 50 (check_runs has always expected this tag)
     if cfg.copula_nn_width != 50:
         var.append(f"copw{cfg.copula_nn_width}")
+    # outcome margin's hidden width and spline knots, when not the defaults 48 and 8
+    if cfg.nn_width != 48:
+        var.append(f"mw{cfg.nn_width}")
+    if cfg.rqs_knots != 8:
+        var.append(f"mkn{cfg.rqs_knots}")
     return "_".join(var)
 
 

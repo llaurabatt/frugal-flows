@@ -132,6 +132,17 @@ def main():
             bad(d, f"config learning_rate={lr} but name has no lr{float(lr):g} tag")
         if lrs and (lr is None or f"lr{float(lr):g}" != lrs[0]):
             bad(d, f"name has {lrs[0]} but config learning_rate={lr}")
+        # mw<width> / mkn<knots>: the outcome margin's hidden width and spline knots when not
+        # the defaults 48 / 8 (tags exist from 2026-09-26; checked for runs recording
+        # hidden_ranks_rule, i.e. made from 2026-09-25)
+        if cj.get("hidden_ranks_rule"):
+            for tag, key, default in (("mw", "nn_width", 48), ("mkn", "rqs_knots", 8)):
+                val = c.get(key)
+                have = [v for v in variants if re.fullmatch(rf"{tag}\d+", v)]
+                if val is not None and int(val) != default and f"{tag}{int(val)}" not in variants:
+                    bad(d, f"config {key}={val} but name has no {tag}{int(val)} tag")
+                if have and (val is None or f"{tag}{int(val)}" != have[0]):
+                    bad(d, f"name has {have[0]} but config {key}={val}")
         # copsel: present iff early stopping followed the held-out copula loss
         if ("copsel" in variants) != (c.get("select_on") == "copula"):
             bad(d, f"copsel tag {'present' if 'copsel' in variants else 'absent'} but config select_on={c.get('select_on')}")
