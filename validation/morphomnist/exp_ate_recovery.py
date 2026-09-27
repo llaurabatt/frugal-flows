@@ -778,6 +778,10 @@ def _fit_kwargs(cfg: Config, data: dict) -> dict:
         truth = np.asarray(data["ATE"])
         masks = region_masks(cfg.size, cfg.effective_radius)
         cond_dim = int(np.asarray(data["X"]).shape[1])
+        # the dataset's confounding map (naive difference minus truth): the slope of the
+        # estimate's error on it is the share of the confounding still in the estimate
+        _t = np.asarray(data["X"])[:, 0].astype(bool)
+        imbalance = np.asarray(data["Y"])[_t].mean(0) - np.asarray(data["Y"])[~_t].mean(0) - truth
 
         def on_epoch(epoch, params, static):
             if epoch % cfg.track_every:
@@ -791,6 +795,7 @@ def _fit_kwargs(cfg: Config, data: dict) -> dict:
                 return {"ate_mae": float("nan"), "n_used": 0}
             err = (y1[keep] - y0[keep]).mean(0) - truth
             return {"ate_mae": float(np.abs(err).mean()), "n_used": int(keep.sum()),
+                    "slope": float(np.polyfit(imbalance, err, 1)[0]),
                     **{f"signed_{n}": float(err[m].mean()) for n, m in zip(("disc", "ring", "far"), masks)}}
         kw["on_epoch"] = on_epoch
     return kw
@@ -1601,6 +1606,12 @@ def variant_tag(cfg: Config) -> str:
         var.append(f"mw{cfg.nn_width}")
     if cfg.rqs_knots != 8:
         var.append(f"mkn{cfg.rqs_knots}")
+    # stopping: epoch cap when not 1000, early-stopping patience when not 30 (from 2026-09-27;
+    # every run with the fixed layers before then used 1000 / 30)
+    if cfg.max_epochs != 1000:
+        var.append(f"ep{cfg.max_epochs}")
+    if cfg.max_patience != 30:
+        var.append(f"pat{cfg.max_patience}")
     return "_".join(var)
 
 
@@ -1942,7 +1953,7 @@ CELL_IDENTITY = ("preset", "arm", "model", "conditioner", "size", "radius", "dig
                  "copula_rqs_knots", "max_epochs", "n_mc",
                  # a copula-stopped fit is not the joint-stopped fit of the same cell
                  "select_on", "seed_assign", "base_shift", "learning_rate", "batch_size", "ema_epochs",
-                 "copula_lr_mult")
+                 "copula_lr_mult", "max_patience")
 
 
 def completed_cells(runs_root: str = RUNS_ROOT) -> set[tuple]:

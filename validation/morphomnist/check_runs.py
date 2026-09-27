@@ -137,7 +137,9 @@ def main():
         # hidden_ranks_rule, i.e. made from 2026-09-25)
         if cj.get("hidden_ranks_rule"):
             for tag, key, default in (("mw", "nn_width", 48), ("mkn", "rqs_knots", 8),
-                                      ("batch", "batch_size", 100), ("ema", "ema_epochs", 0)):
+                                      ("batch", "batch_size", 100), ("ema", "ema_epochs", 0),
+                                      # stopping tags, from 2026-09-27 (earlier runs all 1000 / 30)
+                                      ("ep", "max_epochs", 1000), ("pat", "max_patience", 30)):
                 val = c.get(key)
                 have = [v for v in variants if re.fullmatch(rf"{tag}\d+", v)]
                 if val is not None and int(val) != default and f"{tag}{int(val)}" not in variants:
