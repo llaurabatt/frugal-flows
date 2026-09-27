@@ -136,7 +136,8 @@ def main():
         # the defaults 48 / 8 (tags exist from 2026-09-26; checked for runs recording
         # hidden_ranks_rule, i.e. made from 2026-09-25)
         if cj.get("hidden_ranks_rule"):
-            for tag, key, default in (("mw", "nn_width", 48), ("mkn", "rqs_knots", 8)):
+            for tag, key, default in (("mw", "nn_width", 48), ("mkn", "rqs_knots", 8),
+                                      ("batch", "batch_size", 100), ("ema", "ema_epochs", 0)):
                 val = c.get(key)
                 have = [v for v in variants if re.fullmatch(rf"{tag}\d+", v)]
                 if val is not None and int(val) != default and f"{tag}{int(val)}" not in variants:

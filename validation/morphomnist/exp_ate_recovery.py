@@ -476,6 +476,10 @@ class Config:
                                        # the library rule) or "copula" (val copula NLL, whole val set)
     track_every: int = 0               # >0: effect read-out every N epochs (track_n_mc draws) -> metrics["track"]
     track_n_mc: int = 500
+    # running average of the weights (frugal_flows.training, ema_decay): 0 = off; N = the
+    # average spans about N epochs (per-step decay 1 - 1/(N * steps per epoch)), so the same
+    # N means the same span of training at any batch size
+    ema_epochs: int = 0
     batch_size: int = 100
     marginal_max_epochs: int = 70
     marginal_max_patience: int = 10
@@ -691,7 +695,7 @@ def _fit_margin_only(cfg: Config, data: dict, timings: dict | None = None):
     K = int(Y.shape[1])
     fit_kw = dict(learning_rate=cfg.learning_rate, max_epochs=cfg.max_epochs,
                   max_patience=cfg.max_patience, batch_size=cfg.batch_size,
-                  wall_cap_s=cfg.wall_cap_s)
+                  wall_cap_s=cfg.wall_cap_s, ema_decay=_ema_decay(cfg, int(Y.shape[0])))
     _t = time.monotonic()
     if cfg.model == "margin":
         key, bkey, fkey = jr.split(key, 3)
@@ -745,12 +749,21 @@ def _copula_ll_rows(flow, x, cond, K: int):
 _copula_ll_rows_jit = equinox.filter_jit(_copula_ll_rows)
 
 
+def _ema_decay(cfg: Config, n_rows: int) -> float | None:
+    """Per-step decay for a running average spanning ``cfg.ema_epochs`` epochs of the
+    rows the training loop trains on (90 % of ``n_rows``); None when switched off."""
+    if not cfg.ema_epochs:
+        return None
+    steps = max((n_rows - round(0.1 * n_rows)) // cfg.batch_size, 1)
+    return 1.0 - 1.0 / (cfg.ema_epochs * steps)
+
+
 def _fit_kwargs(cfg: Config, data: dict) -> dict:
     """The extras handed to ``frugal_flows.training.fit_to_data`` for the joint fit:
     wall-clock cap, the selection criterion, and the tracking hook."""
     if cfg.select_on not in ("joint", "copula"):
         raise ValueError(f"select_on must be 'joint' or 'copula', got {cfg.select_on!r}")
-    kw: dict = {"wall_cap_s": cfg.wall_cap_s}
+    kw: dict = {"wall_cap_s": cfg.wall_cap_s, "ema_decay": _ema_decay(cfg, int(np.asarray(data["Y"]).shape[0]))}
     K = int(np.asarray(data["Y"]).shape[1])
     if cfg.select_on == "copula":
         def select_fn(params, static, x_val, cond_val):
@@ -1178,6 +1191,7 @@ def evaluate(cfg: Config, flow, data: dict, losses: dict, wall_time_s: float,
         **({"termination": losses["info"]["termination"],
             "best_epoch": int(losses["info"]["best_epoch"]),
             "selected_on": losses["info"]["selected_on"],
+            "ema_decay": losses["info"].get("ema_decay") if losses["info"].get("ema_decay") is not None else float("nan"),
             "val_loss_at_best": float(losses["val"][losses["info"]["best_epoch"] - 1]) if losses["info"]["best_epoch"] else float("nan"),
             "best_select": float(np.min(losses["select"])) if "select" in losses else float("nan"),
             "n_train": int(losses["info"]["n_train"]), "n_val": int(losses["info"]["n_val"]),
@@ -1571,6 +1585,11 @@ def variant_tag(cfg: Config) -> str:
     if cfg.copula_nn_width != 50:
         var.append(f"copw{cfg.copula_nn_width}")
     # outcome margin's hidden width and spline knots, when not the defaults 48 and 8
+    # training: batch size when not 100, running weight average over N epochs when on
+    if cfg.batch_size != 100:
+        var.append(f"batch{cfg.batch_size}")
+    if getattr(cfg, "ema_epochs", 0):
+        var.append(f"ema{cfg.ema_epochs}")
     if cfg.nn_width != 48:
         var.append(f"mw{cfg.nn_width}")
     if cfg.rqs_knots != 8:
@@ -1915,7 +1934,7 @@ CELL_IDENTITY = ("preset", "arm", "model", "conditioner", "size", "radius", "dig
                  "copula_nn_width", "copula_nn_depth", "copula_flow_layers",
                  "copula_rqs_knots", "max_epochs", "n_mc",
                  # a copula-stopped fit is not the joint-stopped fit of the same cell
-                 "select_on", "seed_assign", "base_shift", "learning_rate")
+                 "select_on", "seed_assign", "base_shift", "learning_rate", "batch_size", "ema_epochs")
 
 
 def completed_cells(runs_root: str = RUNS_ROOT) -> set[tuple]:

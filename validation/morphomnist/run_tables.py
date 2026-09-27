@@ -504,6 +504,8 @@ def table4(R):
         ("Optimiser", "Adam"),
         ("Learning rate", fmt(R["lr"], nd=4) if R["lr"] else NR),
         ("Batch size", fmt(R["batch_size"]) + R["batch_note"]),
+        ("Weight averaging", (f"running average over about {R['cfg'].get('ema_epochs')} epochs, used for early "
+                              "stopping and the reported estimate") if R["cfg"].get("ema_epochs") else "off"),
         ("Precision", R["precision"] + R["precision_note"]),
         ("Objective", obj),
         ("Checkpoint selection", "lowest validation loss"),

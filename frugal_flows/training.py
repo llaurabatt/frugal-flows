@@ -15,7 +15,7 @@ On top of that it returns, inside ``losses["info"]``:
 * ``best_epoch`` (1-based), ``termination`` (``patience`` / ``epoch_cap`` / ``wall_cap``),
   ``n_epochs``, ``wall_s``;
 
-and takes three optional extras:
+and takes four optional extras:
 
 * ``wall_cap_s``: stop after the first epoch that ends past this many seconds;
 * ``select_fn(params, static, *val_arrays) -> float``: a criterion, lower is better,
@@ -24,6 +24,15 @@ and takes three optional extras:
   recorded in ``losses["val"]``); its series is returned in ``losses["select"]``;
 * ``on_epoch(epoch, params, static) -> dict | None``: called after every epoch; whatever
   it returns (a dict) is appended, with the epoch number, to ``losses["track"]``.
+* ``ema_decay``: keep an exponential moving average of the parameters, updated after every
+  optimisation step (``ema = d * ema + (1 - d) * params``, started at the initial
+  parameters). When given, the validation loss, ``select_fn``, ``on_epoch``, the choice of
+  the best epoch and the returned distribution all use the AVERAGED parameters; the
+  optimiser itself still steps the raw ones. Motivation (2026-09-27): the effect a flow
+  implies is a tiny part of its likelihood, so the raw parameters drift along directions
+  the loss barely sees, and the kept epoch inherits that drift (fit-seed control: the
+  margin's own error was entirely fit-seed noise). ``None`` (default) keeps the library's
+  behaviour bit for bit; ``0.0`` gives the raw parameters exactly.
 """
 from __future__ import annotations
 
@@ -31,6 +40,7 @@ import time
 from collections.abc import Callable, Iterable
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
@@ -64,6 +74,7 @@ def fit_to_data(
     wall_cap_s: float | None = None,
     select_fn: Callable | None = None,
     on_epoch: Callable | None = None,
+    ema_decay: float | None = None,
 ):
     """See the module docstring. Returns ``(dist, losses)`` like the library."""
     t_start = time.monotonic()
@@ -82,6 +93,12 @@ def fit_to_data(
     )
     best_params = params
     opt_state = optimizer.init(params)
+    if ema_decay is not None and not 0.0 <= ema_decay < 1.0:
+        raise ValueError(f"ema_decay must be in [0, 1), got {ema_decay}")
+    ema = params
+    ema_update = eqx.filter_jit(
+        lambda e, p: jax.tree_util.tree_map(lambda a, b: ema_decay * a + (1.0 - ema_decay) * b, e, p)
+    )
 
     # train / validation split: the library permutes each array with ``subkey``; the
     # permutation of ``arange(n)`` under the same key is the row order it used
@@ -115,28 +132,32 @@ def fit_to_data(
                 loss_fn=loss_fn, key=subkey,
             )
             batch_losses.append(loss_i)
+            if ema_decay is not None:
+                ema = ema_update(ema, params)
         losses["train"].append((sum(batch_losses) / len(batch_losses)).item())
+        # the parameters everything below is judged on: the running average when it is kept
+        eval_params = params if ema_decay is None else ema
 
         batch_losses = []
         for batch in zip(*get_batches(val_data, batch_size), strict=True):
             key, subkey = jr.split(key)
-            loss_i = eqx.filter_jit(loss_fn)(params, static, *batch, key=subkey)
+            loss_i = eqx.filter_jit(loss_fn)(eval_params, static, *batch, key=subkey)
             batch_losses.append(loss_i)
         losses["val"].append((sum(batch_losses) / len(batch_losses)).item())
 
         if select_fn is not None:
-            losses["select"].append(float(select_fn(params, static, *val_full)))
+            losses["select"].append(float(select_fn(eval_params, static, *val_full)))
             criterion = losses["select"]
         else:
             criterion = losses["val"]
         if on_epoch is not None:
-            row = on_epoch(epoch + 1, params, static)
+            row = on_epoch(epoch + 1, eval_params, static)
             if row:
                 losses["track"].append({"epoch": epoch + 1, **row})
 
         loop.set_postfix({k: v[-1] for k, v in losses.items() if k in ("train", "val", "select")})
         if criterion[-1] == min(criterion):
-            best_params = params
+            best_params = eval_params
             best_epoch = epoch + 1
         elif count_fruitless(criterion) > max_patience:
             loop.set_postfix_str(f"{loop.postfix} (Max patience reached)")
@@ -146,12 +167,13 @@ def fit_to_data(
             termination = "wall_cap"
             break
 
-    params = best_params if return_best else params
+    params = best_params if return_best else (params if ema_decay is None else ema)
     dist = eqx.combine(params, static)
     losses["info"] = {
         "train_idx": train_idx, "val_idx": val_idx, "n_train": int(n_train), "n_val": int(n - n_train),
         "best_epoch": int(best_epoch), "n_epochs": len(losses["train"]),
         "termination": termination, "wall_s": float(time.monotonic() - t_start),
         "selected_on": "select_fn" if select_fn is not None else "val_loss",
+        "ema_decay": ema_decay,
     }
     return dist, losses

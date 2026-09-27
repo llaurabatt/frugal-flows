@@ -84,6 +84,24 @@ def test_select_fn_and_hooks():
     assert [r["epoch"] for r in l["track"]] == calls == [1, 2, 3]
 
 
+def test_ema_zero_is_the_raw_loop_and_ema_changes_the_result():
+    """ema_decay=0.0 averages nothing, so it must reproduce the default loop exactly; a real
+    decay must return different parameters and record itself."""
+    x, c = _data()
+    kw = dict(learning_rate=1e-2, max_epochs=5, max_patience=2, batch_size=50, show_progress=False)
+    d0, l0 = fit_ours(jr.PRNGKey(3), _flow(jr.PRNGKey(1), 1), (x, c), **kw)
+    de, le = fit_ours(jr.PRNGKey(3), _flow(jr.PRNGKey(1), 1), (x, c), ema_decay=0.0, **kw)
+    assert l0["train"] == le["train"] and l0["val"] == le["val"]
+    for a, b in zip(_leaves(d0), _leaves(de), strict=True):
+        assert np.array_equal(a, b)
+    d9, l9 = fit_ours(jr.PRNGKey(3), _flow(jr.PRNGKey(1), 1), (x, c), ema_decay=0.9, **kw)
+    assert l9["info"]["ema_decay"] == 0.9 and l0["info"]["ema_decay"] is None
+    assert l9["train"] == l0["train"][:len(l9["train"])], "the optimiser still steps the raw parameters"
+    assert any(not np.array_equal(a, b) for a, b in zip(_leaves(d0), _leaves(d9), strict=True))
+    with pytest.raises(ValueError):
+        fit_ours(jr.PRNGKey(3), _flow(jr.PRNGKey(1), 1), (x, c), ema_decay=1.0, **kw)
+
+
 def test_wall_cap():
     x, c = _data()
     _, l = fit_ours(jr.PRNGKey(3), _flow(jr.PRNGKey(1), 1), (x, c), learning_rate=1e-2,
