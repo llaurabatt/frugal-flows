@@ -144,6 +144,13 @@ def main():
                     bad(d, f"config {key}={val} but name has no {tag}{int(val)} tag")
                 if have and (val is None or f"{tag}{int(val)}" != have[0]):
                     bad(d, f"name has {have[0]} but config {key}={val}")
+        # coplr<mult>: present iff the copula's learning-rate multiplier is not 1 (from 2026-09-27)
+        cl = [v for v in variants if re.fullmatch(r"coplr[0-9.]+", v)]
+        mult = c.get("copula_lr_mult")
+        if mult is not None and float(mult) != 1.0 and f"coplr{float(mult):g}" not in variants:
+            bad(d, f"config copula_lr_mult={mult} but name has no coplr{float(mult):g} tag")
+        if cl and (mult is None or f"coplr{float(mult):g}" != cl[0]):
+            bad(d, f"name has {cl[0]} but config copula_lr_mult={mult}")
         # copsel: present iff early stopping followed the held-out copula loss
         if ("copsel" in variants) != (c.get("select_on") == "copula"):
             bad(d, f"copsel tag {'present' if 'copsel' in variants else 'absent'} but config select_on={c.get('select_on')}")

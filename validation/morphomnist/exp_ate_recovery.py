@@ -480,6 +480,10 @@ class Config:
     # average spans about N epochs (per-step decay 1 - 1/(N * steps per epoch)), so the same
     # N means the same span of training at any batch size
     ema_epochs: int = 0
+    # the copula's learning rate = learning_rate * copula_lr_mult (flexible arm; 1.0 = one
+    # shared rate, the default optimiser). Changes how the likelihood is optimised, not what
+    # is maximised (unlike reweighting the copula term).
+    copula_lr_mult: float = 1.0
     batch_size: int = 100
     marginal_max_epochs: int = 70
     marginal_max_patience: int = 10
@@ -869,6 +873,7 @@ def fit_flow(cfg: Config, data: dict, timings: dict | None = None):
         max_patience=cfg.max_patience,
         batch_size=cfg.batch_size,
         fit_kwargs=_fit_kwargs(cfg, data) if cfg.arm == "flexible_continuous" else None,
+        copula_lr_mult=cfg.copula_lr_mult,
         causal_model_args=causal_model_args,
         # copula capacity (the dispatcher forwards these to every arm's
         # masked_autoregressive_flow_first_uniform); the margin's capacity
@@ -1590,6 +1595,8 @@ def variant_tag(cfg: Config) -> str:
         var.append(f"batch{cfg.batch_size}")
     if getattr(cfg, "ema_epochs", 0):
         var.append(f"ema{cfg.ema_epochs}")
+    if getattr(cfg, "copula_lr_mult", 1.0) != 1.0:
+        var.append(f"coplr{cfg.copula_lr_mult:g}")
     if cfg.nn_width != 48:
         var.append(f"mw{cfg.nn_width}")
     if cfg.rqs_knots != 8:
@@ -1934,7 +1941,8 @@ CELL_IDENTITY = ("preset", "arm", "model", "conditioner", "size", "radius", "dig
                  "copula_nn_width", "copula_nn_depth", "copula_flow_layers",
                  "copula_rqs_knots", "max_epochs", "n_mc",
                  # a copula-stopped fit is not the joint-stopped fit of the same cell
-                 "select_on", "seed_assign", "base_shift", "learning_rate", "batch_size", "ema_epochs")
+                 "select_on", "seed_assign", "base_shift", "learning_rate", "batch_size", "ema_epochs",
+                 "copula_lr_mult")
 
 
 def completed_cells(runs_root: str = RUNS_ROOT) -> set[tuple]:

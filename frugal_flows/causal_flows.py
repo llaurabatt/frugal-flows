@@ -307,6 +307,7 @@ def train_frugal_flow_flexible_continuous(
     causal_model_args: dict | None = None,
     pretrained_margin=None,  # AbstractBijection | None: warm-start graft (see below)
     fit_kwargs: dict | None = None,  # extras for frugal_flows.training.fit_to_data (wall cap, select_fn, on_epoch)
+    copula_lr_mult: float = 1.0,  # copula's learning rate = learning_rate * this (see below)
 ):
     nvars = u_z.shape[1]
     dim_y = y.shape[1]
@@ -421,6 +422,15 @@ def train_frugal_flow_flexible_continuous(
 
     key, subkey = jr.split(key)
 
+    # A separate learning rate for the copula (2026-09-27). The copula term is ~1 nat of a
+    # ~50-nat joint loss, so under one learning rate the optimiser barely moves it; scaling
+    # the copula's step changes how the likelihood is optimised, not what is maximised.
+    # 1.0 keeps the default optimiser (the library's adam) bit for bit.
+    if copula_lr_mult != 1.0:
+        if optimizer is not None:
+            raise ValueError("pass either an optimizer or copula_lr_mult, not both")
+        optimizer = copula_margin_optimizer(frugal_flow, learning_rate, copula_lr_mult)
+
     # Train
     key, subkey = jr.split(key)
     frugal_flow, losses = fit_to_data(
@@ -437,6 +447,38 @@ def train_frugal_flow_flexible_continuous(
     )
 
     return frugal_flow, losses
+
+
+# Position of the copula in the flexible arm's merged chain (base -> data): [0] affine to
+# [-1, 1] (frozen), [1] the copula MAF, [2] the u_z affine (frozen), [3] the causal margin,
+# [4] the Tanh stack. tests/test_flow_structure.py guards this layout.
+COPULA_BLOCKS = (0, 1, 2)
+
+
+def copula_margin_labels(frugal_flow, copula_blocks=COPULA_BLOCKS):
+    """Label every trainable parameter of a merged flexible-arm flow ``"copula"`` or
+    ``"margin"`` by which block of ``bijection.bijections`` it sits in; the tree matches
+    the parameter partition ``fit_to_data`` makes."""
+    params, _ = eqx.partition(frugal_flow, eqx.is_inexact_array,
+                              is_leaf=lambda leaf: isinstance(leaf, NonTrainable))
+
+    def label(path, _leaf):
+        keys = list(path)
+        for i, k in enumerate(keys[:-1]):
+            if getattr(k, "name", None) == "bijections" and isinstance(keys[i + 1], jax.tree_util.SequenceKey):
+                return "copula" if keys[i + 1].idx in copula_blocks else "margin"
+        return "margin"
+
+    return jax.tree_util.tree_map_with_path(label, params)
+
+
+def copula_margin_optimizer(frugal_flow, learning_rate: float, copula_lr_mult: float):
+    """Adam at ``learning_rate`` for the margin and ``learning_rate * copula_lr_mult`` for
+    the copula (two independent Adam states, as the default adam would keep per parameter)."""
+    return optax.multi_transform(
+        {"margin": optax.adam(learning_rate), "copula": optax.adam(learning_rate * copula_lr_mult)},
+        copula_margin_labels(frugal_flow),
+    )
 
 
 def pretrain_causal_margin(
@@ -784,6 +826,7 @@ def train_frugal_flow(
     causal_model_args: dict | None = None,
     pretrained_margin=None,  # AbstractBijection | None: warm-start graft (flexible_continuous only)
     fit_kwargs: dict | None = None,  # extras for the training loop (flexible_continuous only)
+    copula_lr_mult: float = 1.0,  # copula learning-rate multiplier (flexible_continuous only)
 ):
     valid_causal_models = [
         "gaussian",
@@ -865,6 +908,7 @@ def train_frugal_flow(
             causal_model_args=causal_model_args,
             pretrained_margin=pretrained_margin,
             fit_kwargs=fit_kwargs,
+            copula_lr_mult=copula_lr_mult,
         )
 
     elif causal_model == "location_translation":
