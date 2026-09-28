@@ -143,7 +143,7 @@ def row_for(d: str) -> dict:
         "cop_error": R["metrics"].get("cop_error", ""),
         **{f"cop_{k}_{z}": _f(R["metrics"].get(f"cop_{k}_{z}"))
            for z in ("thickness", "brightness")
-           for k in ("ks_u", "ks_v")},
+           for k in ("ks_u", "ks_v", "ks_umarg", "mean_umarg")},
         **{f"cop_rho_ru_{z}_gap_{s}": _f(R["metrics"].get(f"cop_rho_ru_{z}_gap_{s}"))
            for z in ("thickness", "brightness") for s in ("disc", "ring", "far", "maxabs")},
         **{f"cop_rho_rv_{z}_maxabs": _f(R["metrics"].get(f"cop_rho_rv_{z}_maxabs"))

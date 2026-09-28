@@ -24,6 +24,8 @@ What is computed (``compute``) and drawn (``plot_all``):
 4. margins of ``v``: KS distance, histogram, Q-Q (expected uniform);
 5. remaining dependence in ``v``: Spearman between coordinates of ``v`` and between each
    ``v_j`` and each pixel's ``R_k`` (expected zero);
+7. the copula's own u-marginal: ``r ~ U^K`` from the base, ``u`` drawn from the copula;
+   KS distance from uniform and mean per covariate (a copula would give uniform ``u``);
 6. calibration of each ``v_j`` by treatment group and by quartile of a prespecified
    outcome summary (mean logit intensity over the disc): observed fraction ``v_j <= q``
    against nominal ``q`` for ``q = 0.1 .. 0.9``, with a binomial band, max absolute gap
@@ -149,6 +151,19 @@ def compute(flow, data: dict, u_z: np.ndarray, heldout_idx, disc_mask: np.ndarra
         assert bool(jnp.allclose(ys[:, :K], r_pm[idx], atol=tol)), "R altered by the copula forward pass"
         preds[s] = np.clip(np.asarray(ys[:, K:]), 0.0, 1.0)
 
+    # the copula's own u-marginal: image ranks drawn uniform from the base (no data), covariate
+    # ranks drawn from the copula. A copula has uniform margins, so these u should be uniform;
+    # the flow only guarantees  int q(u | r) du = 1, not  int q(u | r) dr = 1  (2026-09-27, see
+    # runs/leftover_confounding/README.md). T is masked out of the copula, so zeros are passed.
+    key, k_r, k_v = jr.split(key, 3)
+    n_marg = 20_000
+    ys = jnp.hstack([jr.uniform(k_r, (n_marg, K)), jr.uniform(k_v, (n_marg, d))])
+    zeros = jnp.zeros((n_marg, cond.shape[1]))
+    for b in B[:N_COPULA_BLOCKS]:
+        b = paramax.unwrap(b)
+        ys = jax.vmap(b.transform)(ys, zeros) if b.cond_shape is not None else jax.vmap(b.transform)(ys)
+    u_marg = np.clip(np.asarray(ys[:, K:]), 0.0, 1.0)
+
     U, Rh, V, Th = u_z[idx], R[idx], v[idx], T[idx]
     ysum = Y[idx][:, disc_mask].mean(axis=1)
     names = z_names(d)
@@ -158,6 +173,8 @@ def compute(flow, data: dict, u_z: np.ndarray, heldout_idx, disc_mask: np.ndarra
     for j, nm in enumerate(names):
         met[f"cop_ks_u_{nm}"] = float(stats.kstest(U[:, j], "uniform").statistic)
         met[f"cop_ks_v_{nm}"] = float(stats.kstest(V[:, j], "uniform").statistic)
+        met[f"cop_ks_umarg_{nm}"] = float(stats.kstest(u_marg[:, j], "uniform").statistic)
+        met[f"cop_mean_umarg_{nm}"] = float(u_marg[:, j].mean())
 
     # 2 + 5: dependence between covariates
     for a in range(d):
@@ -211,7 +228,7 @@ def compute(flow, data: dict, u_z: np.ndarray, heldout_idx, disc_mask: np.ndarra
         "cop_idx": idx, "cop_R": Rh, "cop_u": U, "cop_v": V, "cop_u_pred": preds,
         "cop_T": Th, "cop_ysum": ysum,
         "cop_rho_obs": rho_obs, "cop_rho_pred": rho_pred, "cop_rho_pred_sd": rho_pred_sd,
-        "cop_rho_v": rho_v, "cop_cal": cal,
+        "cop_rho_v": rho_v, "cop_cal": cal, "cop_u_marg": u_marg,
     }
     return met, arrays
 
