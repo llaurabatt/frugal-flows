@@ -211,7 +211,15 @@ def _write_index(rows, path=INDEX):
 
 
 def rebuild() -> int:
-    rows = [row_for(d.rstrip("/")) for d in sorted(glob.glob(f"{ROOT}/2*/"))]
+    # folders with none of the result files (metrics.json now; result.json / history.npz in
+    # the older layouts) are fits still running (or killed): left out until they finish, so
+    # the index can be rebuilt while another sweep is in progress (2026-09-28)
+    folders = sorted(glob.glob(f"{ROOT}/2*/"))
+    done = [d for d in folders
+            if any(os.path.exists(os.path.join(d, f)) for f in ("metrics.json", "result.json", "history.npz"))]
+    if len(done) < len(folders):
+        print(f"skipped {len(folders) - len(done)} folders without results (running or unfinished)")
+    rows = [row_for(d.rstrip("/")) for d in done]
     _write_index(rows)
     return len(rows)
 
