@@ -484,6 +484,10 @@ class Config:
     # shared rate, the default optimiser). Changes how the likelihood is optimised, not what
     # is maximised (unlike reweighting the copula term).
     copula_lr_mult: float = 1.0
+    # covariate ranks fed to the copula: "flow" = the fitted stage-one flow's CDF (the library
+    # default; only approximately uniform), "ecdf" = rank / (n + 1) per continuous covariate
+    # (exactly uniform). The stage-one flow is fitted either way, with the same keys.
+    u_z_method: str = "flow"
     batch_size: int = 100
     marginal_max_epochs: int = 70
     marginal_max_patience: int = 10
@@ -849,6 +853,13 @@ def fit_flow(cfg: Config, data: dict, timings: dict | None = None):
     if timings is not None:
         timings["marginal_s"] = time.monotonic() - _t
     u_z = np.asarray(z_res["u_z_cont"])
+    if cfg.u_z_method == "ecdf":
+        # exact ranks of each continuous covariate over all rows, in (0, 1)
+        zc = np.asarray(z_cont, dtype=np.float64).reshape(len(u_z), -1)
+        from scipy.stats import rankdata
+        u_z = (rankdata(zc, axis=0) / (zc.shape[0] + 1)).reshape(u_z.shape)
+    elif cfg.u_z_method != "flow":
+        raise ValueError(f"u_z_method must be 'flow' or 'ecdf', not {cfg.u_z_method!r}")
     if "u_z_discr" in z_res and z_discr.shape[1] > 0:
         u_z = np.hstack([u_z, np.asarray(z_res["u_z_discr"])])
 
@@ -1612,6 +1623,9 @@ def variant_tag(cfg: Config) -> str:
         var.append(f"ep{cfg.max_epochs}")
     if cfg.max_patience != 30:
         var.append(f"pat{cfg.max_patience}")
+    # covariate ranks from the empirical CDF instead of the stage-one flow (from 2026-09-28)
+    if getattr(cfg, "u_z_method", "flow") == "ecdf":
+        var.append("ecdf")
     return "_".join(var)
 
 
@@ -1953,7 +1967,7 @@ CELL_IDENTITY = ("preset", "arm", "model", "conditioner", "size", "radius", "dig
                  "copula_rqs_knots", "max_epochs", "n_mc",
                  # a copula-stopped fit is not the joint-stopped fit of the same cell
                  "select_on", "seed_assign", "base_shift", "learning_rate", "batch_size", "ema_epochs",
-                 "copula_lr_mult", "max_patience")
+                 "copula_lr_mult", "max_patience", "u_z_method")
 
 
 def completed_cells(runs_root: str = RUNS_ROOT) -> set[tuple]:

@@ -494,6 +494,8 @@ def table4(R):
             ("Copula spline knots", fmt(R["cop_knots"]) + note),
             ("Copula learning rate", (f"{R['cfg'].get('copula_lr_mult')} x the margin's"
                                       if R["cfg"].get("copula_lr_mult", 1.0) != 1.0 else "same as the margin's")),
+            ("Covariate ranks", ("empirical CDF, rank / (n + 1)" if R["cfg"].get("u_z_method") == "ecdf"
+                                 else "CDF of the fitted stage-one flow")),
         ]
     else:
         rows += [("Copula conditioner", na), ("Copula MLP hidden width", na), ("Copula MLP hidden depth", na),

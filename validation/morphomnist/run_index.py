@@ -92,6 +92,7 @@ def row_for(d: str) -> dict:
         "copula_rqs_knots": R["cop_knots"] if R["has_copula"] else "",
         "n_params": R["n_params"] or "", "lr": R["lr"], "batch_size": R["batch_size"],
         "ema_epochs": R["cfg"].get("ema_epochs", 0) or 0,
+        "u_z_method": R["cfg"].get("u_z_method", "flow") if R["has_copula"] else "",
         "max_epochs": R["cfg"].get("max_epochs"),
         "max_patience": R["cfg"].get("max_patience"),
         "copula_lr_mult": R["cfg"].get("copula_lr_mult", 1.0) if R["has_copula"] else "",

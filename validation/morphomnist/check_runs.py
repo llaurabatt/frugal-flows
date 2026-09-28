@@ -153,6 +153,9 @@ def main():
             bad(d, f"config copula_lr_mult={mult} but name has no coplr{float(mult):g} tag")
         if cl and (mult is None or f"coplr{float(mult):g}" != cl[0]):
             bad(d, f"name has {cl[0]} but config copula_lr_mult={mult}")
+        # ecdf: present iff the covariate ranks came from the empirical CDF (from 2026-09-28)
+        if ("ecdf" in variants) != (c.get("u_z_method") == "ecdf"):
+            bad(d, f"ecdf tag {'present' if 'ecdf' in variants else 'absent'} but config u_z_method={c.get('u_z_method')}")
         # copsel: present iff early stopping followed the held-out copula loss
         if ("copsel" in variants) != (c.get("select_on") == "copula"):
             bad(d, f"copsel tag {'present' if 'copsel' in variants else 'absent'} but config select_on={c.get('select_on')}")
