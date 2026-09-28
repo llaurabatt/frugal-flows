@@ -488,6 +488,11 @@ class Config:
     # default; only approximately uniform), "ecdf" = rank / (n + 1) per continuous covariate
     # (exactly uniform). The stage-one flow is fitted either way, with the same keys.
     u_z_method: str = "flow"
+    # weight of the copula u-marginal penalty (flexible arm; 0 = off): the training loss adds
+    # weight x energy distance between the copula's own u-marginal and the covariate ranks;
+    # validation / early stopping keep the plain likelihood (2026-09-28)
+    copula_umarg_weight: float = 0.0
+    copula_umarg_n: int = 128          # draws per step for that penalty
     batch_size: int = 100
     marginal_max_epochs: int = 70
     marginal_max_patience: int = 10
@@ -890,6 +895,8 @@ def fit_flow(cfg: Config, data: dict, timings: dict | None = None):
         batch_size=cfg.batch_size,
         fit_kwargs=_fit_kwargs(cfg, data) if cfg.arm == "flexible_continuous" else None,
         copula_lr_mult=cfg.copula_lr_mult,
+        copula_umarg_weight=cfg.copula_umarg_weight,
+        copula_umarg_n=cfg.copula_umarg_n,
         causal_model_args=causal_model_args,
         # copula capacity (the dispatcher forwards these to every arm's
         # masked_autoregressive_flow_first_uniform); the margin's capacity
@@ -1626,6 +1633,9 @@ def variant_tag(cfg: Config) -> str:
     # covariate ranks from the empirical CDF instead of the stage-one flow (from 2026-09-28)
     if getattr(cfg, "u_z_method", "flow") == "ecdf":
         var.append("ecdf")
+    # copula u-marginal penalty weight, when on (from 2026-09-28)
+    if getattr(cfg, "copula_umarg_weight", 0.0):
+        var.append(f"umw{cfg.copula_umarg_weight:g}")
     return "_".join(var)
 
 
@@ -1967,7 +1977,8 @@ CELL_IDENTITY = ("preset", "arm", "model", "conditioner", "size", "radius", "dig
                  "copula_rqs_knots", "max_epochs", "n_mc",
                  # a copula-stopped fit is not the joint-stopped fit of the same cell
                  "select_on", "seed_assign", "base_shift", "learning_rate", "batch_size", "ema_epochs",
-                 "copula_lr_mult", "max_patience", "u_z_method")
+                 "copula_lr_mult", "max_patience", "u_z_method",
+                 "copula_umarg_weight", "copula_umarg_n")
 
 
 def completed_cells(runs_root: str = RUNS_ROOT) -> set[tuple]:

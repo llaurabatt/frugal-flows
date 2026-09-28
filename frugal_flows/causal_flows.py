@@ -18,6 +18,8 @@ from flowjax.bijections.utils import Identity
 from flowjax.distributions import Transformed, Uniform, _StandardUniform
 from flowjax.flows import masked_autoregressive_flow
 from jaxtyping import ArrayLike
+import paramax
+from flowjax.train.losses import MaximumLikelihoodLoss
 from paramax import NonTrainable
 
 from frugal_flows.basic_flows import (
@@ -308,6 +310,8 @@ def train_frugal_flow_flexible_continuous(
     pretrained_margin=None,  # AbstractBijection | None: warm-start graft (see below)
     fit_kwargs: dict | None = None,  # extras for frugal_flows.training.fit_to_data (wall cap, select_fn, on_epoch)
     copula_lr_mult: float = 1.0,  # copula's learning rate = learning_rate * this (see below)
+    copula_umarg_weight: float = 0.0,  # weight of the copula u-marginal penalty (see below); 0 = off
+    copula_umarg_n: int = 128,  # draws per step for that penalty (drawing u runs the copula backwards: slow)
 ):
     nvars = u_z.shape[1]
     dim_y = y.shape[1]
@@ -431,6 +435,18 @@ def train_frugal_flow_flexible_continuous(
             raise ValueError("pass either an optimizer or copula_lr_mult, not both")
         optimizer = copula_margin_optimizer(frugal_flow, learning_rate, copula_lr_mult)
 
+    # Copula u-marginal penalty (2026-09-28): the copula block only guarantees
+    # int q(u | r) du = 1, not that its own u-marginal matches the covariate ranks. The
+    # training loss adds weight x energy distance between the two (zero for a real copula);
+    # validation, early stopping and the kept epoch still use the plain likelihood.
+    fit_kwargs = dict(fit_kwargs or {})
+    if copula_umarg_weight:
+        fit_kwargs["loss_fn"] = CopulaUMarginalPenaltyLoss(
+            u_ref=jnp.asarray(u_z, dtype=float), dim_y=dim_y, weight=float(copula_umarg_weight),
+            n=min(int(copula_umarg_n), int(u_z.shape[0])),
+        )
+        fit_kwargs["val_loss_fn"] = MaximumLikelihoodLoss()
+
     # Train
     key, subkey = jr.split(key)
     frugal_flow, losses = fit_to_data(
@@ -443,7 +459,7 @@ def train_frugal_flow_flexible_continuous(
         max_epochs=max_epochs,
         max_patience=max_patience,
         batch_size=batch_size,
-        **(fit_kwargs or {}),
+        **fit_kwargs,
     )
 
     return frugal_flow, losses
@@ -479,6 +495,60 @@ def copula_margin_optimizer(frugal_flow, learning_rate: float, copula_lr_mult: f
         {"margin": optax.adam(learning_rate), "copula": optax.adam(learning_rate * copula_lr_mult)},
         copula_margin_labels(frugal_flow),
     )
+
+
+def _energy_distance(a, b):
+    """Energy distance between two samples (rows are points): 2 E|a-b| - E|a-a'| - E|b-b'|,
+    the within-sample terms over distinct pairs. Zero in expectation iff the distributions agree."""
+    def mean_dist(x, y, exclude_diag):
+        d = jnp.sqrt(jnp.sum((x[:, None, :] - y[None, :, :]) ** 2, axis=-1) + 1e-12)
+        if exclude_diag:
+            n = x.shape[0]
+            return (d.sum() - jnp.trace(d)) / (n * (n - 1))
+        return d.mean()
+    return 2 * mean_dist(a, b, False) - mean_dist(a, a, True) - mean_dist(b, b, True)
+
+
+def copula_u_marginal_samples(dist, key, dim_y: int, n: int):
+    """Covariate ranks drawn from the copula alone: image ranks r ~ U(0,1)^dim_y and base
+    noise v ~ U(0,1)^d pushed forward through the copula blocks (COPULA_BLOCKS). A copula
+    would return u distributed as the observed covariate ranks; the flow only guarantees
+    int q(u | r) du = 1 (see validation/morphomnist/runs/leftover_confounding/README.md).
+    The copula masks the treatment, so a zero condition is passed."""
+    blocks = dist.bijection.bijections
+    d = dist.shape[0] - dim_y
+    k_r, k_v = jr.split(key)
+    ys = jnp.hstack([jr.uniform(k_r, (n, dim_y)), jr.uniform(k_v, (n, d))])
+    for i in COPULA_BLOCKS:
+        b = blocks[i]
+        if b.cond_shape is not None:
+            cond = jnp.zeros((n, *b.cond_shape))
+            ys = jax.vmap(b.transform)(ys, cond)
+        else:
+            ys = jax.vmap(b.transform)(ys)
+    return ys[:, dim_y:]
+
+
+class CopulaUMarginalPenaltyLoss(eqx.Module):
+    """Negative log likelihood + ``weight`` x energy distance between the copula's own
+    u-marginal (``copula_u_marginal_samples``) and the observed covariate ranks ``u_ref``
+    (both subsampled to ``n`` points per step). The penalty is zero when the copula block is
+    a copula for the observed ranks, so it does not move a correct fit; its gradient reaches
+    only the copula blocks (the image ranks are drawn from the base, not through the margin).
+    2026-09-28."""
+    u_ref: jax.Array
+    dim_y: int = eqx.field(static=True)
+    weight: float = eqx.field(static=True)
+    n: int = eqx.field(static=True, default=1000)
+
+    @eqx.filter_jit
+    def __call__(self, params, static, x, condition=None, key=None):
+        dist = paramax.unwrap(eqx.combine(params, static))
+        nll = -dist.log_prob(x, condition).mean()
+        k_m, k_r = jr.split(key)
+        u_model = copula_u_marginal_samples(dist, k_m, self.dim_y, self.n)
+        idx = jr.choice(k_r, self.u_ref.shape[0], (self.n,), replace=False)
+        return nll + self.weight * _energy_distance(u_model, self.u_ref[idx])
 
 
 def pretrain_causal_margin(
@@ -827,6 +897,8 @@ def train_frugal_flow(
     pretrained_margin=None,  # AbstractBijection | None: warm-start graft (flexible_continuous only)
     fit_kwargs: dict | None = None,  # extras for the training loop (flexible_continuous only)
     copula_lr_mult: float = 1.0,  # copula learning-rate multiplier (flexible_continuous only)
+    copula_umarg_weight: float = 0.0,  # copula u-marginal penalty weight (flexible_continuous only)
+    copula_umarg_n: int = 128,  # draws per step for that penalty (flexible_continuous only)
 ):
     valid_causal_models = [
         "gaussian",
@@ -909,6 +981,8 @@ def train_frugal_flow(
             pretrained_margin=pretrained_margin,
             fit_kwargs=fit_kwargs,
             copula_lr_mult=copula_lr_mult,
+            copula_umarg_weight=copula_umarg_weight,
+            copula_umarg_n=copula_umarg_n,
         )
 
     elif causal_model == "location_translation":

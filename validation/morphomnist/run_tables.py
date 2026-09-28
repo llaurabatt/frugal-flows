@@ -494,6 +494,9 @@ def table4(R):
             ("Copula spline knots", fmt(R["cop_knots"]) + note),
             ("Copula learning rate", (f"{R['cfg'].get('copula_lr_mult')} x the margin's"
                                       if R["cfg"].get("copula_lr_mult", 1.0) != 1.0 else "same as the margin's")),
+            ("Copula u-marginal penalty", (f"weight {R['cfg'].get('copula_umarg_weight')} x energy distance to the "
+                                           "covariate ranks (training loss only)")
+                                          if R["cfg"].get("copula_umarg_weight") else "off"),
             ("Covariate ranks", ("empirical CDF, rank / (n + 1)" if R["cfg"].get("u_z_method") == "ecdf"
                                  else "CDF of the fitted stage-one flow")),
         ]

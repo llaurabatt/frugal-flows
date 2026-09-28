@@ -24,6 +24,9 @@ and takes four optional extras:
   recorded in ``losses["val"]``); its series is returned in ``losses["select"]``;
 * ``on_epoch(epoch, params, static) -> dict | None``: called after every epoch; whatever
   it returns (a dict) is appended, with the epoch number, to ``losses["track"]``.
+* ``val_loss_fn``: the loss used on the validation batches (early stopping and the best
+  epoch); defaults to ``loss_fn``. A training loss with a penalty passes the plain
+  likelihood here so the stopping rule is unchanged (2026-09-28).
 * ``ema_decay``: keep an exponential moving average of the parameters, updated after every
   optimisation step (``ema = d * ema + (1 - d) * params``, started at the initial
   parameters). When given, the validation loss, ``select_fn``, ``on_epoch``, the choice of
@@ -75,6 +78,7 @@ def fit_to_data(
     select_fn: Callable | None = None,
     on_epoch: Callable | None = None,
     ema_decay: float | None = None,
+    val_loss_fn: Callable | None = None,
 ):
     """See the module docstring. Returns ``(dist, losses)`` like the library."""
     t_start = time.monotonic()
@@ -83,6 +87,10 @@ def fit_to_data(
 
     if loss_fn is None:
         loss_fn = MaximumLikelihoodLoss()
+    # the validation loss (early stopping, best epoch) defaults to the training loss; a
+    # training loss with a penalty can pass the plain likelihood here instead
+    if val_loss_fn is None:
+        val_loss_fn = loss_fn
     if optimizer is None:
         optimizer = optax.adam(learning_rate)
 
@@ -141,7 +149,7 @@ def fit_to_data(
         batch_losses = []
         for batch in zip(*get_batches(val_data, batch_size), strict=True):
             key, subkey = jr.split(key)
-            loss_i = eqx.filter_jit(loss_fn)(eval_params, static, *batch, key=subkey)
+            loss_i = eqx.filter_jit(val_loss_fn)(eval_params, static, *batch, key=subkey)
             batch_losses.append(loss_i)
         losses["val"].append((sum(batch_losses) / len(batch_losses)).item())
 

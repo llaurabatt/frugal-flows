@@ -153,6 +153,13 @@ def main():
             bad(d, f"config copula_lr_mult={mult} but name has no coplr{float(mult):g} tag")
         if cl and (mult is None or f"coplr{float(mult):g}" != cl[0]):
             bad(d, f"name has {cl[0]} but config copula_lr_mult={mult}")
+        # umw<weight>: present iff the copula u-marginal penalty was on (from 2026-09-28)
+        uw = [v for v in variants if re.fullmatch(r"umw[0-9.]+", v)]
+        w = c.get("copula_umarg_weight")
+        if w and f"umw{float(w):g}" not in variants:
+            bad(d, f"config copula_umarg_weight={w} but name has no umw{float(w):g} tag")
+        if uw and (not w or f"umw{float(w):g}" != uw[0]):
+            bad(d, f"name has {uw[0]} but config copula_umarg_weight={w}")
         # ecdf: present iff the covariate ranks came from the empirical CDF (from 2026-09-28)
         if ("ecdf" in variants) != (c.get("u_z_method") == "ecdf"):
             bad(d, f"ecdf tag {'present' if 'ecdf' in variants else 'absent'} but config u_z_method={c.get('u_z_method')}")
