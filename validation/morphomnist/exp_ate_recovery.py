@@ -1633,6 +1633,9 @@ def variant_tag(cfg: Config) -> str:
     # covariate ranks from the empirical CDF instead of the stage-one flow (from 2026-09-28)
     if getattr(cfg, "u_z_method", "flow") == "ecdf":
         var.append("ecdf")
+    # sample-size cap, when set (from 2026-09-28; the two capped runs before were legacy)
+    if cfg.n is not None:
+        var.append(f"n{cfg.n}")
     # copula u-marginal penalty weight, when on (from 2026-09-28)
     if getattr(cfg, "copula_umarg_weight", 0.0):
         var.append(f"umw{cfg.copula_umarg_weight:g}")

@@ -153,6 +153,14 @@ def main():
             bad(d, f"config copula_lr_mult={mult} but name has no coplr{float(mult):g} tag")
         if cl and (mult is None or f"coplr{float(mult):g}" != cl[0]):
             bad(d, f"name has {cl[0]} but config copula_lr_mult={mult}")
+        # n<N>: present iff the sample size was capped (runs recording hidden_ranks_rule)
+        if cj.get("hidden_ranks_rule"):
+            nt = [v for v in variants if re.fullmatch(r"n\d+", v)]
+            ncap = c.get("n")
+            if ncap is not None and f"n{int(ncap)}" not in variants:
+                bad(d, f"config n={ncap} but name has no n{int(ncap)} tag")
+            if nt and (ncap is None or f"n{int(ncap)}" != nt[0]):
+                bad(d, f"name has {nt[0]} but config n={ncap}")
         # umw<weight>: present iff the copula u-marginal penalty was on (from 2026-09-28)
         uw = [v for v in variants if re.fullmatch(r"umw[0-9.]+", v)]
         w = c.get("copula_umarg_weight")
