@@ -9,6 +9,7 @@ from .masked_autoregressive_spread import MaskedAutoregressiveSpread
 from .masked_autoregressive_transformer_cond import MaskedAutoregressiveTransformerCond
 from .masked_independent import MaskedIndependent
 from .rational_quadratic_spline_additive_cond import RationalQuadraticSplineAdditiveCond
+from .select_condition import SelectCondition
 from .transformer_autoregressive import TransformerAutoregressive
 from .univariate_normal_cdf import UnivariateNormalCDF
 
@@ -23,4 +24,5 @@ __all__ = [
     "LocCond",
     "MaskedAutoregressiveMaskedCond",
     "MaskedAutoregressiveSpread",
+    "SelectCondition",
 ]

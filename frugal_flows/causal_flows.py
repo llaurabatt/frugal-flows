@@ -899,12 +899,14 @@ def train_frugal_flow(
     copula_lr_mult: float = 1.0,  # copula learning-rate multiplier (flexible_continuous only)
     copula_umarg_weight: float = 0.0,  # copula u-marginal penalty weight (flexible_continuous only)
     copula_umarg_n: int = 128,  # draws per step for that penalty (flexible_continuous only)
+    rank_penalty_weight: float = 0.0,  # pooled-rank uniformity penalty (flexible_reversed only)
 ):
     valid_causal_models = [
         "gaussian",
         "flexible_continuous",
         "flexible_discrete_output",
         "location_translation",
+        "flexible_reversed",  # reversed copula, frugal_flows.reversed_copula (2026-09-30)
     ]
 
     if (causal_model != "gaussian") & (u_z_hetero is not None):
@@ -983,6 +985,17 @@ def train_frugal_flow(
             copula_lr_mult=copula_lr_mult,
             copula_umarg_weight=copula_umarg_weight,
             copula_umarg_n=copula_umarg_n,
+        )
+
+    elif causal_model == "flexible_reversed":
+        from frugal_flows.reversed_copula import train_frugal_flow_reversed
+
+        frugal_flow, losses = train_frugal_flow_reversed(
+            key=key, y=y, u_z=u_z, condition=condition, causal_model_args=causal_model_args,
+            nn_width=nn_width, nn_depth=nn_depth, flow_layers=flow_layers, RQS_knots=RQS_knots,
+            learning_rate=learning_rate, max_epochs=max_epochs, max_patience=max_patience,
+            batch_size=batch_size, rank_penalty_weight=rank_penalty_weight,
+            fit_kwargs=fit_kwargs, show_progress=show_progress, optimizer=optimizer,
         )
 
     elif causal_model == "location_translation":
