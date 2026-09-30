@@ -208,7 +208,8 @@ Flags: the estimator
 Flags: capacity and training
 ----------------------------
 ``--rqs-knots`` 8, ``--nn-depth`` 1, ``--nn-width`` 48, ``--flow-layers`` 4,
-``--learning-rate`` 1e-2, ``--max-epochs`` 100, ``--max-patience`` 30,
+``--learning-rate`` 1e-3, ``--max-epochs`` 1000, ``--max-patience`` 30, ``--copula-nn-width`` 16
+(defaults changed 2026-09-30 to the paper setting; name tags still refer to lr 1e-2 / copula width 50),
 ``--batch-size`` 100, ``--seed-fit`` 34, ``--x64/--no-x64`` (default off).
 
 The stage-one covariate margins have their own budget, separate from the
@@ -462,12 +463,17 @@ class Config:
     # fit_flow routed nn_width/flow_layers/rqs_knots to the causal margin only,
     # so no sweep had ever touched it. Defaults equal the library's, so every
     # existing archive is reproduced unchanged.
-    copula_nn_width: int = 50
+    # 2026-09-30: defaults changed to the agreed paper setting (copula width 16, lr 1e-3,
+    # max epochs 1000; evidence in runs/leftover_confounding/STATUS.md and plan.md). Name tags
+    # still mark departures from the HISTORICAL reference (copula width 50, lr 1e-2, max epochs
+    # 1000), so a fit in the paper setting keeps "lr0.001_copw16" in its name and every older
+    # name keeps its meaning.
+    copula_nn_width: int = 16
     copula_flow_layers: int = 4
     copula_rqs_knots: int = 8
     copula_nn_depth: int = 1
-    learning_rate: float = 1e-2
-    max_epochs: int = 100
+    learning_rate: float = 1e-3
+    max_epochs: int = 1000
     max_patience: int = 30
     # ---- training loop extras (frugal_flows.training.fit_to_data; defaults reproduce
     #      flowjax's fit_to_data bit for bit) ----
@@ -1578,7 +1584,8 @@ def digit_tag(cfg: Config) -> str:
 
 
 DEFAULT_EFFECT = 1.0   # the generator's base_shift default; only a different value is named
-DEFAULT_LR = 1e-2      # Config.learning_rate's default; only a different value is named
+TAG_REF_LR = 1e-2      # reference for the lr tag (the default until 2026-09-30); a different value is named
+TAG_REF_COPW = 50      # reference for the copw tag (the default until 2026-09-30)
 
 # How the masked autoregressive layers number their hidden units
 # (frugal_flows/bijections/ranks.py). Written into config.json, metrics.json and the wandb
@@ -1606,11 +1613,11 @@ def variant_tag(cfg: Config) -> str:
     # copsel = early stopping and the kept epoch follow the held-out copula loss
     if getattr(cfg, "select_on", "joint") == "copula":
         var.append("copsel")
-    # learning rate, when not the default 1e-2: lr0.001
-    if cfg.learning_rate != DEFAULT_LR:
+    # learning rate, when not the reference 1e-2: lr0.001
+    if cfg.learning_rate != TAG_REF_LR:
         var.append(f"lr{cfg.learning_rate:g}")
     # copula hidden width, when not the default 50 (check_runs has always expected this tag)
-    if cfg.copula_nn_width != 50:
+    if cfg.copula_nn_width != TAG_REF_COPW:
         var.append(f"copw{cfg.copula_nn_width}")
     # outcome margin's hidden width and spline knots, when not the defaults 48 and 8
     # training: batch size when not 100, running weight average over N epochs when on
