@@ -1633,6 +1633,9 @@ def variant_tag(cfg: Config) -> str:
     # covariate ranks from the empirical CDF instead of the stage-one flow (from 2026-09-28)
     if getattr(cfg, "u_z_method", "flow") == "ecdf":
         var.append("ecdf")
+    # wall-clock cap on training, when set (from 2026-09-30; the 11 capped runs before were legacy)
+    if getattr(cfg, "wall_cap_s", None) is not None:
+        var.append(f"cap{int(cfg.wall_cap_s)}")
     # sample-size cap, when set (from 2026-09-28; the two capped runs before were legacy)
     if cfg.n is not None:
         var.append(f"n{cfg.n}")
@@ -1793,7 +1796,10 @@ def _wandb_start(cfg: Config, run_id: str):
         job_type=f"{ARM_SHORT[cfg.arm]}/{cond}",
         name=wandb_name_of(run_id),
         tags=[cfg.preset, ARM_SHORT[cfg.arm], cond, f"k{cfg.size**2}"] + extra,
+        # run_id / uid / wandb_name link the wandb run to its folder (check_runs compares them;
+        # added 2026-09-30 -- runs before then do not carry them)
         config={**asdict(cfg), "hidden_ranks_rule": HIDDEN_RANKS_RULE,
+                "run_id": run_id, "uid": run_id[-6:], "wandb_name": wandb_name_of(run_id),
                 "effective_radius": cfg.effective_radius,
                 "n_pixels": cfg.size**2,
                 **{f"git_{k}": v for k, v in _git_info().items()}},
@@ -1981,7 +1987,7 @@ CELL_IDENTITY = ("preset", "arm", "model", "conditioner", "size", "radius", "dig
                  # a copula-stopped fit is not the joint-stopped fit of the same cell
                  "select_on", "seed_assign", "base_shift", "learning_rate", "batch_size", "ema_epochs",
                  "copula_lr_mult", "max_patience", "u_z_method",
-                 "copula_umarg_weight", "copula_umarg_n")
+                 "copula_umarg_weight", "copula_umarg_n", "wall_cap_s")
 
 
 def completed_cells(runs_root: str = RUNS_ROOT) -> set[tuple]:

@@ -161,6 +161,14 @@ def main():
                 bad(d, f"config n={ncap} but name has no n{int(ncap)} tag")
             if nt and (ncap is None or f"n{int(ncap)}" != nt[0]):
                 bad(d, f"name has {nt[0]} but config n={ncap}")
+        # cap<seconds>: present iff training had a wall-clock cap (runs recording hidden_ranks_rule)
+        if cj.get("hidden_ranks_rule"):
+            ct = [v for v in variants if re.fullmatch(r"cap\d+", v)]
+            cap = c.get("wall_cap_s")
+            if cap is not None and f"cap{int(cap)}" not in variants:
+                bad(d, f"config wall_cap_s={cap} but name has no cap{int(cap)} tag")
+            if ct and (cap is None or f"cap{int(cap)}" != ct[0]):
+                bad(d, f"name has {ct[0]} but config wall_cap_s={cap}")
         # umw<weight>: present iff the copula u-marginal penalty was on (from 2026-09-28)
         uw = [v for v in variants if re.fullmatch(r"umw[0-9.]+", v)]
         w = c.get("copula_umarg_weight")
@@ -216,14 +224,17 @@ def main():
                 continue
             if r.name != wn:
                 bad(d, f"wandb run {wid} is named {r.name!r}")
+            # the script writes these into the wandb config only from 2026-09-30; earlier runs lack
+            # them, and their link is checked by id and name above
             for key, want in (("run_id", base), ("wandb_name", wn), ("uid", uid)):
-                if r.config.get(key) != want:
+                if key in r.config and r.config.get(key) != want:
                     bad(d, f"wandb config.{key} = {r.config.get(key)!r}")
             for key in ("preset", "seed_fit", "size"):
                 if key in c and r.config.get(key) != c[key]:
                     bad(d, f"wandb config.{key} = {r.config.get(key)!r}, local {c[key]!r}")
         for wid, r in mine.items():
-            if wid not in linked:
+            # frengression runs live in runs/frengression/, outside this checker's folder scan
+            if wid not in linked and not r.name.startswith("frengression_"):
                 problems.append(f"wandb run {r.name} ({wid}) has no folder")
     # report
     print(f"{len(folders)} run folders checked" + (f", {len(linked)} linked to wandb, {n_wandb} wandb runs owned" if use_wandb else ""))
