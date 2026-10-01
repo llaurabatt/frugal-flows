@@ -39,6 +39,10 @@ def build_for_run(run_dir: str) -> dict:
     rec = _config_record(run_dir)
     stored = rec.get("config", {})
     known = {f.name for f in fields(E.Config)}
+    if "arm" not in stored:
+        # a Frengression run's config (no "arm"): its own same-named fit fields (y_scaling, ...)
+        # mean something else; only the data settings are needed to rebuild the dataset
+        known -= set(E.FLOW_FIT_ONLY_FIELDS)
     cfg = E.Config(**{k: v for k, v in stored.items() if k in known})
     data = E.build_data(cfg)
     for key in ("dataset_id", "data_hash"):

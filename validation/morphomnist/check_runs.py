@@ -28,11 +28,12 @@ from collections import Counter
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs", "exp_ate_recovery")
 STAMP = r"\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z"
 NAME = re.compile(
-    r"^(?P<model>ff|margin|margin_sep)_(?P<preset>e[1-6])_(?P<arm>flexcont|loctrans)(?P<trf>-trf)?"
+    r"^(?P<model>ff|margin|margin_sep)_(?P<preset>e[1-6])_(?P<arm>flexcont|loctrans|flexgauss|loctransgauss)(?P<trf>-trf)?"
     r"(?P<variants>(?:_[a-z]+[0-9.]*(?:ep)?)*)_k(?P<k>\d+)_s(?P<seed>\d+)_d(?P<digit>\d|0-9)_(?P<uid>[0-9a-f]{6})$")
 PRESET_OF = {"exp1_rct_homogeneous": "e1", "exp2_confounded_homogeneous": "e2", "exp3_confounded_heterogeneous": "e3",
              "exp4_covariate_cate": "e4", "exp5_quantile_effect": "e5", "exp6_spatial_cate": "e6"}
-ARM_OF = {"flexible_continuous": "flexcont", "location_translation": "loctrans"}
+ARM_OF = {"flexible_continuous": "flexcont", "location_translation": "loctrans",
+          "flexible_continuous_gaussian": "flexgauss", "location_translation_gaussian": "loctransgauss"}
 LAYOUTS = {  # required files per layout, keyed by the file that identifies the layout
     "metrics.json": ["config.json", "metrics.json", "arrays.npz", "log.txt", "wandb.json"],
     "result.json": ["config.json", "result.json", "result.npz", "wandb.json"],

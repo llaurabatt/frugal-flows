@@ -382,7 +382,17 @@ from frugal_flows.training import (
 )
 from prepare_morphomnist_exps import PRESETS, build_preset, inverse_logit, summarise
 
-ARMS = ("location_translation", "flexible_continuous", "frengression")
+ARMS = ("location_translation", "flexible_continuous", "frengression",
+        # Gaussian-scale frugal flow (frugal_flows.gaussian_scale, 2026-10-01): Normal base,
+        # unbounded spline margin, conditional copula p(g_Z | g_Y) on normal scores
+        "flexible_continuous_gaussian", "location_translation_gaussian")
+GAUSS_ARMS = ("flexible_continuous_gaussian", "location_translation_gaussian")
+# the arms whose flow is a frugal flow fitted in fit_flow (everything but frengression)
+FLOW_ARMS = ("location_translation", "flexible_continuous") + GAUSS_ARMS
+Y_SCALINGS = ("none", "standardize")
+SHIFT_INITS = ("zero", "naive", "scalar")
+# flow-fit fields added 2026-10-01 whose names a Frengression config may reuse with another meaning
+FLOW_FIT_ONLY_FIELDS = ("y_scaling", "shift_init", "z_shuffle_seed", "shift_lr_mult")
 CONDITIONERS = ("mlp", "transformer")
 # What is fitted. "ff" is the frugal flow (margin + copula on the covariate ranks);
 # "margin" is the treatment-conditioned image margin alone, no copula, no stage-1
@@ -391,7 +401,9 @@ CONDITIONERS = ("mlp", "transformer")
 # for the ff fits and are only defined for the flexible_continuous arm.
 MODELS = ("ff", "margin", "margin_sep")
 ARM_SHORT = {"location_translation": "loctrans", "flexible_continuous": "flexcont",
-             "frengression": "freng"}
+             "frengression": "freng",
+             "flexible_continuous_gaussian": "flexgauss",
+             "location_translation_gaussian": "loctransgauss"}
 FRENGRESSION_Y_SCALINGS = ("global", "per_pixel", "none")
 FRENGRESSION_Z_SCALINGS = ("standardize", "none")
 FRENGRESSION_DEVICES = ("cpu", "mps")
@@ -406,7 +418,9 @@ PRESET_SHORT = {
 # Expected bijection-chain length per arm, asserted before the parametric
 # read-out so a future change to the chain layout fails loudly instead of
 # silently reading the wrong block as the LocCond stack.
-ARM_CHAIN_LEN = {"location_translation": 6, "flexible_continuous": 5}
+ARM_CHAIN_LEN = {"location_translation": 6, "flexible_continuous": 5,
+                 # Gaussian scale: [GaussianCopulaBlock, Concatenate([margin, Identity])], unmerged
+                 "flexible_continuous_gaussian": 2, "location_translation_gaussian": 2}
 
 # The sweep matrix. The conditioner is a flexible_continuous option, so
 # location_translation contributes one cell per preset, not two.
@@ -534,6 +548,21 @@ class Config:
     wandb_project: str = "Frugal Images"   # where every run of this project lives (proj-lb)
     wandb_group: str | None = None       # None -> the preset name
     wandb_tags: str | None = None        # comma-separated, appended to the auto tags
+    # ---- Gaussian-scale arms and outcome scaling (2026-10-01; defaults = the behaviour before) ----
+    # outcome scaling at fit time, for every flow arm: "standardize" fits the flow to
+    # (Y - mean) / sd per pixel (outcome_transforms.OutcomeTransform) and maps every sample back;
+    # a location-translation shift is multiplied by the per-pixel sd. "none" = raw logit Y.
+    y_scaling: str = "none"
+    # starting value of the shift (location_translation_gaussian only), on the FITTING scale:
+    # "zero" (package default), "scalar" (= ate_init), "naive" (per-pixel treated-minus-untreated
+    # mean difference of the fitted Y over all rows, as halo_fit.shift_init_vector)
+    shift_init: str = "zero"
+    # placebo-covariate anchor: permute the rows of u_z (all columns jointly) with
+    # numpy default_rng(seed) after stage 1, before the joint fit. None = off.
+    z_shuffle_seed: int | None = None
+    # learning-rate multiplier for the LocCond shift leaves (location_translation_gaussian only;
+    # 1.0 = one shared rate, the default optimiser)
+    shift_lr_mult: float = 1.0
 
     def __post_init__(self):
         if self.preset not in PRESETS:
@@ -561,6 +590,28 @@ class Config:
                 f"transformer conditioner needs nn_width ({self.nn_width}) "
                 f"divisible by nn_heads ({self.nn_heads})"
             )
+        if self.y_scaling not in Y_SCALINGS:
+            raise ValueError(f"y_scaling must be one of {Y_SCALINGS}, got {self.y_scaling!r}")
+        if self.shift_init not in SHIFT_INITS:
+            raise ValueError(f"shift_init must be one of {SHIFT_INITS}, got {self.shift_init!r}")
+        if self.shift_init != "zero" and self.arm != "location_translation_gaussian":
+            raise ValueError("shift_init applies to arm 'location_translation_gaussian' only")
+        if self.shift_lr_mult != 1.0 and self.arm != "location_translation_gaussian":
+            raise ValueError("shift_lr_mult applies to arm 'location_translation_gaussian' only")
+        if self.arm == "frengression" and (self.y_scaling != "none" or self.z_shuffle_seed is not None):
+            raise ValueError("y_scaling / z_shuffle_seed apply to the flow arms; frengression has "
+                             "its own frengression_y_scaling")
+        if self.model != "ff" and (self.y_scaling != "none" or self.z_shuffle_seed is not None):
+            raise ValueError("y_scaling / z_shuffle_seed are implemented for model 'ff' only")
+        if self.y_scaling != "none" and self.track_every:
+            raise ValueError("track_every reads the effect on the raw scale; not wired for y_scaling")
+        if self.arm in GAUSS_ARMS:
+            # the uniform-chain machinery (copula selection, tracking read-out, u-marginal
+            # penalty, copula lr) is not wired for the Gaussian-scale flow
+            if self.select_on != "joint" or self.track_every or self.copula_umarg_weight \
+                    or self.copula_lr_mult != 1.0 or self.ema_epochs:
+                raise ValueError("the Gaussian-scale arms support select_on='joint', no tracking, "
+                                 "no copula u-marginal penalty, copula_lr_mult 1 and no EMA")
         if self.arm == "frengression":
             if self.frengression_y_scaling not in FRENGRESSION_Y_SCALINGS:
                 raise ValueError(
@@ -834,6 +885,89 @@ def heldout_idx(cfg: Config, flow, data: dict, u_z, losses: dict):
     return idx, ("reconstructed" if idx is not None else "none")
 
 
+def outcome_transform_for(cfg: Config, data: dict):
+    """The fit-time outcome transform (``frugal_flows.outcome_transforms``), fitted on ALL rows of
+    ``data["Y"]``, or None for raw Y. Deterministic in the data, so the read-out and a reload
+    rebuild exactly the transform the fit used."""
+    if cfg.y_scaling == "none":
+        return None
+    from frugal_flows.outcome_transforms import OutcomeTransform
+    return OutcomeTransform(cfg.y_scaling).fit(jnp.asarray(data["Y"]))
+
+
+def outcome_scale(cfg: Config, data: dict) -> np.ndarray | None:
+    """Per-pixel data-scale size of a unit shift on the fitting scale (sd under standardize), or
+    None for raw Y. A location-translation shift on the fitting scale times this is the shift on
+    the data (logit) scale."""
+    ot = outcome_transform_for(cfg, data)
+    if ot is None:
+        return None
+    K = int(np.asarray(data["Y"]).shape[1])
+    one, zero = jnp.ones((1, K)), jnp.zeros((1, K))
+    return np.asarray(ot.inverse(one) - ot.inverse(zero), np.float64)[0]
+
+
+def shift_init_value(cfg: Config, data: dict, y_fit):
+    """Starting value of the LocCond shift (location_translation_gaussian), FITTING scale."""
+    if cfg.shift_init == "zero":
+        return 0.0
+    if cfg.shift_init == "scalar":
+        return float(cfg.ate_init)
+    t = np.asarray(data["X"])[:, 0].astype(bool)
+    y = np.asarray(y_fit, np.float64)
+    return np.asarray(y[t].mean(0) - y[~t].mean(0), np.float32)       # "naive"
+
+
+def _shift_lr_optimizer(cfg: Config):
+    """optax.adam with the LocCond ``ate`` leaves at ``learning_rate * shift_lr_mult`` (None when
+    the multiplier is 1: the default optimiser, untouched)."""
+    if cfg.shift_lr_mult == 1.0:
+        return None
+    import optax
+
+    def labels(params):
+        lab = jax.tree_util.tree_map(lambda _: "rest", params)
+        return equinox.tree_at(lambda p: p.bijection.bijections[1].bijections[0].bijections[-1].ate,
+                               lab, "shift")
+
+    return optax.multi_transform({"rest": optax.adam(cfg.learning_rate),
+                                  "shift": optax.adam(cfg.learning_rate * cfg.shift_lr_mult)}, labels)
+
+
+def _fit_gaussian(cfg: Config, data: dict, key, y_fit, u_z, timings: dict | None):
+    """Stage 2 for the Gaussian-scale arms (frugal_flows.gaussian_scale through the package's
+    ``train_frugal_flow`` dispatcher), with the same key sequence as the uniform arms: the same
+    seed_fit gives the same stage-1 ``u_z``. Margin size from the margin fields (interval 5),
+    copula size from the copula_* fields. Template: diagnostics/halo/halo_models.fit_gff."""
+    causal_model_args = {"RQS_knots": cfg.rqs_knots, "nn_depth": cfg.nn_depth,
+                         "nn_width": cfg.nn_width, "flow_layers": cfg.flow_layers, "interval": 5.0}
+    if cfg.arm == "location_translation_gaussian":
+        causal_model_args["ate"] = shift_init_value(cfg, data, y_fit)
+    key, subkey = jr.split(key)
+    _t = time.monotonic()
+    flow, losses = train_frugal_flow(
+        causal_model=cfg.arm,
+        key=subkey,
+        y=y_fit,
+        u_z=jnp.asarray(u_z),
+        condition=jnp.asarray(data["X"]),
+        learning_rate=cfg.learning_rate,
+        max_epochs=cfg.max_epochs,
+        max_patience=cfg.max_patience,
+        batch_size=cfg.batch_size,
+        fit_kwargs={"ema_decay": None, "wall_cap_s": cfg.wall_cap_s},
+        optimizer=_shift_lr_optimizer(cfg),
+        causal_model_args=causal_model_args,
+        nn_width=cfg.copula_nn_width,
+        flow_layers=cfg.copula_flow_layers,
+        RQS_knots=cfg.copula_rqs_knots,
+        nn_depth=cfg.copula_nn_depth,
+    )
+    if timings is not None:
+        timings["flow_fit_s"] = time.monotonic() - _t
+    return flow, losses
+
+
 def fit_flow(cfg: Config, data: dict, timings: dict | None = None):
     """Stage-1 marginal quantiles for Z, then the frugal flow.
 
@@ -876,6 +1010,18 @@ def fit_flow(cfg: Config, data: dict, timings: dict | None = None):
         raise ValueError(f"u_z_method must be 'flow' or 'ecdf', not {cfg.u_z_method!r}")
     if "u_z_discr" in z_res and z_discr.shape[1] > 0:
         u_z = np.hstack([u_z, np.asarray(z_res["u_z_discr"])])
+    if cfg.z_shuffle_seed is not None:
+        # placebo anchor: break the unit-level link between covariates and (T, Y), keeping
+        # the covariates' joint distribution (all columns permuted together)
+        u_z = u_z[np.random.default_rng(cfg.z_shuffle_seed).permutation(u_z.shape[0])]
+
+    # the outcome the flow is fitted to: raw Y unless y_scaling (then mapped back on sampling)
+    ot = outcome_transform_for(cfg, data)
+    y_fit = jnp.asarray(data["Y"]) if ot is None else jnp.asarray(ot.forward(jnp.asarray(data["Y"])))
+
+    if cfg.arm in GAUSS_ARMS:
+        flow, losses = _fit_gaussian(cfg, data, key, y_fit, u_z, timings)
+        return flow, losses, u_z
 
     causal_model_args = {
         "RQS_knots": cfg.rqs_knots,
@@ -895,7 +1041,7 @@ def fit_flow(cfg: Config, data: dict, timings: dict | None = None):
     flow, losses = train_frugal_flow(
         causal_model=cfg.arm,
         key=subkey,
-        y=jnp.asarray(data["Y"]),
+        y=y_fit,
         u_z=jnp.asarray(u_z),
         condition=jnp.asarray(data["X"]),
         learning_rate=cfg.learning_rate,
@@ -928,7 +1074,7 @@ def _tau_hat_location_translation(flow, K: int) -> np.ndarray:
     )
 
 
-def _tau_hat_flexible_continuous(cfg: Config, flow, data: dict, K: int):
+def _tau_hat_flexible_continuous(cfg: Config, flow, data: dict, K: int, ot=None):
     """Estimate the per-pixel ATE by paired common-random-number draws.
 
     ``interventional_samples`` needs a TYPED key (``jr.key``), and ``dim_y``
@@ -952,6 +1098,9 @@ def _tau_hat_flexible_continuous(cfg: Config, flow, data: dict, K: int):
             cond_dim=int(np.asarray(data["X"]).shape[1]),
             n_mc=cfg.n_mc,
             dim_y=K,
+            # y_scaling: samples mapped back to the data scale (passed only when set, so the
+            # default call is the one every earlier run made)
+            **({"outcome_transform": ot} if ot is not None else {}),
         )
     readout_s = time.monotonic() - t0
 
@@ -1082,10 +1231,15 @@ def copula_term(cfg: Config, flow, data: dict, u_z, losses: dict) -> dict:
     """
     B = flow.bijection.bijections
     n_copula = 3                                   # [rescale, copula flow, affine]
+    if cfg.arm in GAUSS_ARMS:                      # the unmerged 2-block Gaussian chain: not this split
+        return {}
     if cfg.arm not in ARM_CHAIN_LEN or len(B) != ARM_CHAIN_LEN[cfg.arm]:
         return {}
     K = int(np.asarray(data["Y"]).shape[1])
-    x = jnp.hstack([jnp.asarray(data["Y"]), jnp.asarray(u_z)])
+    # the flow's own input: the fitting-scale Y when y_scaling is set (raw Y otherwise)
+    ot = outcome_transform_for(cfg, data)
+    y_in = jnp.asarray(data["Y"]) if ot is None else jnp.asarray(ot.forward(jnp.asarray(data["Y"])))
+    x = jnp.hstack([y_in, jnp.asarray(u_z)])
     cond = jnp.asarray(data["X"])
     total = np.asarray(jax.vmap(flow.log_prob)(x, cond))
 
@@ -1135,6 +1289,42 @@ def copula_term(cfg: Config, flow, data: dict, u_z, losses: dict) -> dict:
     return out
 
 
+GAUSS_CALIB_DRAWS = 20000
+
+
+def gaussian_calibration(cfg: Config, flow, data: dict, u_z, val_idx) -> dict:
+    """Gaussian-scale arms: KS distance to N(0,1) of
+    ``gy_ks_*``          the data's outcome scores g_Y = margin^{-1}(y_fit; T), per pixel, on the
+                         held-out rows (all rows when none recorded);
+    ``gz_implied_ks_*``  the model-implied g_Z margin, per covariate, from GAUSS_CALIB_DRAWS joint
+                         draws pushed through the (T-blind) copula block. It is a copula only when
+                         this margin is N(0,1); nothing enforces it.
+    ``gz_resid_ks_*``    the data's g_Z through the copula inverse given the data's g_Y (val rows)."""
+    import frugal_flows.gaussian_scale as gs
+    from scipy.stats import kstest
+    ot = outcome_transform_for(cfg, data)
+    Y = jnp.asarray(data["Y"]) if ot is None else jnp.asarray(ot.forward(jnp.asarray(data["Y"])))
+    X = jnp.asarray(data["X"], dtype=Y.dtype)
+    rows = np.arange(Y.shape[0]) if val_idx is None else np.asarray(val_idx)
+    K = Y.shape[1]
+    g_y = np.asarray(gs.outcome_scores(flow, Y[rows], X[rows]), np.float64)
+    g_z = gs.normal_scores_from_uniform(jnp.asarray(np.asarray(u_z)[rows], dtype=Y.dtype))
+    ks = lambda a: np.array([float(kstest(a[np.isfinite(a[:, j]), j], "norm").statistic)
+                             if np.isfinite(a[:, j]).any() else float("nan") for j in range(a.shape[1])])
+    e = jr.normal(jr.PRNGKey(cfg.seed_fit), (GAUSS_CALIB_DRAWS, K + g_z.shape[1]))
+    cop = gs.copula_of(flow)
+    joint = np.asarray(jax.vmap(cop.transform)(e, jnp.zeros((e.shape[0],) + cop.cond_shape, e.dtype)), np.float64)
+    resid = np.asarray(gs.copula_residuals(flow, jnp.asarray(g_y, Y.dtype), g_z), np.float64)
+    ky, kz, kr = ks(g_y), ks(joint[:, K:]), ks(resid)
+    return {"gy_ks_max": float(np.nanmax(ky)), "gy_ks_mean": float(np.nanmean(ky)),
+            "gy_n_nonfinite": int((~np.isfinite(g_y)).sum()),
+            "gz_implied_ks_max": float(np.nanmax(kz)), "gz_implied_ks_mean": float(np.nanmean(kz)),
+            "gz_implied_ks_cont": float(kz[0]),
+            "gz_resid_ks_max": float(np.nanmax(kr)), "gz_resid_ks_mean": float(np.nanmean(kr)),
+            "gz_n_nonfinite_joint": int((~np.isfinite(joint)).sum()),
+            "gcal_rows": int(len(rows))}
+
+
 def evaluate(cfg: Config, flow, data: dict, losses: dict, wall_time_s: float,
              timings: dict | None = None, u_z=None):
     """Per-pixel ``tau_hat`` for the configured arm, scored against the truth.
@@ -1159,8 +1349,27 @@ def evaluate(cfg: Config, flow, data: dict, losses: dict, wall_time_s: float,
     arm_metrics: dict = {}
     if cfg.arm == "location_translation":
         tau_hat = _tau_hat_location_translation(flow, K)
+    elif cfg.arm == "location_translation_gaussian":
+        # the shift is an exact parameter on the FITTING scale: x per-pixel sd for the data scale.
+        # The paired CRN sample difference is kept as a cross-check (and feeds the sample
+        # diagnostics and tau(u) curves exactly as for the flexible arms).
+        from frugal_flows.gaussian_scale import shift_vector
+        ot = outcome_transform_for(cfg, data)
+        scale = outcome_scale(cfg, data)
+        shift = np.asarray(shift_vector(flow), np.float64)
+        tau_hat = shift * (scale if scale is not None else 1.0)
+        tau_crn, arm_metrics, extras = _tau_hat_flexible_continuous(cfg, flow, data, K, ot=ot)
+        extras["tau_hat_crn"] = np.asarray(tau_crn)
+        extras["shift_fit_scale"] = shift
+        arm_metrics["shift_vs_crn_maxabs"] = float(np.max(np.abs(np.asarray(tau_crn) - tau_hat)))
+        arm_metrics["ate_mae_crn"] = float(np.abs(np.asarray(tau_crn) - np.asarray(data["ATE"])).mean())
     else:
-        tau_hat, arm_metrics, extras = _tau_hat_flexible_continuous(cfg, flow, data, K)
+        tau_hat, arm_metrics, extras = _tau_hat_flexible_continuous(
+            cfg, flow, data, K, ot=outcome_transform_for(cfg, data))
+    if cfg.y_scaling != "none":
+        ot_ = outcome_transform_for(cfg, data)
+        extras["y_mean"] = np.asarray(ot_._mean)
+        extras["y_sd"] = np.asarray(ot_._sd)
     if cfg.model == "margin_sep":       # the second arm's fit, alongside arm 0's standard keys
         arm_metrics.update({
             "best_val_loss_arm1": float(np.min(losses["val_arm1"])),
@@ -1177,6 +1386,15 @@ def evaluate(cfg: Config, flow, data: dict, losses: dict, wall_time_s: float,
         **_regional_metrics("d0", om["d0"], masks, with_mae=False),      # sampled T=0 mean − untreated images
         **_regional_metrics("d1", om["d1"], masks, with_mae=False),      # sampled T=1 mean − treated images
     })
+    # leftover confounding (2026-10-01): slope of the error on the dataset's imbalance map
+    # (scripts/exp_ate_recovery/analyse_grid_8x8_alldigits.py), and the share of the naive
+    # bias retained (halo_metrics.retained_confounding: 0 = truth, 1 = naive difference)
+    _imb = np.asarray(om["imbalance"], np.float64)
+    _err = np.asarray(tau_hat, np.float64) - np.asarray(data["ATE"], np.float64)
+    arm_metrics["slope_imb"] = float(np.polyfit(_imb, _err, 1)[0])
+    arm_metrics["rho_retained"] = float(np.dot(_err, _imb) / np.dot(_imb, _imb))
+    arm_metrics.update({"y_scaling": cfg.y_scaling, "shift_init": cfg.shift_init,
+                        "z_shuffle_seed": cfg.z_shuffle_seed if cfg.z_shuffle_seed is not None else -1})
 
     truth = np.asarray(data["ATE"])
     support = truth != 0
@@ -1652,6 +1870,16 @@ def variant_tag(cfg: Config) -> str:
     # copula u-marginal penalty weight, when on (from 2026-09-28)
     if getattr(cfg, "copula_umarg_weight", 0.0):
         var.append(f"umw{cfg.copula_umarg_weight:g}")
+    # 2026-10-01 (Gaussian-scale grid): outcome scaling, shift start, placebo-shuffled covariates,
+    # shift learning-rate multiplier -- each named only when not the default
+    if getattr(cfg, "y_scaling", "none") == "standardize":
+        var.append("ystd")
+    if getattr(cfg, "shift_init", "zero") != "zero":
+        var.append(f"shi{cfg.shift_init}")
+    if getattr(cfg, "z_shuffle_seed", None) is not None:
+        var.append(f"zshuf{cfg.z_shuffle_seed}")
+    if getattr(cfg, "shift_lr_mult", 1.0) != 1.0:
+        var.append(f"shlr{cfg.shift_lr_mult:g}")
     return "_".join(var)
 
 
@@ -1831,7 +2059,9 @@ def _wandb_start(cfg: Config, run_id: str):
         group=cfg.wandb_group or cfg.preset,
         job_type=f"{ARM_SHORT[cfg.arm]}/{cond}",
         name=wandb_name_of(run_id),
-        tags=[cfg.preset, ARM_SHORT[cfg.arm], cond, f"k{cfg.size**2}"] + extra,
+        tags=[cfg.preset, ARM_SHORT[cfg.arm], cond, f"k{cfg.size**2}"]
+             + (["ystd"] if cfg.y_scaling == "standardize" else [])
+             + (["zshuf"] if cfg.z_shuffle_seed is not None else []) + extra,
         # run_id / uid / wandb_name link the wandb run to its folder (check_runs compares them;
         # added 2026-09-30 -- runs before then do not carry them)
         config={**asdict(cfg), "hidden_ranks_rule": HIDDEN_RANKS_RULE,
@@ -1952,7 +2182,9 @@ def _run_one_inner(cfg: Config, run_id: str, run_dir: str, wb) -> dict:
                 try:
                     idx, _ = heldout_idx(cfg, flow, data, u_z, losses)
                     masks = region_masks(cfg.size, cfg.effective_radius)
-                    cop_met, cop_arr = cd.compute(flow, data, u_z, idx, masks[0],
+                    _ot = outcome_transform_for(cfg, data)   # the flow's own input scale
+                    data_fit = data if _ot is None else {**data, "Y": np.asarray(_ot.forward(jnp.asarray(data["Y"])))}
+                    cop_met, cop_arr = cd.compute(flow, data_fit, u_z, idx, masks[0],
                                                   tau_hat - np.asarray(data["ATE"]), masks,
                                                   n_mc=cfg.copula_diag_n_mc, seed=cfg.seed_fit)
                 except Exception as exc:  # noqa: BLE001 -- recorded, not swallowed
@@ -1966,6 +2198,19 @@ def _run_one_inner(cfg: Config, run_id: str, run_dir: str, wb) -> dict:
                     extras.update(cop_arr)
                     print(f"copula diagnostics on {cop_met['cop_rows']} rows (n={cop_met['cop_n']}) "
                           f"in {cop_met['cop_seconds']:.0f}s")
+            if cfg.model == "ff" and cfg.arm in GAUSS_ARMS and u_z is not None:
+                # latent calibration of the Gaussian-scale flow (halo_models.gff_calibration,
+                # trimmed): g_Y vs N(0,1) per pixel on the held-out rows; the model-implied
+                # g_Z margin vs N(0,1) from GAUSS_CALIB_DRAWS joint draws
+                _t = time.monotonic()
+                try:
+                    idx, _ = heldout_idx(cfg, flow, data, u_z, losses)
+                    metrics.update(gaussian_calibration(cfg, flow, data, u_z, idx))
+                    metrics["gcal_seconds"] = float(time.monotonic() - _t)
+                except Exception as exc:  # noqa: BLE001 -- recorded, not swallowed
+                    metrics["gcal_error"] = f"{type(exc).__name__}: {exc}"
+                    print(f"gaussian calibration FAILED: {metrics['gcal_error']}")
+                    traceback.print_exc()
             y0_draws, y1_draws = extras.pop("_y0", None), extras.pop("_y1", None)
             if y0_draws is not None:
                 # generated-outcome quality per arm (sample_diagnostics.py), from the same
