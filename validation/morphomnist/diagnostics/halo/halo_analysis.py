@@ -1,7 +1,7 @@
 """Halo ladder analysis (HALO_PREREG.md v1, "Gates" and "Analysis and wording").
 
-    python halo_analysis.py --stage {S1,S2,S3,S4,S5,all} --runs-root ~/work/halo-runs
-                            [--compare-root ~/work/halo-runs]   (S5: where S0/S1/S2/S4 live)
+    python halo_analysis.py --stage {S1,S2,S3,S4,S5,S6,all} --runs-root ~/work/halo-runs
+                            [--compare-root ~/work/halo-runs]   (S5/S6: where S0/S1/S2/S4 live)
 
 Unit = seed_data (a replication on the fixed digit-0 corpus for Corpus A; a disjoint
 all-digit draw for Corpus B): maps and per-cell scalars are averaged over seed_fit within
@@ -194,7 +194,8 @@ def gate(r: dict) -> dict:
     lo, hi = r["ci"]
     ok_i = np.isfinite(r.get("p_holm", np.nan)) and r["p_holm"] < 0.05
     ok_ii = np.isfinite(lo) and (lo > 0 or hi < 0)
-    ok_iii = np.isfinite(r["mean"]) and abs(r["mean"]) >= MIN_EFFECT.get(r["endpoint"], 0.0)
+    # a row may carry its family's own minimum effect (S6, Amendment A2); else the v1.1 table
+    ok_iii = np.isfinite(r["mean"]) and abs(r["mean"]) >= r.get("min_effect", MIN_EFFECT.get(r["endpoint"], 0.0))
     r["resolved"] = bool(ok_i and ok_ii and ok_iii)
     unit = UNIT[_corpus(r["arm"])]
     if r["resolved"]:
@@ -501,6 +502,129 @@ def s5_rows(allg: dict, croot: str) -> tuple[list[dict], list[str]]:
     return rows, attr
 
 
+# ------------------------------------------------------------------ S6 (Amendment A2)
+S6_ARMS = {"U": "ff_cond/P1/bs1/E1", "N": "n_cond/P1/bs1/E1", "A2": "a2_cond/P1/bs1/E1",
+           "LT": "lt/P0/bs1/E1", "LT/P1": "lt/P1/bs1/E1", "LT-N": "lt_n/P1/bs1/E1"}
+S6_COMPARE = {S6_ARMS["U"], S6_ARMS["A2"], S6_ARMS["LT"]}       # from S2
+S6_TAU0 = ("n_cond/P1/bs0/E1", "lt_n/P1/bs0/E1", "lt/P1/bs0/E1")
+S6_EP = ("ate_mae", "Etau_disc_mean")
+S6_MIN = {"ate_mae": 0.003, "Etau_disc_mean": 0.01}            # A2 minimum effects
+S6_SEC = ("ate_mae_off", "KS_active_mean", "Rsd_quiet_median")
+
+
+def _s6_cell(maps: dict) -> dict:
+    """Per-CELL S6 endpoints (Amendment A2), later averaged over seed_fit within seed_data:
+    ate_mae = mean |E_tau| over all 64 px; ate_mae_off = the same over ATE == 0 px;
+    KS_active_mean = mean over active px of (KS0 + KS1) / 2; Rsd_quiet_median = median
+    log2 R_sd0 (do(0) arm) over quiet px; ate_mae_sampled = mean |tau_hat_crn - ATE| (equal
+    to ate_mae except for the LT arms, whose primary tau_hat is the fitted ate vector)."""
+    et, ate = np.asarray(maps["E_tau"], float), np.asarray(maps["ATE"], float)
+    act, quiet = maps["cls_active"].astype(bool), maps["cls_quiet"].astype(bool)
+    ks = (np.asarray(maps["KS0"], float) + np.asarray(maps["KS1"], float)) / 2
+    return {"ate_mae": float(np.mean(np.abs(et))), "ate_mae_off": _cm(np.abs(et), ate == 0),
+            "KS_active_mean": _cm(ks, act), "Rsd_quiet_median": _cm(maps["R_sd0"], quiet, "median"),
+            "ate_mae_sampled": float(np.mean(np.abs(np.asarray(maps["tau_hat_crn"], float) - ate)))}
+
+
+def _add_s6_derived(groups: dict) -> None:
+    """Write the per-cell S6 endpoints (seed_fit-averaged) into every seed's ``ep``. This
+    replaces the seed-mean-map ``Rsd_quiet_median`` with the per-cell one for S6 tables."""
+    for G in groups.values():
+        for v in G["seed"].values():
+            if "E_tau" not in v["maps"]:
+                continue
+            per = [_s6_cell(c["maps"]) for c in v["cells"]]
+            for k in per[0]:
+                v["ep"][k] = float(np.nanmean([p[k] for p in per]))
+
+
+def _naive_s6(croot: str) -> dict:
+    """Model-free reference: per seed_data, mean |naive T-difference - ATE| over 64 px on
+    the E1 tau=1 data (S0 ``imb_E1_bs1``)."""
+    vals = {}
+    for sd in range(31, 41):
+        f = os.path.join(croot, "S0", f"s0_sd{sd}.npz")
+        if os.path.exists(f):
+            vals[sd] = float(np.mean(np.abs(np.load(f)["imb_E1_bs1"])))
+    x = np.array(list(vals.values()))
+    return {"per_seed": vals, "mean": float(x.mean()) if len(x) else float("nan"), "ci": list(boot_ci(x))}
+
+
+def s6_rows(allg: dict) -> tuple[list[dict], list[str], list[str]]:
+    """Amendment A2. Primary family: Holm over 3 contrasts x 2 endpoints (ate_mae,
+    Etau_disc_mean): U - N, N - A2, N - LT-N, gated with the A2 minimum effects. Exploratory
+    rows carry CIs only. Returns (rows, gate lines, prediction-vs-outcome lines)."""
+    _add_s6_derived(allg)
+    A = S6_ARMS
+    fam = "S6 primary (Amendment A2)"
+    prim = [(A["U"], A["N"]), (A["N"], A["A2"]), (A["N"], A["LT-N"])]
+    rows = [{"family": fam, "kind": "primary", "endpoint": ep, "arm": a, "ref": b, "min_effect": S6_MIN[ep],
+             **paired(allg, a, b, ep)} for a, b in prim if a in allg and b in allg for ep in S6_EP]
+    for r, ph in zip(rows, holm([r["p"] for r in rows])):
+        r["p_holm"] = ph
+        gate(r)
+    gates = [f"{r['arm']} - {r['ref']} [{r['endpoint']}]: {r['text']}" for r in rows]
+    expl = [(A["LT/P1"], A["LT"], "LT(P0) - LT/P1"), (A["LT-N"], A["LT/P1"], "LT/P1 - LT-N"),
+            (A["LT-N"], A["U"], "U - LT-N"), (A["A2"], A["U"], "U - A2")]
+    for ref, arm, name in expl:
+        rows += exploratory(allg, ref, [arm], S6_EP + S6_SEC + ("ate_mae_sampled",), f"S6 exploratory {name}")
+    for a, b in prim:
+        rows += exploratory(allg, b, [a], S6_SEC, f"S6 exploratory secondary {a} - {b}")
+    for L in S6_TAU0:
+        for ep in ("Etau_disc_mean", "Etau_active_off_mean", "ate_mae"):
+            rows += _level(allg, L, ep, "S6 exploratory tau=0 level vs 0")
+    # predictions stated in A2 before running, printed beside outcomes; gates are NOT changed
+    un = _find(rows, "primary", A["U"], "ate_mae", A["N"]) or {}
+    ua2 = _find(rows, "exploratory", A["U"], "ate_mae", A["A2"]) or {}
+    preds = []
+    m_un, m_ua2 = un.get("mean", float("nan")), ua2.get("mean", float("nan"))
+    preds.append(f"PREDICTION U - N > 0 and >= half of U - A2 (ate_mae) | OUTCOME: U - N mean {m_un:+.4f} "
+                 f"({un.get('text', 'n/a')}); U - A2 mean {m_ua2:+.4f} (exploratory); ratio (U-N)/(U-A2) = "
+                 f"{(m_un / m_ua2) if np.isfinite(m_ua2) and m_ua2 != 0 else float('nan'):.2f}; "
+                 f"direction {'undetermined (nan)' if not (np.isfinite(m_un) and np.isfinite(m_ua2)) else 'as predicted' if m_un > 0 and m_un >= 0.5 * m_ua2 else 'NOT as predicted'} "
+                 f"(descriptive; only the gate line above resolves anything)")
+    for ep in S6_EP:
+        r = _find(rows, "primary", A["N"], ep, A["A2"]) or {}
+        preds.append(f"PREDICTION N - A2 not resolved [{ep}] | OUTCOME: resolved={r.get('resolved')}; {r.get('text', 'n/a')}")
+    r = _find(rows, "primary", A["N"], "ate_mae", A["LT-N"]) or {}
+    preds.append(f"PREDICTION N - LT-N > 0 (ate_mae) | OUTCOME: mean {r.get('mean', float('nan')):+.4f}; {r.get('text', 'n/a')}")
+    return rows, gates, preds
+
+
+def s6_figure(allg: dict, naive: dict, path: str) -> None:
+    """Top: seed-mean E_tau maps (fixed +-0.08) for the six tau=1 arms. Bottom: per-cell ATE
+    MAE (seed_fit-averaged), mean +- 95% bootstrap CI over seed_data, naive-difference line."""
+    names = [k for k in S6_ARMS if S6_ARMS[k] in allg]
+    fig = plt.figure(figsize=(2.2 * max(len(names), 1), 6.0), layout="constrained")
+    gs = fig.add_gridspec(2, max(len(names), 1), height_ratios=[1, 1.2])
+    im = None
+    for j, k in enumerate(names):
+        ss = list(allg[S6_ARMS[k]]["seed"].values())
+        ax = fig.add_subplot(gs[0, j])
+        ax.set_xticks([]), ax.set_yticks([])
+        im = ax.imshow(np.mean([s["maps"]["E_tau"] for s in ss], 0).reshape(8, 8), cmap="RdBu_r",
+                       vmin=-0.08, vmax=0.08)
+        ax.set_title(f"{k}\n{S6_ARMS[k]}\n(n_sd={len(ss)})", fontsize=7)
+    if im is not None:
+        fig.colorbar(im, ax=fig.axes[:len(names)], location="right", shrink=0.8, label="E_tau (logit)")
+    ax = fig.add_subplot(gs[1, :])
+    ms, lo, hi = [], [], []
+    for k in names:
+        x = np.array([v for v in _vals(allg, S6_ARMS[k], "ate_mae").values() if np.isfinite(v)])
+        m = float(x.mean()) if len(x) else float("nan")
+        c = boot_ci(x)
+        ms.append(m), lo.append(m - c[0] if np.isfinite(c[0]) else 0), hi.append(c[1] - m if np.isfinite(c[1]) else 0)
+    ax.bar(range(len(names)), ms, yerr=[lo, hi], capsize=4, color="0.55")
+    if np.isfinite(naive.get("mean", np.nan)):
+        ax.axhline(naive["mean"], color="C3", ls="--", lw=1, label=f"naive difference {naive['mean']:.4f}")
+        ax.legend(fontsize=7)
+    ax.set_xticks(range(len(names)), names)
+    ax.set_ylabel("ATE MAE (mean |E_tau| over 64 px)")
+    ax.set_title("S6: per-cell ATE MAE, mean and 95% bootstrap CI over seed_data", fontsize=8)
+    fig.savefig(path, dpi=110)
+    plt.close(fig)
+
+
 def analyse(stage: str, root: str, compare_root: str | None = None) -> dict:
     croot = compare_root or root
     recs = load_stage(root, stage)
@@ -510,6 +634,8 @@ def analyse(stage: str, root: str, compare_root: str | None = None) -> dict:
     extra = load_stage(croot, "S1") + load_stage(croot, "S2") if stage == "S3" else []
     if stage == "S5":                               # comparison arms from S1/S2/S4 (Amendment A1)
         extra = [r for st in ("S1", "S2", "S4") for r in load_stage(croot, st) if label(r["cfg"]) in S5_COMPARE]
+    if stage == "S6":                               # comparison arms U, A2, LT(P0) from S2 (Amendment A2)
+        extra = [r for r in load_stage(croot, "S2") if label(r["cfg"]) in S6_COMPARE]
     check_flags(recs + extra)
     out = {"stage": stage, "n_cells": len(recs),
            "excluded": [r["run_id"] for r in recs if excluded(r)],
@@ -622,6 +748,25 @@ def analyse(stage: str, root: str, compare_root: str | None = None) -> dict:
                              for k in ("floor_value", "y_sd_global", "n_floored")}
                          for L, G in groups.items()}
         groups = {L: allg[L] for L in S5_PANEL if L in allg}      # figure + templates: the comparison rows
+    elif stage == "S6":
+        tmap = "E_tau"
+        out["compare_root"] = croot
+        out["compare_cells"] = {L: sum(len(sv["cells"]) for sv in G["seed"].values())
+                                for L, G in allg.items() if L not in groups}
+        r6, gates, preds = s6_rows(allg)
+        rows += r6
+        attr += gates
+        out["predictions"] = preds
+        out["naive_ate_mae"] = _naive_s6(croot)
+        out["endpoints"] = {L: {sd: {k: v for k, v in g["ep"].items() if not k.startswith("xt:")}
+                                for sd, g in G["seed"].items()} for L, G in allg.items()}
+        out["lt_ate_vs_sampled_meanabs"] = {L: float(np.mean([c["met"]["lt_ate_minus_crn_meanabs"]
+                                                              for sv in G["seed"].values() for c in sv["cells"]]))
+                                            for L, G in allg.items()
+                                            if all("lt_ate_minus_crn_meanabs" in c["met"]
+                                                   for sv in G["seed"].values() for c in sv["cells"])}
+        s6_figure(allg, out["naive_ate_mae"], os.path.join(adir, "S6_ate_mae.png"))
+        groups = {S6_ARMS[k]: allg[S6_ARMS[k]] for k in S6_ARMS if S6_ARMS[k] in allg}
     out["contrasts"], out["attribution"] = rows, attr
     out["templates_descriptive"] = {m: template_table(groups, m) for m in ("E_mu0", "E_sd0", "E_tau")}
     out["template_corr_mean"] = {L: np.mean([c["met"]["template_corr"] for s in G["seed"].values()
@@ -642,6 +787,14 @@ def to_md(out: dict, tmap: str) -> str:
          f"excluded (>0.1% non-finite/clamped, or diverged): {len(out['excluded'])} {out['excluded']}; Corpus-A quiet-count flagged: {len(out['quiet_flagged'])}", "",
          "## Gate outcomes and attribution (positive findings only)", ""]
     L += [f"- {a}" for a in out["attribution"]] or ["- (none)"]
+    if out.get("predictions"):
+        L += ["", "## Predictions stated before running (Amendment A2) beside their outcomes", "",
+              "Descriptive only: the gate lines above are the only resolved/unresolved statements.", ""]
+        L += [f"- {p}" for p in out["predictions"]]
+    if out.get("naive_ate_mae"):
+        nv = out["naive_ate_mae"]
+        L += ["", f"Naive-difference ATE MAE (S0 imb_E1_bs1, mean |.| over 64 px): {nv['mean']:.4f} "
+              f"[{nv['ci'][0]:.4f}, {nv['ci'][1]:.4f}] over {len(nv['per_seed'])} seed_data"]
     eps = sorted({k for g in out["endpoints"].values() for s in g.values() for k in s})
     L += ["", "## Endpoints (mean over seed_data of seed_fit-averaged values)", "",
           "| config | n_sd | " + " | ".join(eps) + " |", "|---|---|" + "---|" * len(eps)]
@@ -659,7 +812,8 @@ def to_md(out: dict, tmap: str) -> str:
     for cfg, row in out["templates_descriptive"][tmap].items():
         L.append(f"| {cfg} | " + " | ".join(f"{row[b]['mean']:+.3f} [{row[b]['ci'][0]:+.3f}, {row[b]['ci'][1]:+.3f}]"
                                            for b in TEMPLATE_COEFS + ("r2",)) + " |")
-    for k in ("cross_table", "template_corr_mean", "variance_split", "Emu0_corr_across_tau"):
+    for k in ("cross_table", "template_corr_mean", "variance_split", "Emu0_corr_across_tau",
+              "lt_ate_vs_sampled_meanabs", "compare_cells"):
         if k in out:
             L += ["", f"## {k}", "", "```", json.dumps(out[k], indent=1, default=float), "```"]
     return "\n".join(L) + "\n"
@@ -667,7 +821,7 @@ def to_md(out: dict, tmap: str) -> str:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stage", required=True, choices=["S1", "S2", "S3", "S4", "S5", "all"])
+    ap.add_argument("--stage", required=True, choices=["S1", "S2", "S3", "S4", "S5", "S6", "all"])
     ap.add_argument("--runs-root", default=os.path.expanduser("~/work/halo-runs"))
     ap.add_argument("--compare-root", default=None,
                     help="root holding S0/S1/S2/S4 comparison cells (default: --runs-root)")

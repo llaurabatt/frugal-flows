@@ -1,7 +1,7 @@
 """Halo ladder driver: enumerate a stage's cells (HALO_PREREG.md), launch one pinned
 subprocess per cell, fail closed on missing / duplicate identities.
 
-    python halo_driver.py --stage {S0,S1,S2,S3,S4,S5,all} [--conc 8] [--threads 1] [--resume]
+    python halo_driver.py --stage {S0,S1,S2,S3,S4,S5,S6,all} [--conc 8] [--threads 1] [--resume]
                           [--dry-run] [--smoke] [--runs-root ~/work/halo-runs]
 
 Outputs: <runs-root>/<stage>/<run_id>/ (halo_fit.py), <runs-root>/<stage>/_stage.json (cell
@@ -74,6 +74,9 @@ def _configs(stage: str) -> list[dict]:
         c += [dict(arm="ff_full", preproc="P5", task="cond", preset=e, base_shift=1.0, rank_mode="spread")
               for e in ("E1", "E2")]
         return c
+    if stage == "S6":                                   # Amendment A2: N, LT-N and LT at P1, E1
+        return [dict(arm=a, preproc="P1", task="cond", preset="E1", base_shift=b, rank_mode="spread")
+                for b in (1.0, 0.0) for a in ("n_cond", "lt_n", "lt")]
     raise ValueError(stage)
 
 
@@ -100,6 +103,8 @@ def is_primary(stage: str, c: dict) -> bool:
                                                   ("a2_cond", "P1"), ("lt", "P0")}
     if stage == "S4":
         return c["arm"] == "ff_full" and c["preset"] == "E2"
+    if stage == "S6":                                   # A2: tau=1 primary; tau=0 exploratory
+        return c["base_shift"] == 1.0
     return False
 
 
@@ -281,7 +286,7 @@ def run_stage(stage, a) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stage", required=True, choices=["S0", "S1", "S2", "S3", "S4", "S5", "all"])
+    ap.add_argument("--stage", required=True, choices=["S0", "S1", "S2", "S3", "S4", "S5", "S6", "all"])
     ap.add_argument("--conc", type=int, default=8)
     ap.add_argument("--threads", type=int, default=1)
     ap.add_argument("--resume", action="store_true")

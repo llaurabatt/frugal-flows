@@ -84,7 +84,7 @@ def test_leak_x_zero_for_perfect_model():
     assert np.isnan(m["LEAK_X0"]).all()
 
 
-@pytest.mark.parametrize("stage,n", [("S1", 221), ("S2", 180), ("S3", 180), ("S4", 80), ("S5", 100)])
+@pytest.mark.parametrize("stage,n", [("S1", 221), ("S2", 180), ("S3", 180), ("S4", 80), ("S5", 100), ("S6", 90)])
 def test_cell_counts_and_identities(stage, n):
     cells = hdr.enumerate_cells(stage)
     assert len(cells) == n
@@ -142,3 +142,80 @@ def test_p5_global_sd_zero_guard():
     t = hd.FlooredStandardize().fit(Y)
     assert t.floor_value == 0.25 and np.all(t.y_scale == 0.25)    # `or 1.0` guard
     assert np.allclose(t.inverse(t.forward(Y)), Y)
+
+
+# ------------------------------------------------------------------ S6 (Amendment A2)
+def test_s6_cells():
+    cells = hdr.enumerate_cells("S6")
+    assert len(cells) == 90 and all(c["seed_fit"] != c["seed_data"] for c in cells)
+    assert all(c["preproc"] == "P1" and c["preset"] == "E1" and c["corpus"] == "A" for c in cells)
+    prim = [c for c in cells if c["primary"]]
+    assert len(prim) == 60 and all(c["base_shift"] == 1.0 for c in prim)
+    assert {c["seed_fit"] for c in prim} == {41, 42}
+    expl = [c for c in cells if not c["primary"]]
+    assert len(expl) == 30 and all(c["base_shift"] == 0.0 and c["seed_fit"] == 41 for c in expl)
+    assert {c["arm"] for c in cells} == {"n_cond", "lt_n", "lt"}
+    assert len(hdr.enumerate_cells("S6", smoke=True)) == 6
+
+
+def test_n_cond_sample_shape_finite():
+    """N on a tiny K=4 synthetic: build, a 2-epoch fit, CRN draws: shape, finite, no clamp."""
+    import jax.random as jr
+    import halo_models as hm
+    from flowjax.bijections import Invert, Scan
+    from flowjax.distributions import Normal
+    from frugal_flows.bijections.masked_autoregressive_spread import MaskedAutoregressiveSpread
+    rng = np.random.default_rng(0)
+    t = rng.integers(0, 2, (300, 1)).astype(np.float32)
+    Y = (rng.normal(size=(300, 4)) + t).astype(np.float32)
+    cfg = dict(arm="n_cond", task="cond", seed_fit=41, width=8, depth=1, layers=2, knots=4,
+               lr=1e-2, max_epochs=2, patience=5, batch=50)
+    d0 = hm.build("n_cond", jr.PRNGKey(0), 4, 1, cfg)
+    assert isinstance(d0.base_dist, Normal) and isinstance(d0.bijection, Invert)
+    assert isinstance(d0.bijection.bijection, Scan) and d0.cond_shape == (1,)
+    assert any(isinstance(x, MaskedAutoregressiveSpread) for x in
+               __import__("jax").tree_util.tree_leaves(d0, is_leaf=lambda x: isinstance(x, MaskedAutoregressiveSpread)))
+    dist, _ = hm.fit_arm(cfg, Y, t)
+    y0, y1, c = hm.sample_arms(7, dist, 200, "cond")
+    assert y0.shape == (200, 4) and y1.shape == (200, 4) and c == 0
+    assert np.isfinite(y0).all() and np.isfinite(y1).all()
+
+
+def test_lt_n_tau_hat_is_ate_times_p1_sd():
+    """LT-N at P1: the metric tau_hat is the fitted LocCond ate times the per-pixel P1 sd."""
+    import halo_fit as hf
+    import halo_models as hm
+    rng = np.random.default_rng(1)
+    t = rng.integers(0, 2, (300, 1)).astype(np.float32)
+    Yraw = (rng.normal(size=(300, 4)) * np.array([0.5, 1, 2, 3]) + 0.7 * t).astype(np.float32)
+    pre = hd.Preproc("P1").fit(Yraw)
+    cfg = dict(arm="lt_n", task="cond", seed_fit=41, width=8, depth=1, layers=2, knots=4,
+               lr=1e-2, max_epochs=3, patience=5, batch=50)
+    dist, _ = hm.fit_arm(cfg, pre.forward(Yraw), t)
+    a = hm.loccond_ate(dist)
+    assert np.abs(a).max() > 0                                         # it was fitted
+    sd = np.asarray(pre.transform._sd, np.float64)
+    assert np.allclose(hf.ate_to_data_scale(pre, a), a * sd, rtol=1e-5, atol=1e-6)
+    # the maps use it as tau_hat (override of the CRN mean); maps need K=64, so tile
+    G = rng.normal(size=(50, 64))
+    tau = np.tile(hf.ate_to_data_scale(pre, a), 16)
+    m = hmx.maps(G, G, G + 1, G + 1, np.zeros(64), tau, lo=hd.QUIET_LO, hi=hd.QUIET_HI, floor_thr=hd.FLOOR_Y)
+    assert np.allclose(m["tau_hat"], np.tile(a * sd, 16), rtol=1e-5, atol=1e-6)
+    assert np.allclose(m["E_tau"], m["tau_hat"]) and np.allclose(m["tau_hat_crn"], 1)
+
+
+def test_lt_p1_unit_conversion_roundtrip():
+    """P1 shift conversion round-trips: a logit-unit effect d standardised to d/sd and mapped
+    back gives d; and P0 returns the vector unchanged bit for bit."""
+    import halo_fit as hf
+    rng = np.random.default_rng(2)
+    Y = rng.normal(size=(1000, 64)) * rng.uniform(0.05, 2, 64) + rng.normal(size=64)
+    pre = hd.Preproc("P1").fit(Y)
+    sd = np.asarray(pre.transform._sd, np.float64)
+    d = rng.normal(size=64)
+    assert np.allclose(hf.ate_to_data_scale(pre, d / sd), d, rtol=1e-5, atol=1e-6)
+    # the shift is what the transform implies: forward(y + d) - forward(y) == d / sd
+    z = np.asarray(pre.forward(Y[:5] + d)) - np.asarray(pre.forward(Y[:5]))
+    assert np.allclose(z, d / sd, rtol=1e-4, atol=1e-5)
+    p0 = hd.Preproc("P0").fit(Y)
+    assert np.array_equal(hf.ate_to_data_scale(p0, d), d)

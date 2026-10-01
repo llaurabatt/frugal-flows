@@ -54,6 +54,21 @@ def _drop_nonfinite(y0, y1):
     return y0[keep], (None if y1 is None else y1[keep]), int((~keep).sum())
 
 
+LT_ARMS = ("lt", "lt_n")                  # location-translation arms: tau_hat = fitted LocCond ate
+
+
+def ate_to_data_scale(pre, ate) -> np.ndarray:
+    """A LocCond ``ate`` fitted on the preprocessed scale, mapped to logit (data) units.
+    Every fit-time preprocessing is affine per column (P1: z = (y - mean)/sd), so a shift
+    of ``ate`` in z is a shift of ``inverse(ate) - inverse(0)`` = ``ate * sd`` in y. P0 (no
+    fit-time transform) returns ``ate`` unchanged, bit for bit."""
+    ate = np.asarray(ate, np.float64)
+    if pre.transform is None:
+        return ate
+    z0 = np.zeros((1, ate.shape[0]))
+    return np.asarray(pre.inverse(ate[None, :]), np.float64)[0] - np.asarray(pre.inverse(z0), np.float64)[0]
+
+
 def _fit_and_sample(cfg: dict, data: dict, pre):
     """Returns (draw function seed_mc -> (y0, y1, n_clamped) on the DATA scale, fit info,
     loss dicts, extra metrics)."""
@@ -105,8 +120,9 @@ def _fit_and_sample(cfg: dict, data: dict, pre):
         return draw, [losses], extra
     import halo_models as hm
     dist, losses = hm.fit_arm(cfg, Y, X)
-    if arm == "lt":
-        extra["lt_ate"] = hm.loccond_ate(dist)
+    if arm in LT_ARMS:
+        extra["lt_ate_fit_scale"] = hm.loccond_ate(dist)
+        extra["lt_ate"] = ate_to_data_scale(pre, extra["lt_ate_fit_scale"])
 
     def draw(seed):
         y0, y1, c = hm.sample_arms(seed, dist, cfg["n_mc"], "cond" if arm == "sep" else cfg["task"])
@@ -183,6 +199,11 @@ def run(cfg: dict) -> dict:
     if "lt_ate" in extra:
         metrics["lt_ate"] = extra["lt_ate"].tolist()
         metrics["lt_ate_minus_crn_maxabs"] = float(np.abs(extra["lt_ate"] - m["tau_hat_crn"]).max())
+        # S6 (Amendment A2): both tau_hats kept; analysis uses the ate-vector one (as for lt)
+        metrics["lt_ate_fit_scale"] = extra["lt_ate_fit_scale"].tolist()
+        metrics["tau_hat_ate_vector"] = extra["lt_ate"].tolist()
+        metrics["tau_hat_sampled"] = np.asarray(m["tau_hat_crn"]).tolist()
+        metrics["lt_ate_minus_crn_meanabs"] = float(np.abs(extra["lt_ate"] - m["tau_hat_crn"]).mean())
     floors = hmx.oracle_floors(np.asarray(ref0), None if ref1 is None else np.asarray(ref1),
                                np.random.default_rng(cfg["seed_data"] + 9901))
     t_metrics = time.monotonic() - t0
