@@ -192,3 +192,39 @@ Holm within each declared primary family; everything else labelled exploratory. 
 clamped or non-finite draws are reported and excluded from means. Cells from differing XLA flag strings
 are never pooled. All S0–S4 cells run in one overnight batch (Dan's decision), so gates are applied post
 hoc and the analysis states, for S3 and S4, which S1/S2 rule they would have served.
+
+---
+
+## Amendment A1 (2026-10-01 09:30, after S0–S4 and Codex C1 round 1; appended, not edited in)
+
+**Trigger.** The frengression comparator (`exp_frengression_recovery.py:314-322`, frozen tuning setting
+`y_scaling=per_pixel, y_sd_floor=0.25`) fits a per-pixel standardised target with the sd FLOORED at a
+quarter of the global sd, and inverts on samples. The frugal-flow runner fitted raw logits. Dan asked
+whether the same scaling works for the frugal-flow architecture.
+
+**New preprocessing P5 (frengression-style):** per column, `Z_k = (Y_k − mean_k) / s_k` with
+`s_k = max(sd_k, 0.25 · sd(Y_all))`, fitted on the fitting data, inverted on samples. Affine, so
+estimand-preserving.
+
+**Cells (stage S5, seeds 31–40 × {41, 42} = 20 fits per config):** S1-type A1s/P5 (Corpus A and B);
+S2-type ff_cond/P5 at τ = 1 (Corpus A); S4-type ff_full/P5 on E1 and E2. 100 cells.
+
+**Primary endpoints and family (Holm, 3 contrasts, same gates as v1.1):** on `LEAK_X` exact-floor and
+median log2 `R_sd` exact-floor: A1s/P5 vs A1s/P0 (does the floored scaling remove the elevation);
+A1s/P5 vs A1s/P1 (does it differ from full standardisation); elevation of A1s/P5 vs reference data.
+Exploratory: Corpus-B replication; S2 E_tau disc bias and floor-referenced active-off RMS, ff/P5 vs
+ff/P1 and vs ff/P0; S4 E2 slope and E2 − E1 paired disc bias under P5. Attribution rules: a resolved
+removal under P5 that is not resolvedly different from P1 → "floored scaling suffices"; P5 elevated
+while P1 is not → "the floor leaves part of the artefact"; nulls are worded as in v1.1.
+
+## Amendment A1.1 (2026-10-01 10:05, after Codex C1 round 2 finding R2-F4; appended BEFORE any S5
+outcome has been opened, aggregated or inspected — attested)
+
+The A1 rule "P5 not resolvedly different from P1 → floored scaling suffices" rested on a null and is
+replaced. Non-inferiority margins equal to the v1.1 minimum effects are declared: `LEAK_X` exact-floor
+0.02; median log2 `R_sd` exact-floor 0.5. "Floored scaling suffices" requires ALL of: (i) A1s/P5 vs
+A1s/P0 resolved (removal); (ii) A1s/P5 not elevated vs reference data; (iii) the upper bound of the
+paired A1s/P5 − A1s/P1 95% bootstrap CI below the margin on BOTH endpoints. If (i) and (ii) hold but
+(iii) fails: "floored scaling removes the elevation but is not shown to match full standardisation
+within the margin". If (i) fails: "floored scaling does not resolve the elevation at this n". The
+exploratory S2/S4-type P5 comparisons are reported with CIs only.
