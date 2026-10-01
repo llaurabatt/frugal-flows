@@ -572,6 +572,41 @@ Options that were tested and **not adopted** (kept for reproducibility; evidence
 `--save-model` (default on): the fitted weights go to `model.eqx`; `load_model(run_dir)` rebuilds
 the flow (identical effect map). Frengression saves `model.pt` (`exp_frengression_recovery.load_model`).
 
+### Using a saved fit: effect map, samples, counterfactuals
+
+Fits made from 2026-10-01 save their weights (`model.eqx`). This reloads one, reproduces its effect
+map, and transports observed images to the other treatment (checked on an all-digits E2 fit: the
+effect map matches the saved one exactly; counterfactual error 0.037 per pixel against the truth,
+versus 0.19 for leaving the image unchanged).
+
+```python
+import exp_ate_recovery as E, dataset_store as DS
+import jax.random as jr
+from frugal_flows.interventions import interventional_samples, counterfactual_flexible
+
+run = "runs/exp_ate_recovery/<run-id>"        # a flexible_continuous fit with model.eqx
+flow = E.load_model(run)                       # the fitted flow (rebuilt, weights filled in)
+a = DS.run_arrays(run)                         # saved arrays + Y / ITE rebuilt from config.json
+
+# interventional samples under do(T=0) and do(T=1), paired; their mean difference is the effect map
+draws = interventional_samples(jr.key(0), flow, cond_dim=1, n_mc=5000, dim_y=a["Y"].shape[1])
+tau = (draws["y1"] - draws["y0"]).mean(0)      # = a["tau_hat"] (same key and draws as the fit's read-out)
+
+# counterfactual images of observed units under the other treatment (rank-preserving margin transport)
+t = a["X"][:, 0]
+y_cf = counterfactual_flexible(flow, a["Y"][:10], a["u_z"][:10], t[:10], 1 - t[:10])
+```
+
+Images are on the model's scale (dequantised logits of the pooled pixels). Frengression fits save
+`model.pt`; `exp_frengression_recovery.load_model(run)` returns the model and its scaled inputs.
+
+**Reproducibility.** A fit is determined by its config and seeds, but floating-point sums depend
+on how many CPU threads the process gets: the same fit run unpinned and pinned to 5 cores gives
+different results (effect maps differ by up to ~0.06, kept epoch 203 vs 168), while two runs pinned to
+*different* sets of 5 cores are identical (max difference 0). So a fit reproduces exactly given the same
+**number** of cores. The paper grid pins every fit to 5 cores (`taskset`); reproduce a grid fit with
+`taskset -c <any 5 cores>`. Fits made before 2026-10-01 ran unpinned and reproduce only unpinned.
+
 ### The run index: `runs/exp_ate_recovery/index.csv`
 
 One row per run, every column a query can need: identity (run id, uid, launch stamp,

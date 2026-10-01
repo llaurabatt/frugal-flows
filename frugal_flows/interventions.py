@@ -170,3 +170,33 @@ def tau_curve(y0, y1, n_bins=TAU_CURVE_BINS):
                          for a, b in zip(edges[:-1], edges[1:])])
     u_centers = (np.arange(n_bins) + 0.5) / n_bins
     return u_centers, tau_of_u
+
+
+def counterfactual_flexible(flow, y, u_z, t, t_new):
+    """Counterfactual images for observed units under the flexible-continuous arm (2026-10-01).
+
+    Rank-preserving margin transport: each image ``y`` (rows) is mapped to its ranks under the causal
+    margin at its observed treatment ``t``, and back to an image at ``t_new``:
+    ``y' = F*^{-1}(F*(y | t) | t_new)``. The copula is blind to the treatment, so the ranks carry
+    over unchanged; this is the abduction-action-prediction counterfactual under rank preservation.
+
+    The flexible arm's merged chain is, base -> data: [0] affine, [1] copula, [2] u_z affine,
+    [3] causal margin (Concatenate: margin on the image, identity on u_z), [4] Tanh stack. Only
+    blocks [4] and [3] are used. ``u_z`` is passed only because those blocks act on the full
+    (image, covariate-rank) vector; it does not change the result.
+
+    Args: ``y`` (n, K) observed images on the model's scale; ``u_z`` (n, d) the run's covariate ranks;
+    ``t``, ``t_new`` (n,) or (n, 1) treatments. Returns (n, K) counterfactual images.
+    """
+    blocks = unwrap(flow).bijection.bijections
+    margin, tanh = blocks[3], blocks[4]
+    y = jnp.asarray(y)
+    k = y.shape[1]
+    x = jnp.hstack([y, jnp.asarray(u_z, dtype=y.dtype)])
+    c_old = jnp.asarray(t, dtype=y.dtype).reshape(len(y), -1)
+    c_new = jnp.asarray(t_new, dtype=y.dtype).reshape(len(y), -1)
+    r = jax.vmap(tanh.inverse)(x)
+    r = jax.vmap(margin.inverse)(r, c_old)
+    out = jax.vmap(margin.transform)(r, c_new)
+    out = jax.vmap(tanh.transform)(out)
+    return np.asarray(out[:, :k])
