@@ -8,7 +8,7 @@
 set -u
 cd "$(dirname "$0")/../.."
 export JAX_PLATFORMS=cpu PYTHONUNBUFFERED=1
-SLOTS=48; CORES=5
+SLOTS=${SLOTS:-48}; CORES=5   # SLOTS=10 bash ... uses slots 0-9 only (50 cores); fits on higher slots finish untouched
 LOCK=runs/exp_ate_recovery/_scripts/grid_8x8_alldigits_slots
 FLOG=runs/exp_ate_recovery/_scripts/grid_8x8_alldigits_logs; RLOG=runs/frengression/_scripts/grid_8x8_alldigits_logs
 declare -A SHORT=([exp1_rct_homogeneous]=e1 [exp2_confounded_homogeneous]=e2 [exp3_confounded_heterogeneous]=e3

@@ -38,7 +38,8 @@ choices is in [`../docs/leftover_confounding/STATUS.md`](../docs/leftover_confou
 | `exp_ate_recovery/analyse_grid_8x8_alldigits.py` | per preset: flow 5-fit average, flow single fits, frengression, OLS — error over all pixels, disc / ring / background errors, leftover slope; **pass/fail vs frengression** (paired over datasets, diff < 2 se) | `runs/exp_ate_recovery/analysis/grid_8x8_alldigits.{md,csv}` |
 | `exp_ate_recovery/grid_8x8_alldigits_watch.sh` | reruns the analysis every 2 h while the grid runs | `.../_scripts/grid_8x8_alldigits_watch.log` |
 | `exp_ate_recovery/make_e2_weights_branch.sh` | builds the local results branch `multi-y-e2-weights` (E2 fits' weights, config, metrics) once the grid's E2 cells are done; does not push | git branch |
-| `exp_ate_recovery/cleanup_paused_launcher.sh` | one-off: ended the paused first grid launcher once its fits finished | — |
+| `exp_ate_recovery/cleanup_paused_launcher.sh` | one-off: ended the paused first grid launcher once its fits finished. **Bug:** its last line, `screen -S grid8 -X quit`, matched the running screen `grid8b` by prefix and killed 48 fits; use `end_paused_launcher.sh` instead | — |
+| `exp_ate_recovery/end_paused_launcher.sh <pid>` | ends a paused (SIGSTOPped) launcher once its fits finish, by pid only. To change the core count mid-grid: `kill -STOP` the launcher, kill its slot-waiting helper (the child running `sleep 10`), start `SLOTS=<n> bash grid_8x8_alldigits_v2.sh` in a new screen, and run this on the old pid | — |
 
 ## Resolution checks (16×16, 32×32)
 
