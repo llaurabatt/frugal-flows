@@ -358,3 +358,36 @@ pixels (0 = truth, 1 = naive); distance from the start, ‖tau_hat − init‖, 
 At ps_slope 2.4 the same quantities are reported without a pass line (dose response: ρ should not grow
 with confounding strength if the adjustment is genuine). A failure of any clause is reported as such; no
 clause is dropped after the fact. Scope: homogeneous additive effects on E2, digit 0, 8×8, lr 1e-2.
+
+## Amendment A6 (2026-10-01 21:00, appended before any S11 fit exists) — univariate stress test on the article's causl benchmarks
+
+**Trigger (Dan).** Does the Gaussian-scale reformulation carry over to the univariate (scalar Y) setting
+of the NeurIPS 2024 paper? Table 1 there: models M1 (4 gamma covariates), M2 (2 gamma + 2 binary), M3
+(5 gamma + 5 binary), true ATE ∈ {1, 5}, causal margin Y | do(T) ~ N(T·ATE + 1, 1), N = 25,000, simulated
+with R `causl` (`validation/data_processing_and_simulations/causl_sim_data_generation.py`). Published
+frugal-flow results: M1 0.98 ± 0.12 / 5.00 ± 0.24; M2 1.01 ± 0.10 / 5.01 ± 0.18; M3 1.00 ± 0.09 / 5.18 ± 0.30.
+
+**Stage S11.** Data generated once per (model, ATE, N, data seed) with the article's generators in the
+env that has R causl, saved as npz. Fits through `FrugalFlowModel.train_benchmark_model` (the package
+pipeline: stage-1 covariate ranks, then `train_frugal_flow`, outcome standardised by default), ATE by
+`estimate_ate`. Arms: existing `gaussian` (the article's arm), `location_translation`,
+`flexible_continuous`; new `location_translation_gaussian`, `flexible_continuous_gaussian`.
+Hyperparameters: those of `tests/test_causl_recovery.py` for every arm.
+- **Article block:** M1, M2, M3 × ATE {1, 5} × N = 25,000 × 10 data seeds × 5 arms = 300 fits.
+- **Small-sample block:** M2 × ATE 1 × N ∈ {2,000, 5,000} × 10 seeds × 5 arms = 100 fits.
+- **Misspecification block (the stress):** a non-Gaussian causal margin where the effect is NOT a pure
+  location shift — the gamma-outcome DGP of the July study (branch `spline-bias-analysis`,
+  `validation/diagnostics/`; true ATE 1.7634, where the additive arm was biased −1.11 at n = 20,000) —
+  N = 20,000 × 10 seeds × 5 arms = 50 fits. If that DGP cannot be reproduced exactly, a gamma margin
+  with treatment acting on the rate is used and its true ATE computed analytically; stated in the report.
+
+**Endpoints.** Per (block, DGP, arm): mean ATE estimate, bias, sd across seeds, RMSE; the naive
+difference in means; whether mean ± 2 sd covers the truth (the article's criterion).
+**Pass criteria for "the fix applies in the univariate setting", declared now (article block, each new
+arm separately):** (i) |mean bias| ≤ 0.10 at ATE 1 and ≤ 0.25 at ATE 5 on every model; (ii) mean ± 2 sd
+covers the truth on every model; (iii) RMSE not worse than the better of the existing `gaussian` and
+`location_translation` arms by more than 0.05 (ATE 1) / 0.15 (ATE 5), paired by data seed with a 95%
+bootstrap CI on the RMSE difference reported. Small-sample and misspecification blocks are reported
+without a pass line. Predictions, stated before running: both new arms pass on the article block; on
+the misspecification block `location_translation_gaussian` is biased (it assumes a pure shift) and
+`flexible_continuous_gaussian` is not. A failed clause is reported as failed; none is dropped.
