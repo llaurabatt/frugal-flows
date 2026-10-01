@@ -189,6 +189,9 @@ class Config:
     device: str = "cpu"
     threads: int = 4
     print_every: int = 100
+    # save the fitted model's state_dict to model.pt (from 2026-10-01; < 2 MB up to 32x32).
+    # Reload with load_model(run_dir): needed for simulation (specify_causal / sample_joint).
+    save_model: bool = True
     # ---- experiment tracking (off by default; local archives are authoritative) ----
     wandb: bool = False
     wandb_entity: str | None = None
@@ -844,6 +847,30 @@ def save_run(cfg: Config, data: dict, losses: dict, tau_hat: np.ndarray,
         make_plots(cfg, data, losses, tau_hat, os.path.join(run_dir, "plots"), extras)
 
 
+MODEL_FILE = "model.pt"
+
+
+def load_model(run_dir: str):
+    """The fitted Frengression of a run saved with save_model (2026-10-01), with the run's
+    scaled inputs (the model works in scaled units; ``inputs.unscale_y`` maps back).
+    The dataset is rebuilt and hash-checked by dataset_store."""
+    import dataset_store
+
+    path = os.path.join(run_dir, MODEL_FILE)
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"{path}: this run did not save its weights (save_model off, or before 2026-10-01)")
+    with open(os.path.join(run_dir, "config.json"), encoding="utf-8") as f:
+        stored = json.load(f)["config"]
+    known = {fl.name for fl in fields(Config)}
+    cfg = Config(**{k: v for k, v in stored.items() if k in known})
+    data = dataset_store.build_for_run(run_dir)
+    inputs = prepare_inputs(data, cfg)
+    model = build_model(cfg, inputs)
+    model.load_state_dict(torch.load(path, map_location=cfg.device))
+    model.eval()
+    return model, inputs
+
+
 def replot(run_dir: str):
     """Regenerate the plots for an existing run, no refit."""
     with open(os.path.join(run_dir, "config.json"), encoding="utf-8") as f:
@@ -1088,6 +1115,8 @@ def _run_one_inner(cfg: Config, run_id: str, run_dir: str, plots: bool, wb) -> d
             metrics.update(ident)
             metrics["seed_assign"] = cfg.seed_assign
             save_run(cfg, data, losses, tau_hat, metrics, extras, run_dir, plots=plots)
+            if cfg.save_model:
+                torch.save(model.state_dict(), os.path.join(run_dir, MODEL_FILE))
             metrics["total_s"] = float(time.monotonic() - t_start)
             metrics = {"run_id": run_id, **metrics}
             with open(os.path.join(run_dir, "metrics.json"), "w", encoding="utf-8") as f:

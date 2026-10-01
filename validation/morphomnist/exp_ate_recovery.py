@@ -499,6 +499,9 @@ class Config:
     # validation / early stopping keep the plain likelihood (2026-09-28)
     copula_umarg_weight: float = 0.0
     copula_umarg_n: int = 128          # draws per step for that penalty
+    # save the fitted flow's weights to model.eqx (from 2026-10-01; ~2 / 8 / 31 MB at 8x8 / 16x16 /
+    # 32x32). Reload with load_model(run_dir): needed for simulation and counterfactuals.
+    save_model: bool = True
     batch_size: int = 100
     marginal_max_epochs: int = 70
     marginal_max_patience: int = 10
@@ -1708,6 +1711,31 @@ def write_config(cfg: Config, run_id: str, run_dir: str):
         json.dump(record, f, indent=2)
 
 
+MODEL_FILE = "model.eqx"
+
+
+def load_model(run_dir: str):
+    """The fitted flow of a run saved with save_model (2026-10-01).
+
+    equinox stores only the arrays, so an untrained flow with the run's exact settings is built
+    first (same fit_flow path, zero training epochs, on the run's rebuilt dataset) and the saved
+    arrays are filled into it. Returns the flow (a tuple of two flows for margin_sep)."""
+    import dataset_store
+
+    path = os.path.join(run_dir, MODEL_FILE)
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"{path}: this run did not save its weights (save_model off, or before 2026-10-01)")
+    with open(os.path.join(run_dir, "config.json")) as f:
+        stored = json.load(f)["config"]
+    known = {fl.name for fl in fields(Config)}
+    cfg = Config(**{k: v for k, v in stored.items() if k in known})
+    cfg = Config(**{**asdict(cfg), "max_epochs": 0, "marginal_max_epochs": 0, "track_every": 0,
+                    "copula_umarg_weight": 0.0})
+    data = dataset_store.build_for_run(run_dir)      # full generator dict, dataset_id / data_hash checked
+    skeleton, _, _ = fit_flow(cfg, data)
+    return equinox.tree_deserialise_leaves(path, skeleton)
+
+
 def save_run(cfg: Config, data: dict, losses: dict, tau_hat: np.ndarray,
              u_z: np.ndarray, metrics: dict, extras: dict, run_dir: str):
     metrics = {"run_id": os.path.basename(run_dir), **metrics}
@@ -1962,6 +1990,8 @@ def _run_one_inner(cfg: Config, run_id: str, run_dir: str, wb) -> dict:
                     print(f"sample diagnostics on {gen_met['gen_rows']} rows (n={gen_met['gen_n_ref']}) "
                           f"in {gen_met['gen_seconds']:.0f}s")
             save_run(cfg, data, losses, tau_hat, u_z, metrics, extras, run_dir)
+            if cfg.save_model:
+                equinox.tree_serialise_leaves(os.path.join(run_dir, MODEL_FILE), flow)
             # Written last, so it covers everything including plotting and the
             # npz write -- this is the number to multiply when sizing a sweep.
             metrics["total_s"] = float(time.monotonic() - t_start)
