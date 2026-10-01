@@ -323,3 +323,38 @@ new-rank cells. Predictions, stated before running: GFF-flex lowers E2 ATE MAE r
 GFF-shift has the lowest E1 ATE MAE; the effect of either on the E2 disc bias is not predicted. Nulls
 worded as v1.1; no attribution from a null. Not tested: probit pixel transform (not estimand-preserving),
 16×16, all-digit data, heterogeneous presets.
+
+## Amendment A5 (2026-10-01 20:30, appended before any S10 cell exists) — is the confounded recovery genuine?
+
+**Trigger (Dan).** S9: the Gaussian-scale explicit-shift model (`location_translation_gaussian`) gave E2
+disc bias +0.012, ATE MAE 0.0054. Threat: the shift is initialised at 0 and the true effect off the disc
+is 0, so an estimate that never moved would look perfect off-support; and E1/E2 have the one effect map
+(1 on the disc) the arm is best specified for. The lr 1e-3 failure (recovers 0.47) shows the shift CAN
+stall. S10 tests whether the estimate converges to the TRUTH from any start, for any truth, and whether
+the copula is what removes the confounding.
+
+**Stage S10.** Full model `location_translation_gaussian` (unless stated), Corpus A (digit 0, 8×8), P1,
+harness fit settings (lr 1e-2, ≤ 300 epochs, patience 30), seeds 31–35 × seed_fit 41, confounded E2 design.
+- **Truth × init (ps_slope 1.2):** base_shift ∈ {+1, 0, −1} × shift initialised at {0; the naive
+  treated-minus-untreated difference map of the fitted data; +2 logit units on every pixel}. 45 cells
+  (the (+1, init 0) cells are S9's).
+- **Stronger confounding:** ps_slope 2.4, base_shift +1, init {0, naive}. 10 cells.
+- **Anchor A (no copula):** margin-only `lt_n` on E2, base_shift +1, init 0. 5 cells. Must return the naive answer.
+- **Anchor B (placebo covariate):** full model with the thickness ranks randomly permuted across units
+  (uninformative covariate), base_shift +1, init 0. 5 cells. Must return the naive answer.
+- **Paired frengression:** `exp_frengression_recovery.py` at its frozen settings on the SAME datasets
+  (E2 and E1, seeds 31–40; dataset hash checked against the halo cells'). 20 cells. Exploratory comparison
+  with the S9 arms, paired by seed_data.
+
+**Endpoints per cell.** Disc-class mean of tau_hat; active-off and quiet class means of `E_tau`; ATE MAE;
+**retained-confounding fraction** ρ = ⟨tau_hat − truth, naive − truth⟩ / ‖naive − truth‖² over the 64
+pixels (0 = truth, 1 = naive); distance from the start, ‖tau_hat − init‖, beside distance from the truth.
+
+**Pass criteria, declared now.** "Genuinely recovers under confounding" requires ALL of:
+(i) for every (truth, init) at ps_slope 1.2, the seed-mean disc bias lies within ±0.03 and the seed-mean ρ ≤ 0.10;
+(ii) the three inits agree: the largest pairwise difference in seed-mean disc tau_hat is ≤ 0.02 for each truth;
+(iii) from the naive start the estimate moves away from naive: seed-mean ρ ≤ 0.10 (it started at 1);
+(iv) both anchors return the naive answer: seed-mean ρ ≥ 0.80.
+At ps_slope 2.4 the same quantities are reported without a pass line (dose response: ρ should not grow
+with confounding strength if the adjustment is genuine). A failure of any clause is reported as such; no
+clause is dropped after the fact. Scope: homogeneous additive effects on E2, digit 0, 8×8, lr 1e-2.
