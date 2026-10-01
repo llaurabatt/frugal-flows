@@ -228,3 +228,28 @@ paired A1s/P5 − A1s/P1 95% bootstrap CI below the margin on BOTH endpoints. If
 (iii) fails: "floored scaling removes the elevation but is not shown to match full standardisation
 within the margin". If (i) fails: "floored scaling does not resolve the elevation at this n". The
 exploratory S2/S4-type P5 comparisons are reported with CIs only.
+
+## Amendment A2 (2026-10-01 10:20, after the S2/S3 no-covariate comparison; appended before any S6 cell exists)
+
+**Trigger.** On randomised E1 with no covariates (S2/S3, τ=1, standardised), the frugal flexible margin's
+ATE MAE (0.022) exceeds an otherwise identical flowjax Normal-base spline MAF (0.017), the PyTorch flows
+(0.012–0.018) and the naive difference in means (0.012); the location-translation margin reaches 0.007.
+The frugal margin differs from the flowjax arm by three coupled choices (Uniform(−1,1) base; spline on
+[−1,1]; atanh after the spline) plus the MADE rank class. Hypothesis H_construct: the bounded
+construction accounts for the frugal-vs-flowjax gap. H_shift: an explicit per-pixel shift accounts for
+the remainder down to the location-translation level.
+
+**Stage S6 (all P1 standardised, preset exp1_rct_homogeneous, Corpus A).** New arms, built by composing
+existing pieces only: **N** = Normal base, RQS(8, interval 5), `MaskedAutoregressiveSpread` conditioner
+with T as unmasked input, 4 layers with permutations, no tanh (the S2 A2 arm with spread ranks);
+**LT-N** = the same stack unconditional (T masked) followed by the package `LocCond` per-pixel shift.
+Comparators from S2: U = ff_cond/P1, A2 = a2_cond/P1, LT = lt/P0 (lt was run at P0; an **LT/P1** arm is
+added so the LT comparison is also at P1). Cells: N, LT-N, LT/P1 at τ=1 with seeds 31–40 × {41,42}
+(primary, 60) and at τ=0 with seed_fit 41 (exploratory, 30). 90 cells.
+
+**Endpoints.** Primary: per-cell ATE MAE (mean |E_tau| over 64 px) and `E_tau` disc-class mean; secondary:
+off-support MAE, `KS` on active pixels, log2 `R_sd` quiet. **Primary family (Holm over 3 contrasts × 2
+endpoints):** U − N (H_construct); N − A2 (ranks); N − LT-N (H_shift). Gate = v1.1 conjunction with minimum
+effect 0.003 on ATE MAE (≈ 2 SE at n=10) and 0.01 on disc bias. Exploratory: LT − LT/P1, LT/P1 − LT-N,
+τ=0 arms, distributional endpoints. Predictions, stated before running: U − N > 0 and ≥ half of U − A2;
+N − A2 not resolved; N − LT-N > 0. Nulls worded as v1.1; no attribution from a null.
