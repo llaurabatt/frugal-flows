@@ -9,6 +9,34 @@ directory.
 
 ---
 
+## Current state (2026-10-01) — read this first
+
+* **Benchmark: all ten MNIST digits** (`--all-digits`, n = 60000). Digit 0 (n = 5923, the
+  default `--digit 0`) was the development setting only.
+* **Method:** the frugal flow with the flexible-continuous margin (`--arm flexible_continuous
+  --conditioner mlp`) in the paper setting, which is now the default for every other knob
+  (learning rate 1e-3, copula width 16, margin width 48 / 8 knots, batch 100, patience 30, max 1000
+  epochs). **The estimate is the average of 5 fits** with fit seeds `{k, 1001, 1002, 1003, 1004}`
+  on dataset `k`: single fits are 1.5–2× worse.
+* **Criterion:** "performs as frengression on the ATE" — on the same datasets, the flow's 5-fit
+  average has an effect-map error not larger than frengression's (one fit, seed `k`) beyond noise.
+* **Paper grid, 8×8, all digits** (E1–E6 × datasets 1–10): launcher
+  `scripts/exp_ate_recovery/grid_8x8_alldigits_v2.sh`, analysis
+  `scripts/exp_ate_recovery/analyse_grid_8x8_alldigits.py` → `runs/exp_ate_recovery/analysis/`.
+  Early results: the flow matches or beats frengression on E1, E2, E3, E5, E6; **E4 is behind**.
+* **Known problems** (evidence and scope in `docs/leftover_confounding/STATUS.md`):
+  1. *Leftover confounding at higher resolution.* At 16×16 the flow keeps ~9 % of the E2
+     confounding even on all digits (error 2.5–3× frengression's); larger networks do not help.
+     8×8 on all digits is clean. Not yet fixed.
+  2. *E4 / E6:* the copula is blind to the treatment, which is misspecified when the effect
+     depends on the covariates (E4, E6). E4 is the preset where the flow lags.
+  3. *32×32 cost:* the effect read-out samples one pixel at a time (~2.7 h per fit).
+* **Layout:** code at the top level; launch and analysis scripts in `scripts/`; write-ups in
+  `docs/`; everything generated (run folders, indexes, logs, the dataset cache) in `runs/`,
+  which is gitignored.
+
+---
+
 ## Quick start
 
 ```bash
@@ -23,8 +51,10 @@ python exp_ate_recovery.py --selftest
 # 2. inspect a dataset without fitting anything
 python prepare_morphomnist_exps.py --preset exp4_covariate_cate
 
-# 3. fit one cell
-python exp_ate_recovery.py --preset exp4_covariate_cate --size 8
+# 3. fit one cell in the paper setting (all digits, flexible arm; the other knobs are the defaults)
+python exp_ate_recovery.py --all-digits --preset exp2_confounded_homogeneous \
+    --arm flexible_continuous --size 8 --seed-assign 1 --seed-fit 1
+#    (the default --arm is still location_translation: pass --arm explicitly)
 
 # 4. fit Frengression through the same Config/run_one experiment interface
 python exp_ate_recovery.py --preset exp4_covariate_cate --size 8 \
@@ -61,6 +91,11 @@ exits non-zero on failure.
 | `dataset.py` | MorphoMNIST loader (images + thickness/intensity morphometrics). |
 | `copula_diagnostics.py` | the copula checks `exp_ate_recovery.py` runs at the end of every fit with a copula (section below). |
 | `baselines.py`, `run_index.py`, `run_tables.py`, `check_runs.py` | baselines as run folders, the two indexes, the per-run summary tables, the consistency check. |
+| `sample_diagnostics.py` | generated-outcome quality checks run at the end of every flow fit (section below). |
+| `dataset_store.py` | rebuilds a run's dataset from its `config.json` (hash-checked) and caches it in `runs/datasets/`; `run_arrays(run_dir)` returns a run's arrays with `Y` / `ITE` filled in. Runs no longer store the data. |
+| `strip_dataset_arrays.py` | one-off: removed `Y` / `ITE` from old runs after a per-run exact match (dry run by default). |
+| `scripts/` | launch and analysis scripts for every batch (`exp_ate_recovery/`, `frengression/`, `baselines/`, `leftover_confounding/` toys). |
+| `docs/` | write-ups: `leftover_confounding/STATUS.md` (what is known, with evidence levels) and `README.md` (dated log). |
 
 Other scripts in this directory are earlier single-purpose versions. Do not
 extend them for the Frengression comparison.
@@ -101,7 +136,22 @@ python exp_ate_recovery.py --sweep --size 4 --n 300 \
     --frengression-threads 1
 ```
 
-### Full reporting workflow
+### Paper grid (current workflow, 2026-10-01)
+
+```bash
+# all ten digits, 8x8: E1-E6 x datasets 1..10 x flow fit seeds {k,1001..1004} + frengression seed k.
+# A pool of 48 slots x 5 cores (taskset); skips cells that are done (result + saved weights) or running.
+bash scripts/exp_ate_recovery/grid_8x8_alldigits_v2.sh
+bash scripts/baselines/baselines_grid_8x8_alldigits.sh         # OLS / IPW / AIPW on the same datasets
+python scripts/exp_ate_recovery/analyse_grid_8x8_alldigits.py   # -> runs/exp_ate_recovery/analysis/grid_8x8_alldigits.md
+```
+
+The analysis reports, per preset and method (flow 5-fit average, flow single fits, frengression
+seed-k fit, OLS): the error over all pixels, signed error on disc / ring / background, the leftover
+slope (error map regressed on the dataset's confounding map), and the pass/fail against the
+criterion. Timing on 5 cores per fit: flow ~2.1 h, frengression ~3.3 h (all digits, 8×8).
+
+### Earlier reporting workflow (pre-2026-09-30, digit 0, location translation included)
 
 This is the complete run-then-compare sequence. It uses E1-E6 at K=64 and five
 reporting seeds. Each seed changes both the generated dataset and the learned
@@ -499,8 +549,28 @@ before and after the switch are comparable. What it adds:
   `loss_select`, the joint loss at the chosen epoch as `val_loss_at_best`, and `best_select`
   is the criterion's minimum.
 * `--track-every N` (with `--track-n-mc`): every `N` epochs, a small interventional
-  read-out (`ate_mae`, signed disc / ring / far error against the truth) is stored under
-  `metrics["track"]`, so the effect's path during training can be seen without refits.
+  read-out (`ate_mae`, signed disc / ring / far error against the truth, and the leftover
+  `slope` on the dataset's confounding map) is stored under `metrics["track"]`. Each read-out
+  compiles new code: keep to ~40 per fit (the process runs out of memory mappings beyond ~100).
+* `--ema-epochs N`: keep a running average of the weights over about `N` epochs and use it for
+  validation and the reported fit (tag `ema<N>`). Lowers fit-to-fit spread; small gain on top of
+  the 5-fit average.
+
+### Defaults and other options (2026-09-30 / 10-01)
+
+The defaults are the paper setting: `--learning-rate 1e-3`, `--copula-nn-width 16`,
+`--max-epochs 1000` (changed 2026-09-30), with `--nn-width 48`, `--rqs-knots 8`, `--batch-size 100`,
+`--max-patience 30`. **Name tags still mark departures from the historical reference** (learning
+rate 1e-2, copula width 50), so a paper-setting fit is named `..._lr0.001_copw16_...`.
+
+Options that were tested and **not adopted** (kept for reproducibility; evidence in
+`docs/leftover_confounding/STATUS.md`): `--copula-lr-mult` (tag `coplr`), `--copula-umarg-weight`
+(penalty making the copula's covariate marginal uniform; tag `umw`), `--u-z-method ecdf`
+(empirical-CDF covariate ranks; tag `ecdf`), and the library arm `flexible_reversed`
+(`frugal_flows/reversed_copula.py`; toy only, not wired into this script).
+
+`--save-model` (default on): the fitted weights go to `model.eqx`; `load_model(run_dir)` rebuilds
+the flow (identical effect map). Frengression saves `model.pt` (`exp_frengression_recovery.load_model`).
 
 ### The run index: `runs/exp_ate_recovery/index.csv`
 
@@ -685,11 +755,15 @@ its wandb run with the launch time in front:
 
 ```
 <UTC-stamp>_<wandb name>/        e.g. 2026-09-10T14-29-26Z_ff_e1_flexcont_k64_s101_d0_85c851
-    config.json    run_id, wandb_name, uid, every knob, git commit/dirty, library versions
+    config.json    run_id, wandb_name, uid, every knob, git commit/dirty, library versions,
+                   dataset_id / data_hash / z_hash (the dataset's fingerprint)
     wandb.json     id, name and url of the wandb run (written once wandb.init returns)
     log.txt        live training output (`tail -f` it)
     metrics.json   recovery scores + timings
-    arrays.npz     tau_hat, truth, τ(u) curves, losses (replottable)
+    arrays.npz     tau_hat, ATE and other truth summaries, τ(u) curves, losses, diagnostics.
+                   NOT the dataset: Y and ITE are rebuilt by dataset_store (from 2026-10-01;
+                   older runs were stripped after a per-run exact check)
+    model.eqx      the fitted weights (from 2026-10-01; load_model)
     plots/         every figure as PNG
 ```
 
@@ -697,13 +771,16 @@ The wandb name is `<model>_<preset>_<arm>[-trf]_[<variant>_]k<K>_s<seed>_d<digit
 `ff` because this script fits margin **and** copula (`margin`, `margin_sep`
 are reserved for copula-free fits from other scripts); `e1`…`e6` the preset; `flexcont` or
 `loctrans` the arm, `-trf` for a transformer conditioner; a variant tag only when a setting
-differs from the plain fit (`copw<W>`, `coplam<λ>`, `copwd<v>`, `effect<size>`, `sa<k>`, `rct`, …); `s<seed>`
+differs from the reference (`lr<value>`, `copw<W>`, `mw<W>`, `mkn<K>`, `batch<B>`, `ema<N>`, `coplr<m>`,
+`ep<N>`, `pat<N>`, `cap<s>`, `n<N>`, `ecdf`, `umw<w>`, `copsel`, `coplam<λ>`, `effect<size>`, `sa<k>`, `rct`, …;
+`check_runs.py` checks every tag against `config.json`); `s<seed>`
 the fit seed; `d0` for the single digit class, `d0-9` for all ten; `uid` six hex characters.
 The stamp is UTC (`2026-09-10T14-29-26Z` = 10 Sep 2026, 14:29:26). Built by `run_id_for` /
 `wandb_name_for`; what a run *is* should always be read from `config.json`, not from its name.
 
 `config.json` and `log.txt` appear at launch, so a folder holding only those two
-is still training (or died). The whole `runs/` directory is gitignored. To share
+is still training (or died). The whole `runs/` directory is gitignored; scripts and
+write-ups belong in `scripts/` and `docs/`, which are tracked. To share
 a result, copy the selected `summary.md`/`summary.csv` to an explicitly tracked
 results location rather than accidentally committing model archives.
 
@@ -749,8 +826,9 @@ pathology.
 
 ## Known caveats
 
-1. **Single seed.** Nothing in the archive is replicated. Use `--seed-fit` for a
-   proper seed study before trusting any ranking.
+1. **Single fits are noisy.** The effect is a tiny part of the likelihood, so where training
+   stops moves the estimate. The method is the average of 5 fit seeds; compare methods on
+   that, over several datasets (`--seed-assign`).
 2. **The ground truth is sample-relative.** The ATE *value* is `m_k` for every
    sample, but because the modulators use within-sample ranks, the **CATE
    function** changes if you resample. Fine for ATE recovery; a problem for CATE
@@ -769,40 +847,20 @@ pathology.
    per `lax.scan` step with a full attention pass at each, so it scales far worse
    in `K`. Cut `--n-mc` before cutting epochs.
 
+5. **Leftover confounding grows with resolution at fixed data** (see "Current state" and
+   `docs/leftover_confounding/STATUS.md`): fine at 8×8 on all digits, ~9 % at 16×16.
+6. **Run many fits through a slot pool.** ~60 unpinned fits on 240 cores halved every fit's
+   speed; the grid launcher pins each fit to 5 cores with `taskset`.
+
 ---
 
-## TO DO 
+## TO DO (2026-10-01)
 
-The built-in sweep
-```bash
-python exp_ate_recovery.py --sweep --size 8
-```
+1. Finish the 8×8 all-digits paper grid and read `runs/exp_ate_recovery/analysis/grid_8x8_alldigits.md`.
+2. 16×16: choose a fix for the leftover confounding (candidates: an energy-score term in the flow's
+   training; an AIPW-style correction of the estimate) or report it as a limitation; then the 16×16 grid.
+3. E4: investigate the treatment-blind copula's misspecification when the effect depends on covariates.
+4. 32×32: make the read-out cheaper before running it.
+5. Remove the 10 weightless all-digit 8×8 flow fits from 2026-09-28 once the grid's refits are confirmed identical.
 
-Add --skip-done to resume after an interruption — but delete any folder whose ate_mae is inf/nan first, or it counts as done and gets skipped.
-
-Axis sweeps
-
-CATE shape, on the three presets where it bites:
-
-```bash
-for p in exp3_confounded_heterogeneous exp4_covariate_cate exp6_spatial_cate; do for s in linear cubic quadratic sine step; do python exp_ate_recovery.py --preset $p --h-shape $s --arm flexible_continuous --size 8; done; done
-```
-
-Spatial pattern:
-```bash
-for b in gradient_x gradient_y diagonal radial; do python exp_ate_recovery.py --preset exp6_spatial_cate --spatial-basis $b --arm flexible_continuous --size 8; done
-```
-
-Effect map (the gradient map is the hard one — no flat regions, no exact zeros):
-```bash
-for e in circle ring const gradient; do python exp_ate_recovery.py --preset exp4_covariate_cate --effect $e --arm flexible_continuous --size 8; done
-```
-
-Confounding strength:
-```bash
-for s in 0.0 0.6 1.2 1.8 2.4; do python exp_ate_recovery.py --preset exp4_covariate_cate --ps-slope $s --arm flexible_continuous --size 8; done
-```
-What I'd actually run first: Seeds, not breadth. Every one of your 18 archived runs is a single seed, and the transformer has already swung between diverging and best-in-matrix under settings differing only in learning rate. Adding more axes to an unreplicated matrix multiplies the number of rankings you can't trust.
-```bash
-for s in 1 2 3 4 5; do for c in mlp transformer; do python exp_ate_recovery.py --preset exp4_covariate_cate --arm flexible_continuous --conditioner $c --size 8 --seed-fit $s; done; done
-```
+The older to-do list (axis sweeps on digit 0) is superseded; see git history for it.

@@ -3,7 +3,7 @@
 Model:  p(y | u, t) = p*(y | t) * c(r | u),   r = F*(y | t),
 the Evans-Didelez conditional density with the copula written as a density over the image ranks
 r given the covariate ranks u (the current flexible arm has it the other way round: u given r).
-Reasoning, invariances and open questions: validation/morphomnist/runs/leftover_confounding/README.md.
+Reasoning, invariances and open questions: validation/morphomnist/docs/leftover_confounding/README.md.
 
 Chain, base -> data (all on [-1, 1] until the last block):
   [0] copula:  SelectCondition(MAF over the K image ranks, reads u only)      w -> r

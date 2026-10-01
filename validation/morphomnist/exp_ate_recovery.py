@@ -464,7 +464,7 @@ class Config:
     # so no sweep had ever touched it. Defaults equal the library's, so every
     # existing archive is reproduced unchanged.
     # 2026-09-30: defaults changed to the agreed paper setting (copula width 16, lr 1e-3,
-    # max epochs 1000; evidence in runs/leftover_confounding/STATUS.md and plan.md). Name tags
+    # max epochs 1000; evidence in docs/leftover_confounding/STATUS.md and plan.md). Name tags
     # still mark departures from the HISTORICAL reference (copula width 50, lr 1e-2, max epochs
     # 1000), so a fit in the paper setting keeps "lr0.001_copw16" in its name and every older
     # name keeps its meaning.

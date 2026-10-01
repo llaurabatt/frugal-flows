@@ -154,7 +154,7 @@ def compute(flow, data: dict, u_z: np.ndarray, heldout_idx, disc_mask: np.ndarra
     # the copula's own u-marginal: image ranks drawn uniform from the base (no data), covariate
     # ranks drawn from the copula. A copula has uniform margins, so these u should be uniform;
     # the flow only guarantees  int q(u | r) du = 1, not  int q(u | r) dr = 1  (2026-09-27, see
-    # runs/leftover_confounding/README.md). T is masked out of the copula, so zeros are passed.
+    # docs/leftover_confounding/README.md). T is masked out of the copula, so zeros are passed.
     key, k_r, k_v = jr.split(key, 3)
     n_marg = 20_000
     ys = jnp.hstack([jr.uniform(k_r, (n_marg, K)), jr.uniform(k_v, (n_marg, d))])

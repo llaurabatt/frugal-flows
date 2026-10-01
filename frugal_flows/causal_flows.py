@@ -513,7 +513,7 @@ def copula_u_marginal_samples(dist, key, dim_y: int, n: int):
     """Covariate ranks drawn from the copula alone: image ranks r ~ U(0,1)^dim_y and base
     noise v ~ U(0,1)^d pushed forward through the copula blocks (COPULA_BLOCKS). A copula
     would return u distributed as the observed covariate ranks; the flow only guarantees
-    int q(u | r) du = 1 (see validation/morphomnist/runs/leftover_confounding/README.md).
+    int q(u | r) du = 1 (see validation/morphomnist/docs/leftover_confounding/README.md).
     The copula masks the treatment, so a zero condition is passed."""
     blocks = dist.bijection.bijections
     d = dist.shape[0] - dim_y
