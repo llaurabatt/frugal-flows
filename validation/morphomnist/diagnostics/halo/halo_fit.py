@@ -88,10 +88,20 @@ def _fit_and_sample(cfg: dict, data: dict, pre):
                                "nn_width": cfg["width"], "flow_layers": cfg["layers"],
                                "conditioner": "mlp"})
 
+        # P1 passes its OutcomeTransform into the sampler (unchanged S4 path). P5's transform
+        # is not an OutcomeTransform (as_outcome_transform rejects it), so sample on the
+        # fitting scale (outcome_transform=None -> identity) and invert here: the package
+        # applies the inverse pointwise to the same draws before any statistic, so this is
+        # the same operation. P0's inverse is the identity.
+        ot = pre.transform if pre.kind == "P1" else None
+
         def draw(seed):
             r = interventional_samples(jr.key(seed), flow, cond_dim=1, n_mc=cfg["n_mc"],
-                                       outcome_transform=pre.transform, dim_y=Y.shape[1])
-            return np.asarray(r["y0"]), np.asarray(r["y1"]), int(r["n_clamped"])
+                                       outcome_transform=ot, dim_y=Y.shape[1])
+            y0, y1 = np.asarray(r["y0"]), np.asarray(r["y1"])
+            if pre.kind == "P5":
+                y0, y1 = pre.inverse(y0), pre.inverse(y1)
+            return y0, y1, int(r["n_clamped"])
         return draw, [losses], extra
     import halo_models as hm
     dist, losses = hm.fit_arm(cfg, Y, X)
@@ -182,6 +192,7 @@ def run(cfg: dict) -> dict:
     metrics["timings_s"] = {"data": t_data, "fit": t_fit, "sample": t_sample, "metrics": t_metrics}
     metrics["dataset_id"], metrics["data_hash"] = data["dataset_id"], data["data_hash"]
     metrics["ps_slope_data"] = data["ps_slope"]
+    metrics["preproc"] = pre.info()                  # P5: fitted floor value, n floored, scales
     return {"metrics": metrics, "maps": m, "classes": classes, "templates": tpl, "floors": floors,
             "imb": imb, "ATE": data["ATE"], "losses": losses}
 

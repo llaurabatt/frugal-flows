@@ -15,6 +15,10 @@ Preprocessing variants (``Preproc.kind``):
     P2  logit with alpha=0.3 (dataset rebuilt)                       NOT estimand-preserving
     P3  no logit: dequantised pixel x in [0,1] mapped affinely to [-0.9, 0.9]   NOT e.p.
     P4  no dequantisation noise (exact atoms at logit(alpha/2)); demonstration only
+    P5  (Amendment A1) P0 then the frengression comparator's floored per-pixel scaling
+        (``exp_frengression_recovery.prepare_inputs``, y_scaling=per_pixel, y_sd_floor=0.25):
+        Z_k = (Y_k - mean_k) / max(sd_k, 0.25 * (sd(Y_all) or 1.0)); fitted on the fitting
+        data, inverted on samples; affine, so estimand-preserving
 For P2/P3/P4 ``build_experiment`` adds the ITE AFTER the transform, so ``ATE`` is still the
 +base_shift disc map but in a different space: never compare E_tau across P0 and P2/P3/P4.
 
@@ -53,7 +57,8 @@ SEEDS_DATA = tuple(range(31, 41))
 CORPUS_B_SEED = 1000   # one master permutation of all 60,000 train images (Corpus B)
 CACHE_DIR = os.path.expanduser("~/work/halo-runs/_cache")
 PRESETS = {"E1": "exp1_rct_homogeneous", "E2": "exp2_confounded_homogeneous"}
-PREPROCS = ("P0", "P1", "P2", "P3", "P4")
+PREPROCS = ("P0", "P1", "P2", "P3", "P4", "P5")
+P5_SD_FLOOR = 0.25   # frengression frozen tuning setting y_sd_floor
 ALPHA = 0.05
 
 
@@ -235,10 +240,52 @@ def build_dataset(cfg: dict) -> dict:
     return build_real(cfg["preset"], cfg["base_shift"], cfg["seed_data"], pp, cfg.get("corpus", "A"))
 
 
+class FlooredStandardize:
+    """P5: the frengression comparator's ``y_scaling="per_pixel"`` scaling, replicated
+    from ``exp_frengression_recovery.prepare_inputs`` (frengression worktree, L314-322):
+
+        y_sd_global = float(Y.std())                       # all n x K entries, ddof 0
+        y_mean      = Y.mean(axis=0)
+        y_scale     = max(Y.std(axis=0), floor * (y_sd_global or 1.0))
+        Z           = (Y - y_mean) / y_scale ;   inverse: Z * y_scale + y_mean
+
+    Duck-typed ``forward``/``inverse`` in numpy float64. It is NOT an ``OutcomeTransform``
+    (``as_outcome_transform`` accepts only its own class), so ff_full sampling passes
+    ``outcome_transform=None`` and applies ``inverse`` to the returned draws."""
+
+    def __init__(self, floor: float = P5_SD_FLOOR):
+        self.floor = float(floor)
+        self.y_mean = self.y_scale = self.y_sd_global = None
+
+    def fit(self, Y) -> "FlooredStandardize":
+        Y = np.asarray(Y, dtype=np.float64)
+        self.y_sd_global = float(Y.std())
+        self.y_mean = Y.mean(axis=0)
+        self.y_scale = np.maximum(Y.std(axis=0), self.floor * (self.y_sd_global or 1.0))
+        return self
+
+    @property
+    def floor_value(self) -> float:
+        return self.floor * (self.y_sd_global or 1.0)
+
+    def forward(self, Y) -> np.ndarray:
+        return (np.asarray(Y, dtype=np.float64) - self.y_mean) / self.y_scale
+
+    def inverse(self, Z) -> np.ndarray:
+        return np.asarray(Z, dtype=np.float64) * self.y_scale + self.y_mean
+
+    def info(self) -> dict:
+        sd = self.y_scale
+        return {"y_sd_floor": self.floor, "y_sd_global": self.y_sd_global, "floor_value": self.floor_value,
+                "n_floored": int(np.sum(sd == self.floor_value)), "y_scale": sd.tolist(),
+                "y_mean": self.y_mean.tolist()}
+
+
 class Preproc:
-    """Fit-time preprocessing. Only P1 acts here (standardise per column, fitted on the
-    fitting data, inverted on samples); P0/P2/P3/P4 are identity at fit time because
-    their transform was applied when the dataset was built."""
+    """Fit-time preprocessing. P1 (standardise per column) and P5 (frengression floored
+    per-pixel scaling) act here, fitted on the fitting data and inverted on samples;
+    P0/P2/P3/P4 are identity at fit time because their transform was applied when the
+    dataset was built."""
 
     def __init__(self, kind: str):
         assert kind in PREPROCS, kind
@@ -248,7 +295,15 @@ class Preproc:
         if self.kind == "P1":
             from frugal_flows.outcome_transforms import OutcomeTransform
             self.transform = OutcomeTransform("standardize").fit(np.asarray(Y))
+        elif self.kind == "P5":
+            self.transform = FlooredStandardize().fit(Y)
         return self
+
+    def info(self) -> dict:
+        d = {"preproc": self.kind}
+        if self.kind == "P5":
+            d.update(self.transform.info())
+        return d
 
     def forward(self, Y) -> np.ndarray:
         return np.asarray(Y) if self.transform is None else np.asarray(self.transform.forward(Y))

@@ -1,6 +1,7 @@
 """Halo ladder analysis (HALO_PREREG.md v1, "Gates" and "Analysis and wording").
 
-    python halo_analysis.py --stage {S1,S2,S3,S4,all} --runs-root ~/work/halo-runs
+    python halo_analysis.py --stage {S1,S2,S3,S4,S5,all} --runs-root ~/work/halo-runs
+                            [--compare-root ~/work/halo-runs]   (S5: where S0/S1/S2/S4 live)
 
 Unit = seed_data (a replication on the fixed digit-0 corpus for Corpus A; a disjoint
 all-digit draw for Corpus B): maps and per-cell scalars are averaged over seed_fit within
@@ -389,12 +390,126 @@ S2_EXPL = ("Emu_diff_disc", "Emu_diff_active_off", "Emu_diff_quiet", "slope_imb_
            "Emu0_active_off_rms", "Rsd_quiet_median", "LEAK_X_exact")
 
 
-def analyse(stage: str, root: str) -> dict:
+# ------------------------------------------------------------------ S5 (Amendment A1)
+S5_PANEL = ("A1s/P0", "A1s/P1", "A1s/P5", "ff_cond/P0/bs1/E1", "ff_cond/P1/bs1/E1", "ff_cond/P5/bs1/E1",
+            "ff_full/P0/bs1/E2", "ff_full/P1/bs1/E2", "ff_full/P5/bs1/E2")
+S5_COMPARE = {"A1s/P0", "A1s/P1", "A2/P1", "A1/P0", "B:A1s/P0", "B:A1s/P1",
+              "ff_cond/P0/bs1/E1", "ff_cond/P1/bs1/E1",
+              "ff_full/P0/bs1/E1", "ff_full/P1/bs1/E1", "ff_full/P0/bs1/E2", "ff_full/P1/bs1/E2"}
+S5_S2_EP = ("Etau_disc_mean", "Etau_active_off_rms", "Etau_active_off_rms_floorref")
+
+
+def _add_s5_derived(groups: dict, croot: str) -> None:
+    """Derived per-seed endpoints, written into each seed's ``ep``:
+    Etau_active_off_rms_floorref = RMS of the seed_fit-mean E_tau on active_off minus the RMS
+        of S0's model-free null naive T-difference on Y0 (``floor_null_naive_Y0``) on the same
+        pixels (S0 Corpus-A file of that seed_data);
+    Etau_disc_E2mE1 (ff_full E2 configs) = Etau_disc_mean(E2) - Etau_disc_mean(E1), same
+        preproc, same seed_data."""
+    s0 = {}
+    for L, G in groups.items():
+        if L.startswith("B:"):
+            continue
+        for sd, v in G["seed"].items():
+            if "E_tau" not in v["maps"]:
+                continue
+            if sd not in s0:
+                f = os.path.join(croot, "S0", f"s0_sd{sd}.npz")
+                s0[sd] = np.load(f)["floor_null_naive_Y0"] if os.path.exists(f) else None
+            m = v["maps"]["cls_active_off"].astype(bool)
+            v["ep"]["Etau_active_off_rms_floorref"] = (
+                float("nan") if s0[sd] is None else
+                v["ep"]["Etau_active_off_rms"] - _cm(s0[sd], m, "rms"))
+    for L, G in groups.items():
+        if L.startswith("ff_full/") and L.endswith("/E2"):
+            L1 = L[:-2] + "E1"
+            if L1 not in groups:
+                continue
+            for sd, v in G["seed"].items():
+                v1 = groups[L1]["seed"].get(sd)
+                v["ep"]["Etau_disc_E2mE1"] = (float("nan") if v1 is None else
+                                              v["ep"]["Etau_disc_mean"] - v1["ep"]["Etau_disc_mean"])
+
+
+def _level(groups, L: str, ep: str, name: str) -> list[dict]:
+    """Exploratory one-sample row: the config's endpoint vs 0 (mean, CI, unadjusted p)."""
+    if L not in groups:
+        return []
+    r = {"family": name, "kind": "exploratory", "endpoint": ep, "arm": L, "ref": "0",
+         **_test(list(_vals(groups, L, ep).values())), "p_holm": float("nan"), "resolved": False}
+    lo, hi = r["ci"]
+    r["text"] = f"exploratory level: mean {r['mean']:+.4f}, CI [{lo:+.4f}, {hi:+.4f}], unadjusted p {r['p']:.4f}"
+    return [r]
+
+
+def s5_rows(allg: dict, croot: str) -> tuple[list[dict], list[str]]:
+    """Amendment A1. Primary family (Holm across 3 contrasts x 2 endpoints = 6 tests):
+    A1s/P5 - A1s/P0, A1s/P5 - A1s/P1 (paired by seed_data, S1 cells as comparators) and the
+    elevation of A1s/P5 vs reference data, gated as v1.1. P0/P1 elevation status is read
+    from the S1 elevation family recomputed exactly as S1's analysis does. Everything else
+    exploratory (CIs only)."""
+    _add_s5_derived(allg, croot)
+    p5, p0, p1 = "A1s/P5", "A1s/P0", "A1s/P1"
+    fam = "S5 primary (Amendment A1)"
+    rows = [{"family": fam, "kind": "primary", "endpoint": ep, "arm": p5, "ref": ref, **paired(allg, p5, ref, ep)}
+            for ref in (p0, p1) if p5 in allg and ref in allg for ep in S1_EP]
+    rows += [{"family": fam, "kind": "elevation", "endpoint": ep, "arm": p5, "ref": "reference data",
+              **_test(list(_vals(allg, p5, ep).values()))} for ep in S1_EP if p5 in allg]
+    for r, ph in zip(rows, holm([r["p"] for r in rows])):
+        r["p_holm"] = ph
+        gate(r)
+    s1_el = elevation_family(allg, "S1 elevation (recomputed, as S1)", [p0, p1, "A2/P1", "A1/P0"], S1_EP)
+    rows += s1_el
+    attr = []
+    for ep in S1_EP:
+        rem = _find(rows, "primary", p5, ep, p0) or {}
+        dif = _find(rows, "primary", p5, ep, p1) or {}
+        el5 = (_find(rows, "elevation", p5, ep) or {})
+        el0 = (_find(s1_el, "elevation", p0, ep) or {}).get("resolved", False)
+        el1 = (_find(s1_el, "elevation", p1, ep) or {}).get("resolved", False)
+        fired = []
+        if rem.get("resolved") and not el5.get("resolved") and not dif.get("resolved"):
+            fired.append("floored scaling suffices: P5 removes the A1s/P0 elevation (P5 vs P0 resolved, "
+                         "P5 not elevated) and is not resolvedly different from P1")
+        if el5.get("resolved") and not el1:
+            fired.append("the floor leaves part of the artefact: A1s/P5 elevated while A1s/P1 is not")
+        if fired:
+            attr += [f"A:{ep}: {f}" for f in fired]
+        else:
+            attr.append(f"A:{ep}: no attribution rule fires. A1s/P0 elevated (S1): {el0}; A1s/P1 elevated: {el1}. "
+                        f"P5 vs P0 -> {rem.get('text', 'n/a')}; P5 vs P1 -> {dif.get('text', 'n/a')}; "
+                        f"P5 elevation -> {el5.get('text', 'n/a')}")
+    rows += exploratory(allg, "B:A1s/P0", ["B:A1s/P5"], S1_EP + S1_EXPL, "S5 exploratory Corpus B vs B:A1s/P0")
+    rows += exploratory(allg, "B:A1s/P1", ["B:A1s/P5"], S1_EP + S1_EXPL, "S5 exploratory Corpus B vs B:A1s/P1")
+    for ep in S1_EP:
+        rows += _level(allg, "B:A1s/P5", ep, "S5 exploratory Corpus B elevation")
+    rows += exploratory(allg, p0, [p5], S1_EXPL, "S5 exploratory secondary vs A1s/P0")
+    f5 = "ff_cond/P5/bs1/E1"
+    for ref in ("ff_cond/P1/bs1/E1", "ff_cond/P0/bs1/E1"):
+        rows += exploratory(allg, ref, [f5], S5_S2_EP + ("tauhat_disc_mean", "Emu0_active_off_rms"),
+                            f"S5 exploratory S2-type vs {ref}")
+    for ep in S5_S2_EP:
+        rows += _level(allg, f5, ep, "S5 exploratory S2-type level")
+    e2 = "ff_full/P5/bs1/E2"
+    for ref in ("ff_full/P0/bs1/E2", "ff_full/P1/bs1/E2"):
+        rows += exploratory(allg, ref, [e2], ("slope_imb_offsupport", "Etau_disc_E2mE1") + S2_EP,
+                            f"S4-type exploratory vs {ref}")
+    rows += exploratory(allg, "ff_full/P0/bs1/E1", ["ff_full/P5/bs1/E1"], S2_EP,
+                        "S4-type exploratory E1 vs ff_full/P0/bs1/E1")
+    for ep in ("slope_imb_offsupport", "Etau_disc_E2mE1"):
+        rows += _level(allg, e2, ep, "S4-type exploratory level under P5")
+    return rows, attr
+
+
+def analyse(stage: str, root: str, compare_root: str | None = None) -> dict:
+    croot = compare_root or root
     recs = load_stage(root, stage)
     if not recs:
         print(f"{stage}: no complete cells under {root}")
         return {}
-    extra = load_stage(root, "S1") + load_stage(root, "S2") if stage == "S3" else []
+    extra = load_stage(croot, "S1") + load_stage(croot, "S2") if stage == "S3" else []
+    if stage == "S5":                               # comparison arms from S1/S2/S4 (Amendment A1)
+        extra = [r for st in ("S1", "S2", "S4") for r in load_stage(croot, st) if label(r["cfg"]) in S5_COMPARE]
     check_flags(recs + extra)
     out = {"stage": stage, "n_cells": len(recs),
            "excluded": [r["run_id"] for r in recs if excluded(r)],
@@ -492,11 +607,26 @@ def analyse(stage: str, root: str) -> dict:
             attr.append(("Sense-1 ring has a margin component of size "
                          f"{r['mean']:+.3f} (slope P0 - P1)") if r["resolved"] else
                         f"no resolved margin component of the E2 ring at this n ({UNIT['A']}); attribution stays open")
+    elif stage == "S5":
+        tmap = "E_mu0"
+        out["compare_root"] = croot
+        out["compare_cells"] = {L: sum(len(sv["cells"]) for sv in G["seed"].values())
+                                for L, G in allg.items() if L not in groups}
+        r5, a5 = s5_rows(allg, croot)
+        rows += r5
+        attr += a5
+        out["endpoints"] = {L: {sd: {k: v for k, v in g["ep"].items() if not k.startswith("xt:")}
+                                for sd, g in G["seed"].items()} for L, G in allg.items()}
+        out["p5_fit"] = {L: {k: float(np.mean([c["met"].get("preproc", {}).get(k, np.nan)
+                                                for sv in G["seed"].values() for c in sv["cells"]]))
+                             for k in ("floor_value", "y_sd_global", "n_floored")}
+                         for L, G in groups.items()}
+        groups = {L: allg[L] for L in S5_PANEL if L in allg}      # figure + templates: the comparison rows
     out["contrasts"], out["attribution"] = rows, attr
     out["templates_descriptive"] = {m: template_table(groups, m) for m in ("E_mu0", "E_sd0", "E_tau")}
     out["template_corr_mean"] = {L: np.mean([c["met"]["template_corr"] for s in G["seed"].values()
                                             for c in s["cells"]], 0).round(3).tolist() for L, G in groups.items()}
-    panel(groups, root, os.path.join(adir, f"{stage}_maps.png"), stage)
+    panel(groups, croot, os.path.join(adir, f"{stage}_maps.png"), stage)
     template_bars(out["templates_descriptive"][tmap], tmap, os.path.join(adir, f"{stage}_templates.png"),
                   f"{stage}: DESCRIPTIVE template coefficients of {tmap} (mean, 95% bootstrap CI over seed_data)")
     json.dump(out, open(os.path.join(adir, f"{stage}_tables.json"), "w"), indent=1, default=float)
@@ -537,11 +667,14 @@ def to_md(out: dict, tmap: str) -> str:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stage", required=True, choices=["S1", "S2", "S3", "S4", "all"])
+    ap.add_argument("--stage", required=True, choices=["S1", "S2", "S3", "S4", "S5", "all"])
     ap.add_argument("--runs-root", default=os.path.expanduser("~/work/halo-runs"))
+    ap.add_argument("--compare-root", default=None,
+                    help="root holding S0/S1/S2/S4 comparison cells (default: --runs-root)")
     a = ap.parse_args(argv)
+    cr = os.path.expanduser(a.compare_root) if a.compare_root else None
     for s in (["S1", "S2", "S3", "S4"] if a.stage == "all" else [a.stage]):
-        analyse(s, os.path.expanduser(a.runs_root))
+        analyse(s, os.path.expanduser(a.runs_root), cr)
     return 0
 
 

@@ -1,7 +1,7 @@
 """Halo ladder driver: enumerate a stage's cells (HALO_PREREG.md), launch one pinned
 subprocess per cell, fail closed on missing / duplicate identities.
 
-    python halo_driver.py --stage {S0,S1,S2,S3,S4,all} [--conc 8] [--threads 1] [--resume]
+    python halo_driver.py --stage {S0,S1,S2,S3,S4,S5,all} [--conc 8] [--threads 1] [--resume]
                           [--dry-run] [--smoke] [--runs-root ~/work/halo-runs]
 
 Outputs: <runs-root>/<stage>/<run_id>/ (halo_fit.py), <runs-root>/<stage>/_stage.json (cell
@@ -68,6 +68,12 @@ def _configs(stage: str) -> list[dict]:
         c += [dict(arm="ff_cond", preproc=p, task="cond", preset="E2", base_shift=1.0,
                    rank_mode="spread") for p in ("P0", "P1")]
         return c
+    if stage == "S5":                                   # Amendment A1: P5 (frengression scaling)
+        c = [dict(arm="A1s", preproc="P5", corpus=k, rank_mode="spread", **U) for k in ("A", "B")]
+        c += [dict(arm="ff_cond", preproc="P5", task="cond", preset="E1", base_shift=1.0, rank_mode="spread")]
+        c += [dict(arm="ff_full", preproc="P5", task="cond", preset=e, base_shift=1.0, rank_mode="spread")
+              for e in ("E1", "E2")]
+        return c
     raise ValueError(stage)
 
 
@@ -84,7 +90,7 @@ def run_id_of(ident: dict) -> str:
 def is_primary(stage: str, c: dict) -> bool:
     """Prereg v1.1: configs in the primary families (+ all Corpus B) keep seed_fit {41, 42};
     every other config is exploratory and runs at seed_fit 41 only."""
-    if c.get("corpus", "A") == "B":
+    if c.get("corpus", "A") == "B" or stage == "S5":   # S5: every config primary (Amendment A1)
         return True
     ap = (c["arm"], c["preproc"])
     if stage == "S1":
@@ -275,7 +281,7 @@ def run_stage(stage, a) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stage", required=True, choices=["S0", "S1", "S2", "S3", "S4", "all"])
+    ap.add_argument("--stage", required=True, choices=["S0", "S1", "S2", "S3", "S4", "S5", "all"])
     ap.add_argument("--conc", type=int, default=8)
     ap.add_argument("--threads", type=int, default=1)
     ap.add_argument("--resume", action="store_true")
