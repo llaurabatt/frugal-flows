@@ -341,3 +341,106 @@ def test_s4_s5_s6_identities_unchanged(run_id):
     for c in cells:
         assert not any(k in c for k in OPTIONAL_IDENTITY_KEYS)
         assert identity_of(c) == {k: c.get(k) for k in IDENTITY_KEYS}
+
+
+# ------------------------------------------------------------------ S8/S9 (Amendment A4)
+def _driver_at(commit: str):
+    """halo_driver.py as committed at ``commit``, exec'd into a throwaway module."""
+    import subprocess
+    import types
+    src = subprocess.run(["git", "-C", WORKTREE, "show",
+                          f"{commit}:validation/morphomnist/diagnostics/halo/halo_driver.py"],
+                         capture_output=True, text=True, check=True).stdout
+    mod = types.ModuleType("_halo_driver_" + commit)
+    mod.__file__ = os.path.join(HALO, "halo_driver.py")
+    exec(compile(src, mod.__name__ + ".py", "exec"), mod.__dict__)
+    return mod
+
+
+@pytest.mark.parametrize("stage", ["S1", "S2", "S3", "S4", "S5", "S6", "S7"])
+def test_s1_to_s7_identities_unchanged_by_a4(stage):
+    """Every S1-S7 cell (full and smoke) has the same run_id and identity_sha as under the driver
+    at 395afd6 (diag/halo, before S8/S9 existed)."""
+    old = _driver_at("395afd6")
+    for smoke in (False, True):
+        a = [(c["run_id"], c["identity_sha"]) for c in old.enumerate_cells(stage, smoke=smoke, xla_flags=XLA_RUN)]
+        b = [(c["run_id"], c["identity_sha"]) for c in hdr.enumerate_cells(stage, smoke=smoke, xla_flags=XLA_RUN)]
+        assert a == b
+
+
+def test_s8_cells():
+    cells = hdr.enumerate_cells("S8")
+    assert len(cells) == 30 and len({c["identity_sha"] for c in cells}) == 30 and len({c["run_id"] for c in cells}) == 30
+    assert all(c["seed_fit"] != c["seed_data"] for c in cells)
+    assert all(c["seed_fit"] == 41 and not c["primary"] and c["stage"] == "S8" for c in cells)
+    assert all(c["preproc"] == "P1" and c["preset"] == "E1" and c["base_shift"] == 1.0 and c["corpus"] == "A"
+               and c["task"] == "cond" for c in cells)
+    assert {c["arm"] for c in cells} == {"ff_cond", "n_cond", "lt_n"}
+    assert {c["seed_data"] for c in cells} == set(range(31, 41))
+    # distinct from the S2 / S6 cells of the same configuration
+    other = {c["identity_sha"] for st in ("S2", "S6") for c in hdr.enumerate_cells(st)}
+    assert not other & {c["identity_sha"] for c in cells}
+    assert len(hdr.enumerate_cells("S8", smoke=True)) == 3
+
+
+def test_s9_cells():
+    from collections import Counter
+    cells = hdr.enumerate_cells("S9")
+    assert len(cells) == 70 and len({c["identity_sha"] for c in cells}) == 70 and len({c["run_id"] for c in cells}) == 70
+    assert all(c["seed_fit"] != c["seed_data"] for c in cells)
+    assert all(c["preproc"] == "P1" and c["base_shift"] == 1.0 and c["corpus"] == "A" for c in cells)
+    n = Counter((c["arm"], c["preset"], bool(c.get("paper_setting"))) for c in cells)
+    for a in ("gff_flex", "gff_shift"):
+        assert n[(a, "E2", False)] == 20 and n[(a, "E1", False)] == 10 and n[(a, "E2", True)] == 5
+    paper = [c for c in cells if c.get("paper_setting")]
+    assert cells[-10:] == paper and all(c["lr"] == 1e-3 and c["max_epochs"] == 1000 and c["seed_fit"] == 41
+                                        and "_paper_" in c["run_id"] and not c["primary"] for c in paper)
+    assert {c["seed_data"] for c in paper} == set(range(31, 36))
+    rest = [c for c in cells if not c.get("paper_setting")]
+    assert all(c["lr"] == 1e-2 and c["max_epochs"] == 300 and c["patience"] == 30 and c["batch"] == 100
+               and c["width"] == 48 and c["knots"] == 8 and c["layers"] == 4 and c["n_mc"] == 5000 for c in rest)
+    assert all(c["primary"] == (c["preset"] == "E2") for c in rest)
+    assert {c["seed_fit"] for c in rest if c["preset"] == "E2"} == {41, 42}
+    assert len(hdr.enumerate_cells("S9", smoke=True)) == 6
+
+
+def test_package_margins_equal_s6_builders():
+    """frugal_flows.gaussian_scale margins == the S6 harness stacks for the same key, weight for weight."""
+    import equinox as eqx
+    import frugal_flows.gaussian_scale as gs
+    import halo_models as hm
+    import jax
+    import jax.numpy as jnp
+    import jax.random as jr
+    a = dict(RQS_knots=8, nn_depth=1, nn_width=48, flow_layers=4, interval=5.0)
+    k = jr.PRNGKey(4)
+    pairs = ((gs.gaussian_margin_flexible(k, 64, jnp.zeros((1, 1)), a), hm.normal_spread(k, 64, 1).bijection),
+             (gs.gaussian_margin_shift(k, 64, jnp.zeros((1, 1)), a), hm.loctrans_normal(k, 64).bijection))
+    for p, h in pairs:
+        if hasattr(h, "bijections"):                        # merged LT-N: drop its base affine
+            h = type(h)(h.bijections[1:])
+        lp = jax.tree_util.tree_leaves(eqx.filter(p, eqx.is_array))
+        lh = jax.tree_util.tree_leaves(eqx.filter(h, eqx.is_array))
+        assert len(lp) == len(lh) and all(np.array_equal(x, y) for x, y in zip(lp, lh))
+
+
+def test_latent_calibration_and_gff_tiny():
+    """S8 helper on a 2-epoch N fit (normal latent) and U fit (uniform latent); S9 fit + calibration
+    on a tiny K=4 problem through the package path."""
+    import halo_models as hm
+    rng = np.random.default_rng(0)
+    t = rng.integers(0, 2, (300, 1)).astype(np.float32)
+    Y = (rng.normal(size=(300, 4)) + t).astype(np.float32)
+    base = dict(task="cond", seed_fit=41, width=8, depth=1, layers=2, knots=4, lr=1e-2, max_epochs=2,
+                patience=5, batch=50, rank_mode="spread")
+    for arm, kind in (("n_cond", "normal"), ("ff_cond", "uniform"), ("lt_n", "normal")):
+        dist, losses = hm.fit_arm(dict(base, arm=arm), Y, t)
+        cal = hm.latent_calibration(dist, Y, t, losses[0]["info"]["val_idx"])
+        assert cal["latent_kind"] == kind and len(cal["latent_ks_all"]) == 4
+        assert 0 <= cal["latent_ks_val_mean"] <= 1 and 0 <= cal["latent_offdiag_corr_all"] <= 1
+    u_z = (np.argsort(np.argsort(rng.normal(size=300))) + 1.0)[:, None] / 301
+    for arm in ("gff_flex", "gff_shift"):
+        flow, losses = hm.fit_gff(dict(base, arm=arm), Y, t, u_z)
+        cal = hm.gff_calibration(flow, Y, t, u_z, losses["info"]["val_idx"], seed=1)
+        assert len(cal["gY_ks_all"]) == 4 and len(cal["gZ_implied_ks"]) == 1 and cal["n_nonfinite_joint"] == 0
+        assert cal["gZ_data_ks"][0] < 0.01

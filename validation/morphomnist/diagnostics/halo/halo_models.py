@@ -207,3 +207,114 @@ def sample_arms(seed_mc: int, dist, n_mc: int, task: str):
     s0, c0 = sample_clamped(key, dist, n_mc, jnp.zeros((n_mc, 1)))
     s1, c1 = sample_clamped(key, dist, n_mc, jnp.ones((n_mc, 1)))
     return np.asarray(s0), np.asarray(s1), c0 + c1
+
+
+# ------------------------------------------------------------------ S8/S9 (Amendment A4)
+def to_standard_base(dist, Y, cond):
+    """Push data rows through a fitted distribution's bijections down to its parameter-free
+    base. Returns (kind, latent): kind "uniform" (flowjax ``_StandardUniform`` on [0, 1); the
+    U arm after ``merge_transforms``, its Uniform(-1, 1) affine being the chain's first block)
+    or "normal" (``StandardNormal``; an unmerged ``Normal(loc, scale)`` base is itself unwound
+    through its own affine, so the N arm's trainable base loc/scale are accounted for)."""
+    d = paramax.unwrap(dist)
+    x = jnp.asarray(Y)
+    c = None if cond is None else jnp.asarray(cond, dtype=x.dtype)
+    while hasattr(d, "bijection") and hasattr(d, "base_dist"):
+        b = d.bijection
+        x = jax.vmap(b.inverse)(x) if b.cond_shape is None or c is None else jax.vmap(b.inverse)(x, c)
+        d = d.base_dist
+    name = type(d).__name__
+    if name == "_StandardUniform":
+        return "uniform", np.asarray(x, np.float64)
+    if name == "StandardNormal":
+        return "normal", np.asarray(x, np.float64)
+    raise ValueError(f"unexpected base {name}")
+
+
+def ks_per_coord(x: np.ndarray, kind: str) -> np.ndarray:
+    """Per-column one-sample KS statistic against the base law (N(0,1) or Uniform(0,1))."""
+    from scipy.stats import kstest
+    law = "norm" if kind == "normal" else "uniform"
+    return np.array([kstest(x[:, k], law).statistic for k in range(x.shape[1])])
+
+
+def mean_abs_offdiag_corr(x: np.ndarray, kind: str, eps: float = 1e-6) -> float:
+    """Mean |off-diagonal correlation| of the latent coordinates, on the normal-score scale
+    (uniform latents through Phi^{-1} with clipping; normal latents raw)."""
+    from scipy.stats import norm
+    g = norm.ppf(np.clip(x, eps, 1 - eps)) if kind == "uniform" else x
+    g = g[np.isfinite(g).all(1)]
+    sd = g.std(0)
+    g = g[:, sd > 0]
+    r = np.corrcoef(g, rowvar=False)
+    off = ~np.eye(r.shape[0], dtype=bool)
+    return float(np.mean(np.abs(r[off])))
+
+
+def latent_calibration(dist, Y, cond, val_idx) -> dict:
+    """S8 (A4): KS of each latent coordinate against its base law on the validation rows and on
+    all rows; mean |off-diagonal correlation| of the latents (all rows and validation rows)."""
+    kind, x = to_standard_base(dist, Y, cond)
+    val_idx = np.asarray(val_idx)
+    ks_val, ks_all = ks_per_coord(x[val_idx], kind), ks_per_coord(x, kind)
+    return {"latent_kind": kind, "latent_n_nonfinite": int((~np.isfinite(x)).sum()),
+            "latent_ks_val": ks_val.tolist(), "latent_ks_all": ks_all.tolist(),
+            "latent_ks_val_mean": float(ks_val.mean()), "latent_ks_val_max": float(ks_val.max()),
+            "latent_ks_all_mean": float(ks_all.mean()), "latent_ks_all_max": float(ks_all.max()),
+            "latent_offdiag_corr_all": mean_abs_offdiag_corr(x, kind),
+            "latent_offdiag_corr_val": mean_abs_offdiag_corr(x[val_idx], kind)}
+
+
+GFF_ARMS = {"gff_flex": "flexible_continuous_gaussian", "gff_shift": "location_translation_gaussian"}
+GFF_COPULA = dict(RQS_knots=8, nn_depth=1, nn_width=50, flow_layers=4)     # A4: copula 8 / 1 / 50 / 4
+GFF_JOINT_DRAWS = 20000
+
+
+def fit_gff(cfg: dict, Y: np.ndarray, X: np.ndarray, u_z: np.ndarray):
+    """S9 (A4): the package's Gaussian-scale frugal flow through ``train_frugal_flow`` with the
+    ff_full key sequence (stage-1 slot skipped: ECDF ranks)."""
+    from frugal_flows.causal_flows import train_frugal_flow
+    key = jr.PRNGKey(cfg["seed_fit"])
+    key, _ = jr.split(key)
+    key, sub = jr.split(key)
+    return train_frugal_flow(
+        key=sub, y=jnp.asarray(Y), u_z=jnp.asarray(u_z), condition=jnp.asarray(X),
+        causal_model=GFF_ARMS[cfg["arm"]], learning_rate=cfg["lr"], max_epochs=cfg["max_epochs"],
+        max_patience=cfg["patience"], batch_size=cfg["batch"], show_progress=False,
+        fit_kwargs={"ema_decay": None, "wall_cap_s": None},
+        causal_model_args={"RQS_knots": cfg["knots"], "nn_depth": cfg["depth"], "nn_width": cfg["width"],
+                           "flow_layers": cfg["layers"], "interval": 5.0},
+        **GFF_COPULA)
+
+
+def gff_calibration(flow, Y, X, u_z, val_idx, seed: int) -> dict:
+    """S9 (A4) latent calibration of a fitted Gaussian-scale flow:
+    gY_ks_*      data through the margin inverse (g_Y) vs N(0,1), per pixel, validation / all rows;
+    gZ_implied_ks  the model-implied g_Z marginal vs N(0,1) from GFF_JOINT_DRAWS draws of the joint
+                 (base draws pushed through the copula block only: the margin block leaves the g_Z
+                 coordinates untouched, so these are exactly the g_Z columns flow.sample returns
+                 for the same base draws, and they do not depend on T);
+    gZ_resid_ks_*  the data's g_Z pushed through the copula inverse given the data's g_Y, vs N(0,1);
+    gZ_data_ks   the input normal scores themselves (should be ~0: midranks);
+    n_nonfinite_joint  non-finite coordinates among the joint draws."""
+    import frugal_flows.gaussian_scale as gs
+    from scipy.stats import kstest
+    K = Y.shape[1]
+    val_idx = np.asarray(val_idx)
+    g_y = np.asarray(gs.outcome_scores(flow, jnp.asarray(Y), jnp.asarray(X, dtype=jnp.asarray(Y).dtype)), np.float64)
+    g_z = np.asarray(gs.normal_scores_from_uniform(jnp.asarray(u_z, dtype=jnp.float32)), np.float64)
+    ks_val, ks_all = ks_per_coord(g_y[val_idx], "normal"), ks_per_coord(g_y, "normal")
+    e = jr.normal(jr.PRNGKey(seed), (GFF_JOINT_DRAWS, K + g_z.shape[1]))
+    cop = gs.copula_of(flow)                    # T-blind; flowjax still wants a condition of its shape
+    joint = np.asarray(jax.vmap(cop.transform)(e, jnp.zeros((e.shape[0],) + cop.cond_shape, e.dtype)), np.float64)
+    gz_draw = joint[:, K:]
+    resid = np.asarray(gs.copula_residuals(flow, jnp.asarray(g_y, jnp.float32), jnp.asarray(g_z, jnp.float32)),
+                       np.float64)
+    ks = lambda a: [float(kstest(a[np.isfinite(a[:, j]), j], "norm").statistic) for j in range(a.shape[1])]
+    return {"gY_ks_val": ks_val.tolist(), "gY_ks_all": ks_all.tolist(),
+            "gY_ks_val_mean": float(ks_val.mean()), "gY_ks_all_mean": float(ks_all.mean()),
+            "gY_ks_val_max": float(ks_val.max()), "gY_ks_all_max": float(ks_all.max()),
+            "gY_offdiag_corr_all": mean_abs_offdiag_corr(g_y, "normal"),
+            "gZ_implied_ks": ks(gz_draw), "gZ_resid_ks_all": ks(resid), "gZ_resid_ks_val": ks(resid[val_idx]),
+            "gZ_data_ks": ks(g_z), "n_nonfinite_joint": int((~np.isfinite(joint)).sum()),
+            "gY_n_nonfinite": int((~np.isfinite(g_y)).sum())}

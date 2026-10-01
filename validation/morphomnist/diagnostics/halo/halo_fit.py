@@ -63,7 +63,8 @@ def _drop_nonfinite(y0, y1):
     return y0[keep], (None if y1 is None else y1[keep]), int((~keep).sum())
 
 
-LT_ARMS = ("lt", "lt_n")                  # location-translation arms: tau_hat = fitted LocCond ate
+LT_ARMS = ("lt", "lt_n", "gff_shift")     # location-translation arms: tau_hat = fitted LocCond ate
+GFF_ARMS = ("gff_flex", "gff_shift")      # S9 (Amendment A4): Gaussian-scale FF via the package
 
 
 def ate_to_data_scale(pre, ate) -> np.ndarray:
@@ -139,10 +140,35 @@ def _fit_and_sample(cfg: dict, data: dict, pre):
             return y0, y1, int(r["n_clamped"])
         return draw, [losses], extra
     import halo_models as hm
+    if arm in GFF_ARMS:                                 # S9 (Amendment A4)
+        import frugal_flows.gaussian_scale as gs
+        from frugal_flows.interventions import interventional_samples
+        from scipy.stats import rankdata
+        zc = np.asarray(data["z_cont"], np.float64)
+        u_z = rankdata(zc, axis=0) / (zc.shape[0] + 1)     # ECDF midranks of thickness, as ff_full
+        flow, losses = hm.fit_gff(cfg, Y, X, u_z)
+        if arm == "gff_shift":
+            extra["lt_ate_fit_scale"] = np.asarray(gs.shift_vector(flow), np.float64)
+            extra["lt_ate"] = ate_to_data_scale(pre, extra["lt_ate_fit_scale"])
+        extra["calibration"] = hm.gff_calibration(flow, Y, X, u_z, losses["info"]["val_idx"],
+                                                  seed=cfg["seed_mc"] + 1000)
+        ot = pre.transform if pre.kind == "P1" else None
+
+        def draw(seed):
+            r = interventional_samples(jr.key(seed), flow, cond_dim=1, n_mc=cfg["n_mc"],
+                                       outcome_transform=ot, dim_y=Y.shape[1])
+            y0, y1 = np.asarray(r["y0"]), np.asarray(r["y1"])
+            if pre.kind == "P5":
+                y0, y1 = pre.inverse(y0), pre.inverse(y1)
+            return y0, y1, int(r["n_clamped"])
+        return draw, [losses], extra
     dist, losses = hm.fit_arm(cfg, Y, X)
     if arm in LT_ARMS:
         extra["lt_ate_fit_scale"] = hm.loccond_ate(dist)
         extra["lt_ate"] = ate_to_data_scale(pre, extra["lt_ate_fit_scale"])
+    if cfg.get("stage") == "S8":                        # S8 (Amendment A4): latent calibration
+        extra["calibration"] = hm.latent_calibration(dist, Y, X if cfg["task"] == "cond" else None,
+                                                     losses[0]["info"]["val_idx"])
 
     def draw(seed):
         y0, y1, c = hm.sample_arms(seed, dist, cfg["n_mc"], "cond" if arm == "sep" else cfg["task"])
@@ -156,6 +182,10 @@ def run(cfg: dict) -> dict:
     assert not jax.config.jax_enable_x64, "float64 active"
     import frugal_flows  # noqa: F401  (its precision default must not override the env)
     assert not jax.config.jax_enable_x64, "frugal_flows switched on float64"
+    # feat/gaussian-scale worktree: the package must be THIS worktree's (PYTHONPATH override of
+    # the env's editable install, which points at another worktree)
+    ff_file = os.path.abspath(frugal_flows.__file__)
+    assert ff_file.startswith(WORKTREE + os.sep), f"frugal_flows imported from {ff_file}, not {WORKTREE}"
     if cfg.get("xla_flags") is not None:
         assert os.environ.get("XLA_FLAGS", "") == cfg["xla_flags"], "XLA flag string mismatch"
     import halo_data as hd
@@ -234,6 +264,9 @@ def run(cfg: dict) -> dict:
     metrics["dataset_id"], metrics["data_hash"] = data["dataset_id"], data["data_hash"]
     metrics["ps_slope_data"] = data["ps_slope"]
     metrics["preproc"] = pre.info()                  # P5: fitted floor value, n floored, scales
+    metrics["frugal_flows_file"] = ff_file
+    if "calibration" in extra:                       # S8/S9 (Amendment A4)
+        metrics["calibration"] = extra["calibration"]
     for k in ("copula_rank_rule", "copula_width", "copula_reachable", "copula_blind",
               "copula_reachable_per_layer", "copula_mask_width", "copula_dim", "copula_nvars"):
         if k in extra:

@@ -907,6 +907,9 @@ def train_frugal_flow(
         "flexible_discrete_output",
         "location_translation",
         "flexible_reversed",  # reversed copula, frugal_flows.reversed_copula (2026-09-30)
+        # Gaussian-scale frugal flow, frugal_flows.gaussian_scale (2026-10-01)
+        "flexible_continuous_gaussian",
+        "location_translation_gaussian",
     ]
 
     if (causal_model != "gaussian") & (u_z_hetero is not None):
@@ -1016,6 +1019,17 @@ def train_frugal_flow(
             condition=condition,
             mask_condition=mask_condition,
             causal_model_args=causal_model_args,
+        )
+
+    elif causal_model in ("flexible_continuous_gaussian", "location_translation_gaussian"):
+        from frugal_flows import gaussian_scale
+
+        frugal_flow, losses = gaussian_scale.train_frugal_flow_gaussian(
+            key=key, y=y, u_z=u_z, condition=condition, margin=gaussian_scale.CAUSAL_MODELS[causal_model],
+            RQS_knots=RQS_knots, nn_depth=nn_depth, nn_width=nn_width, flow_layers=flow_layers,
+            learning_rate=learning_rate, max_epochs=max_epochs, max_patience=max_patience,
+            batch_size=batch_size, causal_model_args=causal_model_args, show_progress=show_progress,
+            fit_kwargs=fit_kwargs, optimizer=optimizer,
         )
 
     else:

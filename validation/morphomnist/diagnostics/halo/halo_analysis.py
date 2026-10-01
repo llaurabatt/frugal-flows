@@ -1,6 +1,6 @@
 """Halo ladder analysis (HALO_PREREG.md v1, "Gates" and "Analysis and wording").
 
-    python halo_analysis.py --stage {S1,S2,S3,S4,S5,S6,all} --runs-root ~/work/halo-runs
+    python halo_analysis.py --stage {S1,S2,S3,S4,S5,S6,S7,S8,S9,all} --runs-root ~/work/halo-runs
                             [--compare-root ~/work/halo-runs]   (S5/S6: where S0/S1/S2/S4 live)
 
 Unit = seed_data (a replication on the fixed digit-0 corpus for Corpus A; a disjoint
@@ -70,6 +70,8 @@ def label(c: dict) -> str:
         s += "/uncond"
     if c.get("copula_rank_rule") is not None:          # S7 (Amendment A3) cells only
         s += f"/R{c['copula_rank_rule']}/W{c['copula_width']}" + ("/paper" if c.get("paper_setting") else "")
+    elif c.get("paper_setting"):                       # S9 (Amendment A4) paper-setting cells
+        s += "/paper"
     return s
 
 
@@ -803,6 +805,174 @@ def s7_figure(allg: dict, path: str) -> None:
     plt.close(fig)
 
 
+# ------------------------------------------------------------------ S8/S9 (Amendment A4)
+S8_ARMS = {"U": "ff_cond/P1/bs1/E1", "N": "n_cond/P1/bs1/E1", "LT-N": "lt_n/P1/bs1/E1"}
+S8_STATS = ("latent_ks_val_mean", "latent_ks_all_mean", "latent_ks_val_max", "latent_ks_all_max",
+            "latent_offdiag_corr_all", "latent_offdiag_corr_val")
+
+
+def _median(x) -> float:
+    x = np.asarray([v for v in x if v is not None and np.isfinite(v)], float)
+    return float(np.median(x)) if len(x) else float("nan")
+
+
+def s8_summary(groups: dict) -> dict:
+    """Amendment A4, S8 (descriptive, no gate): per arm, medians over cells of the latent
+    calibration stats, best epoch and epochs run, plus the per-cell ATE MAE (mean |E_tau|)."""
+    out = {}
+    for k, L in S8_ARMS.items():
+        if L not in groups:
+            continue
+        cells = [c for v in groups[L]["seed"].values() for c in v["cells"]]
+        cal = [c["met"].get("calibration", {}) for c in cells]
+        row = {"label": L, "n_cells": len(cells), "latent_kind": sorted({c.get("latent_kind", "?") for c in cal})}
+        for st in S8_STATS:
+            row[st] = _median([c.get(st, np.nan) for c in cal])
+        row["best_epoch_median"] = _median([i["best_epoch"] for c in cells for i in c["met"]["fit_info"]])
+        row["epochs_run_median"] = _median([i["n_epochs"] for c in cells for i in c["met"]["fit_info"]])
+        row["ate_mae_median"] = _median([float(np.mean(np.abs(c["maps"]["E_tau"]))) for c in cells])
+        # per-pixel KS (all rows), median over cells, for the KS map
+        row["latent_ks_all_pixel_median"] = np.median([c["latent_ks_all"] for c in cal if "latent_ks_all" in c],
+                                                      0).tolist() if any("latent_ks_all" in c for c in cal) else []
+        out[k] = row
+    return out
+
+
+S9_FF = "ff_full/P1/bs1/{e}"                 # FF-uniform comparator (S4 cells)
+S9_FLEX, S9_SHIFT = "gff_flex/P1/bs1/{e}", "gff_shift/P1/bs1/{e}"
+S9_NAMES = {"FF-uniform": S9_FF, "GFF-flex": S9_FLEX, "GFF-shift": S9_SHIFT}
+S9_EP = S7_EP
+S9_MIN = S7_MIN                              # A4 minimum effects: 0.01 disc bias, 0.003 ATE MAE, 0.05 slope
+S9_S7_PAPER = "ff_full/P0/bs1/E2/Rnew/W16/paper"
+S9_CAL = ("gY_ks_val_mean", "gY_ks_all_mean", "gY_ks_all_max", "gY_offdiag_corr_all", "n_nonfinite_joint")
+S9_CAL_VEC = ("gZ_implied_ks", "gZ_resid_ks_all", "gZ_resid_ks_val", "gZ_data_ks")
+
+
+def s9_label(name: str, e: str, paper: bool = False) -> str:
+    return S9_NAMES[name].format(e=e) + ("/paper" if paper else "")
+
+
+def s9_rows(allg: dict) -> tuple[list[dict], list[str], list[str]]:
+    """Amendment A4. Primary family (Holm over 3 contrasts x 3 endpoints, E2): GFF-flex - FF-uniform,
+    GFF-shift - FF-uniform, GFF-shift - GFF-flex; paired by (seed_data, seed_fit), averaged within
+    seed_data; gated with the v1.1 conjunction and the A4 minimum effects. Everything else exploratory."""
+    _add_s7_derived(allg)
+    fam = "S9 primary (Amendment A4)"
+    prim = [("GFF-flex", "FF-uniform"), ("GFF-shift", "FF-uniform"), ("GFF-shift", "GFF-flex")]
+    rows = []
+    for a, b in prim:
+        A, B = s9_label(a, "E2"), s9_label(b, "E2")
+        rows += [{"family": fam, "kind": "primary", "endpoint": ep, "arm": A, "ref": B, "min_effect": S9_MIN[ep],
+                  **paired_cells(allg, A, B, ep)} for ep in S9_EP if A in allg and B in allg]
+    for r, ph in zip(rows, holm([r["p"] for r in rows])):
+        r["p_holm"] = ph
+        gate(r)
+    gates = [f"{r['arm']} - {r['ref']} [{r['endpoint']}]: {r['text']}" for r in rows]
+    for n in S9_NAMES:
+        rows += _s7_expl(allg, s9_label(n, "E2"), s9_label(n, "E1"), ("Etau_disc_mean",),
+                         f"S9 exploratory E2 - E1 at seed_fit 41 ({n})", sf=41)
+    for n in ("GFF-flex", "GFF-shift"):
+        rows += _s7_expl(allg, s9_label(n, "E1"), s9_label("FF-uniform", "E1"), ("ate_mae", "Etau_disc_mean"),
+                         f"S9 exploratory E1 {n} - FF-uniform")
+    rows += _s7_expl(allg, s9_label("GFF-shift", "E1"), s9_label("GFF-flex", "E1"), ("ate_mae", "Etau_disc_mean"),
+                     "S9 exploratory E1 GFF-shift - GFF-flex")
+    for n in ("GFF-flex", "GFF-shift"):
+        rows += _s7_expl(allg, s9_label(n, "E2", True), S9_S7_PAPER, S9_EP,
+                         f"S9 exploratory paper setting {n} (P1) - S7 new-rank W16 (P0); different preproc "
+                         "and copula width: descriptive (E2, lr 1e-3, <=1000 ep, n=5)")
+    for L in [s9_label(n, e) for n in S9_NAMES for e in ("E2", "E1")] + \
+            [s9_label(n, "E2", True) for n in ("GFF-flex", "GFF-shift")]:
+        for ep in S9_EP:
+            rows += _level(allg, L, ep, "S9 exploratory level vs 0")
+    # predictions stated in A4 before running, printed beside outcomes; gates are NOT changed
+    preds = []
+    r = _find(rows, "primary", s9_label("GFF-flex", "E2"), "ate_mae", s9_label("FF-uniform", "E2")) or {}
+    m = r.get("mean", float("nan"))
+    preds.append(f"PREDICTION GFF-flex lowers E2 ATE MAE relative to FF-uniform (GFF-flex - FF-uniform < 0) | "
+                 f"OUTCOME: mean {m:+.4f} ({'direction as predicted' if m < 0 else 'direction NOT as predicted' if np.isfinite(m) else 'nan'}); "
+                 f"{r.get('text', 'n/a')} (descriptive; only the gate lines resolve anything)")
+    e1 = {n: float(np.nanmean(list(_vals(allg, s9_label(n, "E1"), "ate_mae").values())))
+          if s9_label(n, "E1") in allg else float("nan") for n in S9_NAMES}
+    fin = {k: v for k, v in e1.items() if np.isfinite(v)}
+    low = min(fin, key=fin.get) if fin else "n/a"
+    preds.append("PREDICTION GFF-shift has the lowest E1 ATE MAE | OUTCOME: seed-mean E1 ATE MAE "
+                 + ", ".join(f"{k} {v:.4f}" for k, v in e1.items()) + f"; lowest: {low} "
+                 "(descriptive; the E1 contrasts are exploratory rows with CIs only)")
+    for a in ("GFF-flex", "GFF-shift"):
+        r = _find(rows, "primary", s9_label(a, "E2"), "Etau_disc_mean", s9_label("FF-uniform", "E2")) or {}
+        preds.append(f"NOT PREDICTED: effect of {a} on the E2 disc bias | OUTCOME: mean {r.get('mean', float('nan')):+.4f}; "
+                     f"{r.get('text', 'n/a')}")
+    return rows, gates, preds
+
+
+def s9_calibration(allg: dict) -> dict:
+    """Per config: medians over cells of the A4 latent calibration stats, best epoch, epochs run,
+    non-finite draws, and |shift-vector tau_hat - sampled tau_hat| for GFF-shift."""
+    out = {}
+    for L, G in allg.items():
+        cells = [c for v in G["seed"].values() for c in v["cells"]]
+        cal = [c["met"].get("calibration") for c in cells if c["met"].get("calibration")]
+        row = {"n_cells": len(cells),
+               "best_epoch_median": _median([i["best_epoch"] for c in cells for i in c["met"]["fit_info"]]),
+               "epochs_run_median": _median([i["n_epochs"] for c in cells for i in c["met"]["fit_info"]]),
+               "n_nonfinite_draws_total": int(sum(c["met"].get("n_nonfinite", 0) for c in cells)),
+               "wall_s_median": _median([c["met"].get("wall_s", np.nan) for c in cells])}
+        if cal:
+            for st in S9_CAL:
+                row[st + "_median"] = _median([c.get(st, np.nan) for c in cal])
+            for st in S9_CAL_VEC:
+                row[st + "_median"] = _median([float(np.mean(c[st])) for c in cal if st in c])
+        if any("lt_ate_minus_crn_meanabs" in c["met"] for c in cells):
+            row["shift_vs_sampled_meanabs_median"] = _median([c["met"].get("lt_ate_minus_crn_meanabs", np.nan)
+                                                              for c in cells])
+        out[L] = row
+    return out
+
+
+def s9_figure(allg: dict, path: str) -> None:
+    """Top: seed-mean E_tau maps on E2 (fixed +-0.15) and E1 (fixed +-0.08) for FF-uniform, GFF-flex,
+    GFF-shift. Bottom: E2 disc bias, E2 ATE MAE, E1 ATE MAE, mean +- 95% bootstrap CI over seed_data."""
+    names = list(S9_NAMES)
+    fig = plt.figure(figsize=(11, 8.2), layout="constrained")
+    gs = fig.add_gridspec(3, 6, height_ratios=[1, 1, 1.1])
+    for i, (e, lim) in enumerate((("E2", 0.15), ("E1", 0.08))):
+        axs, im = [], None
+        for j, n in enumerate(names):
+            ax = fig.add_subplot(gs[i, 2 * j:2 * j + 2])
+            ax.set_xticks([]), ax.set_yticks([])
+            axs.append(ax)
+            L = s9_label(n, e)
+            if L not in allg:
+                ax.set_title(f"{n} {e}: no cells", fontsize=7)
+                continue
+            ss = list(allg[L]["seed"].values())
+            im = ax.imshow(np.mean([s["maps"]["E_tau"] for s in ss], 0).reshape(8, 8), cmap="RdBu_r",
+                           vmin=-lim, vmax=lim)
+            ax.set_title(f"E_tau {n}\n{e}, n_sd={len(ss)}", fontsize=7)
+        if im is not None:
+            fig.colorbar(im, ax=axs, location="right", shrink=0.8, label=f"logit (fixed ±{lim})")
+    for k, (e, ep, yl) in enumerate((("E2", "Etau_disc_mean", "E2 disc bias (E_tau disc mean)"),
+                                     ("E2", "ate_mae", "E2 ATE MAE (mean |E_tau|, 64 px)"),
+                                     ("E1", "ate_mae", "E1 ATE MAE (mean |E_tau|, 64 px)"))):
+        ax = fig.add_subplot(gs[2, 2 * k:2 * k + 2])
+        ms, lo, hi = [], [], []
+        for n in names:
+            L = s9_label(n, e)
+            x = np.array([v for v in _vals(allg, L, ep).values() if np.isfinite(v)]) if L in allg else np.array([])
+            m = float(x.mean()) if len(x) else float("nan")
+            c = boot_ci(x)
+            ms.append(m), lo.append(m - c[0] if np.isfinite(c[0]) else 0), hi.append(c[1] - m if np.isfinite(c[1]) else 0)
+        ax.bar(range(len(names)), ms, yerr=[lo, hi], capsize=4, color=["0.55", "C0", "C2"])
+        ax.axhline(0, color="0.3", lw=0.6)
+        ax.set_xticks(range(len(names)), names, fontsize=7)
+        ax.set_ylabel(yl, fontsize=7)
+        ax.set_title("mean, 95% bootstrap CI over seed_data", fontsize=7)
+    fig.suptitle("S9 (Amendment A4): Gaussian-scale frugal flow vs FF-uniform (S4 ff_full/P1); P1, harness settings",
+                 fontsize=8)
+    fig.savefig(path, dpi=110)
+    plt.close(fig)
+
+
 def analyse(stage: str, root: str, compare_root: str | None = None) -> dict:
     croot = compare_root or root
     recs = load_stage(root, stage)
@@ -816,6 +986,9 @@ def analyse(stage: str, root: str, compare_root: str | None = None) -> dict:
         extra = [r for r in load_stage(croot, "S2") if label(r["cfg"]) in S6_COMPARE]
     if stage == "S7":                               # (W50, new) comparators = S4 ff_full/P0 (Amendment A3)
         extra = s7_relabel_s4(load_stage(croot, "S4"))
+    if stage == "S9":                               # FF-uniform = S4 ff_full/P1; S7 paper new-rank (Amendment A4)
+        extra = [r for r in load_stage(croot, "S4") if label(r["cfg"]) in {S9_FF.format(e=e) for e in ("E2", "E1")}]
+        extra += [r for r in load_stage(croot, "S7") if label(r["cfg"]) == S9_S7_PAPER]
     check_flags(recs + extra)
     out = {"stage": stage, "n_cells": len(recs),
            "excluded": [r["run_id"] for r in recs if excluded(r)],
@@ -965,6 +1138,26 @@ def analyse(stage: str, root: str, compare_root: str | None = None) -> dict:
                                 for sd, g in G["seed"].items()} for L, G in allg.items()}
         s7_figure(allg, os.path.join(adir, "S7_rankfix.png"))
         groups = {L: allg[L] for L in [s7_label("E2", r, w) for w in (50, 16) for r in ("old", "new")] if L in allg}
+    elif stage == "S8":
+        tmap = "E_tau"
+        out["calibration"] = s8_summary(groups)
+        out["predictions"] = ["S8 is descriptive (Amendment A4): no gate, no prediction."]
+        out["predictions_source"] = "Amendment A4"
+    elif stage == "S9":
+        tmap = "E_tau"
+        out["compare_root"] = croot
+        out["compare_cells"] = {L: sum(len(sv["cells"]) for sv in G["seed"].values())
+                                for L, G in allg.items() if L not in groups}
+        r9, gates, preds = s9_rows(allg)
+        rows += r9
+        attr += gates
+        out["predictions"] = preds
+        out["predictions_source"] = "Amendment A4"
+        out["calibration"] = s9_calibration(allg)
+        out["endpoints"] = {L: {sd: {k: v for k, v in g["ep"].items() if not k.startswith("xt:")}
+                                for sd, g in G["seed"].items()} for L, G in allg.items()}
+        s9_figure(allg, os.path.join(adir, "S9_gaussian.png"))
+        groups = {L: allg[L] for L in [s9_label(n, e) for e in ("E2", "E1") for n in S9_NAMES] if L in allg}
     out["contrasts"], out["attribution"] = rows, attr
     out["templates_descriptive"] = {m: template_table(groups, m) for m in ("E_mu0", "E_sd0", "E_tau")}
     out["template_corr_mean"] = {L: np.mean([c["met"]["template_corr"] for s in G["seed"].values()
@@ -1011,7 +1204,7 @@ def to_md(out: dict, tmap: str) -> str:
         L.append(f"| {cfg} | " + " | ".join(f"{row[b]['mean']:+.3f} [{row[b]['ci'][0]:+.3f}, {row[b]['ci'][1]:+.3f}]"
                                            for b in TEMPLATE_COEFS + ("r2",)) + " |")
     for k in ("cross_table", "template_corr_mean", "variance_split", "Emu0_corr_across_tau",
-              "lt_ate_vs_sampled_meanabs", "compare_cells", "fit_summary", "connectivity"):
+              "lt_ate_vs_sampled_meanabs", "compare_cells", "fit_summary", "connectivity", "calibration"):
         if k in out:
             L += ["", f"## {k}", "", "```", json.dumps(out[k], indent=1, default=float), "```"]
     return "\n".join(L) + "\n"
@@ -1019,7 +1212,7 @@ def to_md(out: dict, tmap: str) -> str:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stage", required=True, choices=["S1", "S2", "S3", "S4", "S5", "S6", "S7", "all"])
+    ap.add_argument("--stage", required=True, choices=["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "all"])
     ap.add_argument("--runs-root", default=os.path.expanduser("~/work/halo-runs"))
     ap.add_argument("--compare-root", default=None,
                     help="root holding S0/S1/S2/S4 comparison cells (default: --runs-root); S7 reads S4 from it")
