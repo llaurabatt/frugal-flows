@@ -253,3 +253,34 @@ endpoints):** U − N (H_construct); N − A2 (ranks); N − LT-N (H_shift). Gat
 effect 0.003 on ATE MAE (≈ 2 SE at n=10) and 0.01 on disc bias. Exploratory: LT − LT/P1, LT/P1 − LT-N,
 τ=0 arms, distributional endpoints. Predictions, stated before running: U − N > 0 and ≥ half of U − A2;
 N − A2 not resolved; N − LT-N > 0. Nulls worded as v1.1; no attribution from a null.
+
+## Amendment A3 (2026-10-01 16:15, appended before any S7 cell exists)
+
+**Trigger.** Laura's fix of 2026-09-25/26 (commits 1b2510a, 8cb4086): flowjax's rule
+`hidden_ranks = arange(nn_width) % dim` leaves the copula's covariate outputs unable to depend on
+outcome ranks ≥ nn_width when nn_width < dim (14 of 64 pixels at 8×8 with width 50; 48 of 64 with the
+paper-setting width 16; 206 of 256 at 16×16 with width 50). Her `autoregressive_hidden_ranks` spreads the
+ranks so every input is reachable at any width. Every full-model cell in S4/S5 already ran WITH the fix
+(the halo branch is based on 6eecd77, which contains it; the rank files are unchanged up to 5cdac8c).
+Dan asked whether the fix has a positive impact. S1 and S6 only compared rank classes in the MARGIN.
+
+**Stage S7.** Full frugal flow (`train_frugal_flow`, flexible_continuous, ECDF u_z of thickness), Corpus A
+(digit 0, 8×8), harness fit settings (lr 1e-2, ≤300 epochs, patience 30), P0 raw logit (as the runner
+feeds it). Factor R: copula hidden ranks **old** (the exact pre-1b2510a rule, restored for the copula
+only by patching the name the copula module imports; margin untouched) vs **new** (the fix). Factor W:
+copula width 50 (historical default) and 16 (paper setting). Cells: E2 with seeds 31–40 × {41, 42}; E1 with
+seed_fit 41. The W=50/new cells are the existing S4 ff_full/P0 cells. New cells: W50/old (E2 20, E1 10),
+W16/old (20, 10), W16/new (20, 10) = 90. Plus a **paper-setting check**: lr 1e-3, ≤1000 epochs, width 16,
+E2, seeds 31–35 × 41, old vs new (10 cells), exploratory.
+A deterministic **connectivity table** (number of outcome ranks that can reach the covariate outputs)
+is computed from the constructed masks for old/new × width {16, 50} × K {64, 256}.
+
+**Endpoints.** Primary on E2: `E_tau` disc-class mean (confounding bias), per-cell ATE MAE, and the
+off-support slope of `E_tau` on the naive-bias map. **Primary family (Holm over 2 widths × 3 endpoints):**
+old − new at W=50 and at W=16, paired by (seed_data, seed_fit). Gate = v1.1 conjunction with minimum
+effects 0.01 (disc bias), 0.003 (ATE MAE), 0.05 (slope). Secondary/exploratory: E2 − E1 paired disc bias
+at seed_fit 41; E1 ATE MAE (does the fix cost anything under randomisation); W16 vs W50 under the fix;
+the paper-setting check. Predictions, stated before running: at W=16 old − new > 0 on all three
+endpoints (the copula cannot adjust for thickness through 48 unseen pixels); at W=50 the contrast is
+small (the 14 unseen pixels are mostly the quiet bottom rows). Nulls worded as v1.1; no attribution from
+a null. Not tested here: 16×16, and all-digit data (Laura's paper grid).
