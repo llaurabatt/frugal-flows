@@ -444,3 +444,96 @@ def test_latent_calibration_and_gff_tiny():
         cal = hm.gff_calibration(flow, Y, t, u_z, losses["info"]["val_idx"], seed=1)
         assert len(cal["gY_ks_all"]) == 4 and len(cal["gZ_implied_ks"]) == 1 and cal["n_nonfinite_joint"] == 0
         assert cal["gZ_data_ks"][0] < 0.01
+
+
+# ------------------------------------------------------------------ S10 (Amendment A5)
+def test_s10_cells():
+    from collections import Counter
+    cells = hdr.enumerate_cells("S10")
+    assert len(cells) == 60 and len({c["identity_sha"] for c in cells}) == 60 and len({c["run_id"] for c in cells}) == 60
+    assert all(c["seed_fit"] == 41 and c["stage"] == "S10" and c["preset"] == "E2" and c["preproc"] == "P1"
+               and c["corpus"] == "A" and c["lr"] == 1e-2 and c["max_epochs"] == 300 and c["patience"] == 30
+               and c["batch"] == 100 and c["n_mc"] == 5000 for c in cells)
+    assert {c["seed_data"] for c in cells} == set(range(31, 36))
+    n = Counter((c["arm"], c["base_shift"], c["shift_init"], c["ps_slope"], c["placebo_covariate"]) for c in cells)
+    assert len(n) == 12 and set(n.values()) == {5}
+    assert ("gff_shift", 1.0, "zero", 1.2, False) not in n            # reused from S9
+    for b in (1.0, 0.0, -1.0):
+        for i in ("zero", "naive", "plus2"):
+            assert (("gff_shift", b, i, 1.2, False) in n) == ((b, i) != (1.0, "zero"))
+    assert n[("gff_shift", 1.0, "zero", 2.4, False)] == 5 and n[("gff_shift", 1.0, "naive", 2.4, False)] == 5
+    assert n[("lt_n", 1.0, "zero", 1.2, False)] == 5 and n[("gff_shift", 1.0, "zero", 1.2, True)] == 5
+    # no S10 identity collides with an S9 one
+    assert not {c["identity_sha"] for c in hdr.enumerate_cells("S9")} & {c["identity_sha"] for c in cells}
+    assert len(hdr.enumerate_cells("S10", smoke=True)) == 12
+
+
+@pytest.mark.parametrize("stage", ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9"])
+def test_s1_to_s9_identities_unchanged_by_a5(stage):
+    """Every S1-S9 cell (full and smoke) has the same run_id and identity_sha as under the driver at
+    08e685e (before S10 existed)."""
+    old = _driver_at("08e685e")
+    for smoke in (False, True):
+        a = [(c["run_id"], c["identity_sha"]) for c in old.enumerate_cells(stage, smoke=smoke, xla_flags=XLA_RUN)]
+        b = [(c["run_id"], c["identity_sha"]) for c in hdr.enumerate_cells(stage, smoke=smoke, xla_flags=XLA_RUN)]
+        assert a == b
+
+
+def _p1_toy():
+    rng = np.random.default_rng(3)
+    t = rng.integers(0, 2, (400, 1)).astype(float)
+    Y = rng.normal(size=(400, 5)) * np.array([0.04, 0.3, 1.0, 2.5, 7.0]) + 1.7 * t - 3.0
+    pre = hd.Preproc("P1").fit(Y)
+    return Y, t, pre
+
+
+def test_s10_naive_init_is_standardised_naive_difference():
+    from halo_fit import shift_init_vector, ate_to_data_scale
+    Y, t, pre = _p1_toy()
+    Yf = pre.forward(Y)
+    v = shift_init_vector("naive", Yf, t, pre)
+    assert np.array_equal(v, hd.naive_diff(np.asarray(Yf, np.float64), t))   # fitted (float32) Y, float64 means
+    assert np.allclose(v, hd.naive_diff(Yf, t), atol=1e-5)
+    # and it is the data-scale naive difference divided by the fitted sd
+    assert np.allclose(ate_to_data_scale(pre, v), hd.naive_diff(Y, t), atol=1e-4)
+    assert shift_init_vector("zero", Yf, t, pre) is None
+
+
+def test_s10_plus2_is_two_logit_units():
+    from halo_fit import shift_init_vector, ate_to_data_scale
+    Y, t, pre = _p1_toy()
+    v = shift_init_vector("plus2", pre.forward(Y), t, pre)
+    assert not np.allclose(v, 2.0)                                  # differs on the fitted scale
+    # exact up to the float32 rounding of the package's P1 inverse (OutcomeTransform is float32)
+    assert np.allclose(ate_to_data_scale(pre, v), 2.0, atol=1e-6, rtol=0)
+
+
+def test_s10_placebo_permutation_seeded():
+    p1, s1 = hd.placebo_permutation(31, 5923)
+    p2, _ = hd.placebo_permutation(31, 5923)
+    p3, _ = hd.placebo_permutation(32, 5923)
+    assert np.array_equal(np.sort(p1), np.arange(5923)) and np.array_equal(p1, p2) and not np.array_equal(p1, p3)
+    assert s1 == [31, 5150]
+
+
+def test_s10_rho_endpoints():
+    rng = np.random.default_rng(0)
+    truth = np.where(hd.disc_mask_geometric(), 1.0, 0.0)
+    naive = truth + rng.normal(0, 0.3, 64)
+    assert hmx.retained_confounding(truth, truth, naive) == 0.0
+    assert np.isclose(hmx.retained_confounding(naive, truth, naive), 1.0)
+    assert np.isclose(hmx.retained_confounding(np.zeros(64), np.zeros(64), naive + 0.0), 0.0)
+    d = hd.disc_mask_geometric()
+    e = hmx.s10_endpoints(naive, truth, naive, d, ~d, ~d, init=np.zeros(64))
+    assert np.isclose(e["rho"], 1.0) and np.isclose(e["dist_from_truth"], e["dist_naive_from_truth"])
+    assert np.isclose(e["dist_from_init"], np.linalg.norm(naive))
+
+
+def test_s10_dataset_ps_slope_override():
+    """ps_slope 1.2 through the S10 override gives the S9 dataset byte for byte; 2.4 changes only X."""
+    base = dict(preset="E2", base_shift=1.0, seed_data=31, preproc="P1", corpus="A", ps_slope=1.2)
+    a = hd.build_dataset(base)
+    b = hd.build_dataset({**base, "stage": "S10"})
+    c = hd.build_dataset({**base, "stage": "S10", "ps_slope": 2.4})
+    assert a["data_hash"] == b["data_hash"] and a["dataset_id"] == b["dataset_id"]
+    assert c["ps_slope"] == 2.4 and c["data_hash"] != a["data_hash"]

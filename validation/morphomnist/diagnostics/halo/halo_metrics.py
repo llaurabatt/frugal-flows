@@ -168,3 +168,28 @@ def oracle_floors(Y0: np.ndarray, Y1: np.ndarray | None, rng: np.random.Generato
         out[f"floor_E_mu{t}"] = np.abs(a.mean(0) - b.mean(0))
         out[f"floor_E_sd{t}"] = np.abs(a.std(0) - b.std(0))
     return out
+
+
+# ------------------------------------------------------------------ S10 (Amendment A5)
+def retained_confounding(tau_hat, truth, naive) -> float:
+    """rho = <tau_hat - truth, naive - truth> / ||naive - truth||^2 over the pixels
+    (0 = the truth, 1 = the naive treated-minus-untreated difference)."""
+    d = np.asarray(naive, np.float64) - np.asarray(truth, np.float64)
+    return float(np.dot(np.asarray(tau_hat, np.float64) - np.asarray(truth, np.float64), d) / np.dot(d, d))
+
+
+def s10_endpoints(tau_hat, truth, naive, disc, active_off, quiet, init=None) -> dict:
+    """Per-cell S10 endpoints (all on the data / logit scale). ``disc`` is the effect support
+    (the geometric disc when truth == 0); ``init`` the shift's starting vector (None: not a
+    shift model)."""
+    tau_hat, truth, naive = (np.asarray(v, np.float64) for v in (tau_hat, truth, naive))
+    e = tau_hat - truth
+    m = lambda v, k: float(np.mean(v[np.asarray(k, bool)]))
+    out = {"tauhat_disc_mean": m(tau_hat, disc), "Etau_disc_mean": m(e, disc),
+           "Etau_active_off_mean": m(e, active_off), "Etau_quiet_mean": m(e, quiet),
+           "ate_mae": float(np.mean(np.abs(e))), "rho": retained_confounding(tau_hat, truth, naive),
+           "dist_from_truth": float(np.linalg.norm(e)),
+           "dist_naive_from_truth": float(np.linalg.norm(naive - truth))}
+    if init is not None:
+        out["dist_from_init"] = float(np.linalg.norm(tau_hat - np.asarray(init, np.float64)))
+    return out

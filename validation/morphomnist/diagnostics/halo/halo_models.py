@@ -270,21 +270,27 @@ GFF_COPULA = dict(RQS_knots=8, nn_depth=1, nn_width=50, flow_layers=4)     # A4:
 GFF_JOINT_DRAWS = 20000
 
 
-def fit_gff(cfg: dict, Y: np.ndarray, X: np.ndarray, u_z: np.ndarray):
+def fit_gff(cfg: dict, Y: np.ndarray, X: np.ndarray, u_z: np.ndarray, ate_init=None):
     """S9 (A4): the package's Gaussian-scale frugal flow through ``train_frugal_flow`` with the
-    ff_full key sequence (stage-1 slot skipped: ECDF ranks)."""
+    ff_full key sequence (stage-1 slot skipped: ECDF ranks). S10 (A5): ``ate_init`` (length-K,
+    PREPROCESSED scale) initialises the shift vector via ``causal_model_args["ate"]``; None keeps
+    the package default (0), so S9's call is unchanged."""
     from frugal_flows.causal_flows import train_frugal_flow
     key = jr.PRNGKey(cfg["seed_fit"])
     key, _ = jr.split(key)
     key, sub = jr.split(key)
+    cma = {"RQS_knots": cfg["knots"], "nn_depth": cfg["depth"], "nn_width": cfg["width"],
+           "flow_layers": cfg["layers"], "interval": 5.0}
+    if ate_init is not None:
+        if cfg["arm"] != "gff_shift":
+            raise ValueError("ate_init applies to the shift margin only")
+        cma["ate"] = np.asarray(ate_init, np.float32)
     return train_frugal_flow(
         key=sub, y=jnp.asarray(Y), u_z=jnp.asarray(u_z), condition=jnp.asarray(X),
         causal_model=GFF_ARMS[cfg["arm"]], learning_rate=cfg["lr"], max_epochs=cfg["max_epochs"],
         max_patience=cfg["patience"], batch_size=cfg["batch"], show_progress=False,
         fit_kwargs={"ema_decay": None, "wall_cap_s": None},
-        causal_model_args={"RQS_knots": cfg["knots"], "nn_depth": cfg["depth"], "nn_width": cfg["width"],
-                           "flow_layers": cfg["layers"], "interval": 5.0},
-        **GFF_COPULA)
+        causal_model_args=cma, **GFF_COPULA)
 
 
 def gff_calibration(flow, Y, X, u_z, val_idx, seed: int) -> dict:

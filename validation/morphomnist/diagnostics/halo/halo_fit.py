@@ -26,6 +26,9 @@ IDENTITY_KEYS = ("stage", "corpus", "arm", "preproc", "task", "preset", "base_sh
 # Amendment A3 (S7): identity keys that enter a cell's identity ONLY when the cell carries them,
 # so every S0-S6 identity (and run_id hash) is unchanged by their introduction.
 OPTIONAL_IDENTITY_KEYS = ("copula_rank_rule", "copula_width", "paper_setting")
+# Amendment A5 (S10): carried by S10 cells only (same rule: absent keys leave old identities alone)
+OPTIONAL_IDENTITY_KEYS += ("shift_init", "placebo_covariate")
+SHIFT_INITS = ("zero", "naive", "plus2")
 
 
 def identity_of(cell: dict) -> dict:
@@ -77,6 +80,22 @@ def ate_to_data_scale(pre, ate) -> np.ndarray:
         return ate
     z0 = np.zeros((1, ate.shape[0]))
     return np.asarray(pre.inverse(ate[None, :]), np.float64)[0] - np.asarray(pre.inverse(z0), np.float64)[0]
+
+
+def shift_init_vector(kind: str, Y_fit: np.ndarray, X: np.ndarray, pre):
+    """S10 (A5) starting value of the shift, on the PREPROCESSED (fitted) scale, or None for the
+    package default (zero). "naive": the per-pixel treated-minus-untreated difference of the
+    fitted outcome (all n rows). "plus2": +2 logit units per pixel, i.e. 2 / sd_k under P1
+    (sd_k = the data-scale size of a unit shift on the fitted scale, from ``ate_to_data_scale``)."""
+    import halo_data as hd
+    if kind == "zero":
+        return None
+    if kind == "naive":
+        return np.asarray(hd.naive_diff(np.asarray(Y_fit, np.float64), X), np.float64)
+    if kind == "plus2":
+        unit = ate_to_data_scale(pre, np.ones(np.asarray(Y_fit).shape[1]))
+        return 2.0 / unit
+    raise ValueError(kind)
 
 
 def _fit_and_sample(cfg: dict, data: dict, pre):
@@ -146,7 +165,16 @@ def _fit_and_sample(cfg: dict, data: dict, pre):
         from scipy.stats import rankdata
         zc = np.asarray(data["z_cont"], np.float64)
         u_z = rankdata(zc, axis=0) / (zc.shape[0] + 1)     # ECDF midranks of thickness, as ff_full
-        flow, losses = hm.fit_gff(cfg, Y, X, u_z)
+        if cfg.get("placebo_covariate"):                    # S10 Anchor B (A5): uninformative covariate
+            import halo_data as hd
+            perm, pseed = hd.placebo_permutation(cfg["seed_data"], u_z.shape[0])
+            u_z = u_z[perm]
+            extra.update(placebo_perm_seed=pseed, placebo_perm_fixed_points=int(np.sum(perm == np.arange(len(perm)))),
+                         placebo_corr_uz_thickness=float(np.corrcoef(u_z[:, 0], zc[:, 0])[0, 1]))
+        init = shift_init_vector(cfg.get("shift_init", "zero"), Y, X, pre)
+        extra["init_fit_scale"] = np.zeros(Y.shape[1]) if init is None else init
+        extra["init_vector"] = ate_to_data_scale(pre, extra["init_fit_scale"])
+        flow, losses = hm.fit_gff(cfg, Y, X, u_z, ate_init=init)
         if arm == "gff_shift":
             extra["lt_ate_fit_scale"] = np.asarray(gs.shift_vector(flow), np.float64)
             extra["lt_ate"] = ate_to_data_scale(pre, extra["lt_ate_fit_scale"])
@@ -162,8 +190,11 @@ def _fit_and_sample(cfg: dict, data: dict, pre):
                 y0, y1 = pre.inverse(y0), pre.inverse(y1)
             return y0, y1, int(r["n_clamped"])
         return draw, [losses], extra
+    if cfg.get("shift_init", "zero") != "zero" or cfg.get("placebo_covariate"):
+        raise ValueError(f"shift_init / placebo_covariate are implemented for the GFF arms only, not {arm}")
     dist, losses = hm.fit_arm(cfg, Y, X)
     if arm in LT_ARMS:
+        extra["init_vector"] = np.zeros(Y.shape[1])        # LocCond(ate=0)
         extra["lt_ate_fit_scale"] = hm.loccond_ate(dist)
         extra["lt_ate"] = ate_to_data_scale(pre, extra["lt_ate_fit_scale"])
     if cfg.get("stage") == "S8":                        # S8 (Amendment A4): latent calibration
@@ -267,6 +298,19 @@ def run(cfg: dict) -> dict:
     metrics["frugal_flows_file"] = ff_file
     if "calibration" in extra:                       # S8/S9 (Amendment A4)
         metrics["calibration"] = extra["calibration"]
+    if cfg.get("stage") == "S10":                    # Amendment A5 per-cell endpoints
+        naive = hd.naive_diff(data["Y"], data["X"])       # ORIGINAL logit scale
+        metrics["s10"] = {**hmx.s10_endpoints(m["tau_hat"], data["ATE"], naive, classes["disc"],
+                                              classes["active_off"], classes["quiet"], extra.get("init_vector")),
+                          "naive_map": naive.tolist(), "truth_map": np.asarray(data["ATE"]).tolist(),
+                          "tau_hat": np.asarray(m["tau_hat"]).tolist(),
+                          "init_vector": np.asarray(extra.get("init_vector")).tolist(),
+                          "init_fit_scale": np.asarray(extra.get("init_fit_scale", np.zeros(64))).tolist(),
+                          "shift_init": cfg.get("shift_init"), "placebo_covariate": cfg.get("placebo_covariate"),
+                          "ps_slope": data["ps_slope"]}
+        for k in ("placebo_perm_seed", "placebo_perm_fixed_points", "placebo_corr_uz_thickness"):
+            if k in extra:
+                metrics["s10"][k] = extra[k]
     for k in ("copula_rank_rule", "copula_width", "copula_reachable", "copula_blind",
               "copula_reachable_per_layer", "copula_mask_width", "copula_dim", "copula_nvars"):
         if k in extra:

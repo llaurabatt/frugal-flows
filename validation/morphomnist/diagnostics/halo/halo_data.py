@@ -151,11 +151,12 @@ def ring_mask() -> np.ndarray:
 ROW_KEYS = ("Y", "X", "Y0", "Y1", "ITE", "THICKNESS", "PROPENSITY", "z_cont", "RAW")
 
 
-def _build(preset: str, base_shift: float, seed: int, preproc: str, digit) -> dict:
+def _build(preset: str, base_shift: float, seed: int, preproc: str, digit, ps_slope=None) -> dict:
     store: dict = {}
+    extra = {} if ps_slope is None else {"ps_slope": float(ps_slope)}   # S10 (A5) override only
     with _patched(preproc, store):
         d = pme.build_preset(PRESETS.get(preset, preset), size=SIZE, radius=RADIUS, digit=digit,
-                             n=None, seed=seed, base_shift=float(base_shift))
+                             n=None, seed=seed, base_shift=float(base_shift), **extra)
     out = {k: np.asarray(d[k], dtype=np.float64) for k in ROW_KEYS[:-1] + ("ATE",)}
     out["RAW"] = store["RAW"]
     out["ps_slope"] = float(d["config"]["ps_slope"])
@@ -182,16 +183,17 @@ def _corpus_b_master(preset: str, base_shift: float, preproc: str) -> dict:
 
 
 def build_real(preset: str, base_shift: float, seed_data: int, preproc: str = "P0",
-               corpus: str = "A") -> dict:
+               corpus: str = "A", ps_slope: float | None = None) -> dict:
     """Laura's ``build_preset`` (size 8, preset's own ps_slope) with the transform variant
     of ``preproc``. Corpus A: digit 0, all 5,923 images, seed = seed_data (the same images
     in every seed; order, noise and assignment differ). Corpus B: rows
     [i*5923, (i+1)*5923) of the all-digit master build, i = seed_data - 31: ten genuinely
     disjoint sets of 5,923 independent units. Returns numpy arrays plus RAW pooled pixels."""
     if corpus == "A":
-        out = _build(preset, base_shift, seed_data, preproc, DIGIT)
+        out = _build(preset, base_shift, seed_data, preproc, DIGIT, ps_slope)
         assert len(out["Y"]) == N_DIGIT0, len(out["Y"])
     elif corpus == "B":
+        assert ps_slope is None, "ps_slope override is Corpus-A only (S10)"
         m = _corpus_b_master(preset, base_shift, preproc)
         i = seed_data - SEEDS_DATA[0]
         assert 0 <= i < 10, seed_data
@@ -237,7 +239,20 @@ def build_dataset(cfg: dict) -> dict:
     if cfg.get("synthetic"):
         return build_synthetic(cfg["synthetic"], cfg["seed_data"])
     pp = cfg["preproc"] if cfg["preproc"] in ("P2", "P3", "P4") else "P0"
-    return build_real(cfg["preset"], cfg["base_shift"], cfg["seed_data"], pp, cfg.get("corpus", "A"))
+    # S10 (Amendment A5): the cell's ps_slope is passed to the generator (1.2 = E2's own value,
+    # 2.4 = the stronger-confounding cells). Earlier stages keep the preset's own ps_slope.
+    ps = cfg["ps_slope"] if cfg.get("stage") == "S10" else None
+    out = build_real(cfg["preset"], cfg["base_shift"], cfg["seed_data"], pp, cfg.get("corpus", "A"), ps)
+    if ps is not None:
+        assert out["ps_slope"] == float(ps), (out["ps_slope"], ps)
+    return out
+
+
+def placebo_permutation(seed_data: int, n: int) -> tuple[np.ndarray, list[int]]:
+    """S10 Anchor B (Amendment A5): a seeded permutation of the n units, applied to the
+    covariate ranks so the covariate is independent of (T, Y). Returns (perm, rng seed)."""
+    seed = [int(seed_data), 5150]
+    return np.random.default_rng(seed).permutation(n), seed
 
 
 class FlooredStandardize:

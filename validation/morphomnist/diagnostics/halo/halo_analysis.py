@@ -1,6 +1,6 @@
 """Halo ladder analysis (HALO_PREREG.md v1, "Gates" and "Analysis and wording").
 
-    python halo_analysis.py --stage {S1,S2,S3,S4,S5,S6,S7,S8,S9,all} --runs-root ~/work/halo-runs
+    python halo_analysis.py --stage {S1,S2,S3,S4,S5,S6,S7,S8,S9,S10,all} --runs-root ~/work/halo-runs
                             [--compare-root ~/work/halo-runs]   (S5/S6: where S0/S1/S2/S4 live)
 
 Unit = seed_data (a replication on the fixed digit-0 corpus for Corpus A; a disjoint
@@ -973,8 +973,299 @@ def s9_figure(allg: dict, path: str) -> None:
     plt.close(fig)
 
 
+# ------------------------------------------------------------------ S10 (Amendment A5)
+S10_TRUTHS = (1.0, 0.0, -1.0)
+S10_INITS = ("zero", "naive", "plus2")
+S10_EP = ("tauhat_disc_mean", "Etau_disc_mean", "rho", "ate_mae", "Etau_active_off_mean", "Etau_quiet_mean",
+          "dist_from_init", "dist_from_truth", "dist_naive_from_truth")
+S10_ANCHOR_A = ("lt_n", 1.0, "zero", 1.2, False)
+S10_ANCHOR_B = ("gff_shift", 1.0, "zero", 1.2, True)
+S10_SEEDS = tuple(range(31, 36))
+
+
+def s10_key(c: dict) -> tuple:
+    """(arm, base_shift, shift_init, ps_slope, placebo). S9 cells (no S10 keys) = init zero, no placebo."""
+    return (c["arm"], float(c["base_shift"]), c.get("shift_init", "zero"), float(c["ps_slope"]),
+            bool(c.get("placebo_covariate", False)))
+
+
+def s10_name(k: tuple) -> str:
+    arm, bs, init, ps, pl = k
+    if k == S10_ANCHOR_A:
+        return "Anchor A (lt_n, no copula)"
+    if k == S10_ANCHOR_B:
+        return "Anchor B (placebo covariate)"
+    return f"{arm} truth {bs:+g} init {init} ps {ps:g}"
+
+
+def s10_cell_endpoints(r: dict) -> dict:
+    """S10 endpoints of one halo cell from its saved maps (tau_hat, ATE, imb = naive - ATE, classes);
+    the start vector from metrics (S10) or zero (S9 cells: LocCond(ate=0))."""
+    import halo_metrics as hmx
+    m = r["maps"]
+    truth = np.asarray(m["ATE"], float)
+    naive = np.asarray(m["imb"], float) + truth
+    s10 = r["met"].get("s10", {})
+    init = np.asarray(s10["init_vector"], float) if "init_vector" in s10 else np.zeros_like(truth)
+    e = hmx.s10_endpoints(m["tau_hat"], truth, naive, m["cls_disc"], m["cls_active_off"], m["cls_quiet"], init)
+    fi = r["met"]["fit_info"][0]
+    e.update(epochs_run=float(fi["n_epochs"]), best_epoch=float(fi["best_epoch"]))
+    if s10:
+        e["stored_vs_recomputed_maxabs"] = float(max(abs(s10[k] - e[k]) for k in S10_EP if k in s10))
+    return e
+
+
+def _s10_group(recs: list[dict]) -> dict:
+    """key -> {seed_data: endpoints averaged over that seed's cells}; plus per-seed maps."""
+    g: dict = defaultdict(lambda: defaultdict(list))
+    for r in recs:
+        if excluded(r):
+            continue
+        r["s10ep"] = s10_cell_endpoints(r)
+        g[s10_key(r["cfg"])][r["cfg"]["seed_data"]].append(r)
+    out = {}
+    for k, seeds in g.items():
+        out[k] = {}
+        for sd, cells in sorted(seeds.items()):
+            ep = {e: float(np.mean([c["s10ep"][e] for c in cells])) for e in cells[0]["s10ep"]}
+            mp = {n: np.mean([np.asarray(c["maps"][n], float) for c in cells], 0) for n in ("tau_hat", "ATE", "imb")}
+            out[k][sd] = {"ep": ep, "maps": mp, "n_cells": len(cells),
+                          "seed_fits": sorted(c["cfg"]["seed_fit"] for c in cells)}
+    return out
+
+
+def _s10_stat(G: dict, ep: str, seeds=None) -> dict:
+    x = np.array([v["ep"][ep] for sd, v in sorted(G.items()) if (seeds is None or sd in seeds)
+                  and np.isfinite(v["ep"].get(ep, np.nan))])
+    lo, hi = boot_ci(x)
+    return {"n": int(len(x)), "mean": float(x.mean()) if len(x) else float("nan"), "ci": [lo, hi],
+            "per_seed": x.tolist()}
+
+
+def s10_clauses(T: dict) -> tuple[list[dict], bool]:
+    """Amendment A5 pass criteria, evaluated EXACTLY as written. ``T`` = key -> endpoint -> stat."""
+    get = lambda k, ep: T.get(k, {}).get(ep, {}).get("mean", float("nan"))
+    main = {(bs, i): ("gff_shift", bs, i, 1.2, False) for bs in S10_TRUTHS for i in S10_INITS}
+    cl = []
+    # (i) every (truth, init) at ps 1.2: |seed-mean disc bias| <= 0.03 AND seed-mean rho <= 0.10
+    det, ok = [], True
+    for (bs, i), k in main.items():
+        b, rho = get(k, "Etau_disc_mean"), get(k, "rho")
+        good = bool(np.isfinite(b) and np.isfinite(rho) and abs(b) <= 0.03 and rho <= 0.10)
+        ok &= good
+        det.append(f"truth {bs:+g} init {i}: disc bias {b:+.4f}, rho {rho:+.4f} -> {'ok' if good else 'FAILS'}")
+    cl.append({"clause": "(i) every (truth, init) at ps_slope 1.2: |seed-mean disc bias| <= 0.03 AND seed-mean rho <= 0.10",
+               "pass": ok, "detail": det})
+    # (ii) per truth: max pairwise difference of seed-mean disc tau_hat over the three inits <= 0.02
+    det, ok = [], True
+    for bs in S10_TRUTHS:
+        v = [get(main[(bs, i)], "tauhat_disc_mean") for i in S10_INITS]
+        d = float(max(abs(a - b) for a in v for b in v)) if all(np.isfinite(v)) else float("nan")
+        good = bool(np.isfinite(d) and d <= 0.02)
+        ok &= good
+        det.append(f"truth {bs:+g}: disc tau_hat " + ", ".join(f"{i} {x:+.4f}" for i, x in zip(S10_INITS, v))
+                   + f"; max pairwise diff {d:.4f} -> {'ok' if good else 'FAILS'}")
+    cl.append({"clause": "(ii) per truth, max pairwise init difference in seed-mean disc tau_hat <= 0.02", "pass": ok,
+               "detail": det})
+    # (iii) naive start: seed-mean rho <= 0.10 per truth
+    det, ok = [], True
+    for bs in S10_TRUTHS:
+        rho = get(main[(bs, "naive")], "rho")
+        good = bool(np.isfinite(rho) and rho <= 0.10)
+        ok &= good
+        det.append(f"truth {bs:+g} init naive: rho {rho:+.4f} -> {'ok' if good else 'FAILS'}")
+    cl.append({"clause": "(iii) from the naive start, seed-mean rho <= 0.10 for each truth", "pass": ok, "detail": det})
+    # (iv) both anchors: seed-mean rho >= 0.80
+    det, ok = [], True
+    for k in (S10_ANCHOR_A, S10_ANCHOR_B):
+        rho = get(k, "rho")
+        good = bool(np.isfinite(rho) and rho >= 0.80)
+        ok &= good
+        det.append(f"{s10_name(k)}: rho {rho:+.4f} -> {'ok' if good else 'FAILS'}")
+    cl.append({"clause": "(iv) both anchors return the naive answer: seed-mean rho >= 0.80", "pass": ok, "detail": det})
+    return cl, all(c["pass"] for c in cl)
+
+
+def _fr_endpoints(froot: str) -> dict:
+    """(preset, seed_data) -> S10 endpoints of the frengression cell (halo_s10.json from halo_frengression post)."""
+    out = {}
+    for f in glob.glob(os.path.join(froot, "fr_*", "halo_s10.json")):
+        j = json.load(open(f))
+        out[(j["preset"], j["seed_data"])] = {**j["endpoints"], "identical": j["dataset_check"]["identical"],
+                                              "tau_hat": np.asarray(j["tau_hat"])}
+    return out
+
+
+def s10_frengression(froot: str, comp: dict) -> dict:
+    """Exploratory paired block: frengression - comparator by seed_data, comparators seed_fit-averaged."""
+    fr = _fr_endpoints(froot)
+    chk = {}
+    cf = os.path.join(froot, "_dataset_check.json")
+    if os.path.exists(cf):
+        c = json.load(open(cf))
+        chk = {"n": c["n"], "n_not_identical_or_missing": c["n_not_identical_or_missing"]}
+    rows = []
+    for e, eps in (("E2", ("ate_mae", "Etau_disc_mean", "rho")), ("E1", ("ate_mae",))):
+        for name, G in comp.get(e, {}).items():
+            for ep in eps:
+                f = {sd: v[ep] for (p, sd), v in fr.items() if p == e}
+                o = {sd: v["ep"][ep] for sd, v in G.items()}
+                sds = sorted(set(f) & set(o))
+                t = _test([f[sd] - o[sd] for sd in sds])
+                rows.append({"preset": e, "endpoint": ep, "comparator": name, "n": t["n"], "seeds": sds,
+                             "fr_mean": float(np.mean([f[s] for s in sds])) if sds else float("nan"),
+                             "comp_mean": float(np.mean([o[s] for s in sds])) if sds else float("nan"),
+                             "diff_mean": t["mean"], "ci": t["ci"], "p": t["p"]})
+    levels = {e: {ep: _s10_stat({sd: {"ep": v} for (p, sd), v in fr.items() if p == e}, ep)
+                  for ep in ("ate_mae", "Etau_disc_mean", "rho", "Etau_active_off_mean")} for e in ("E2", "E1")}
+    return {"dataset_check": chk, "rows": rows, "fr_levels": levels, "n_cells": len(fr),
+            "all_identical": bool(fr) and all(v["identical"] for v in fr.values())}
+
+
+def s10_figure(G: dict, path: str) -> None:
+    keys = {(bs, i): ("gff_shift", bs, i, 1.2, False) for bs in S10_TRUTHS for i in S10_INITS}
+    seedmean = lambda k, n: np.mean([v["maps"][n] for v in G[k].values()], 0) if k in G else None
+    fig = plt.figure(figsize=(11, 17), layout="constrained")
+    gsp = fig.add_gridspec(7, 5)
+    lev = err = None
+    for b, bs in enumerate(S10_TRUTHS):
+        k0 = next((keys[(bs, i)] for i in S10_INITS if keys[(bs, i)] in G), None)
+        truth = seedmean(k0, "ATE") if k0 else None
+        naive = (seedmean(k0, "imb") + truth) if k0 else None
+        panels = [("truth", truth), ("naive (T=1 - T=0)", naive)] + \
+                 [(f"tau_hat init {i}", seedmean(keys[(bs, i)], "tau_hat")) for i in S10_INITS]
+        for j, (t, v) in enumerate(panels):
+            ax = fig.add_subplot(gsp[2 * b, j])
+            ax.set_xticks([]), ax.set_yticks([])
+            ax.set_title(f"truth {bs:+g}: {t}", fontsize=7)
+            if v is not None:
+                lev = ax.imshow(v.reshape(8, 8), cmap="RdBu_r", vmin=-1.6, vmax=1.6)
+        for j in range(5):
+            ax = fig.add_subplot(gsp[2 * b + 1, j])
+            ax.set_xticks([]), ax.set_yticks([])
+            if j == 0:
+                ax.axis("off")
+                continue
+            if j == 1:
+                ax.set_title(f"naive - truth (±0.8)", fontsize=7)
+                if naive is not None:
+                    ax.imshow((naive - truth).reshape(8, 8), cmap="RdBu_r", vmin=-0.8, vmax=0.8)
+                continue
+            i = S10_INITS[j - 2]
+            v = seedmean(keys[(bs, i)], "tau_hat")
+            ax.set_title(f"tau_hat - truth, init {i} (±0.15)", fontsize=7)
+            if v is not None:
+                err = ax.imshow((v - truth).reshape(8, 8), cmap="RdBu_r", vmin=-0.15, vmax=0.15)
+    for j, k in enumerate((S10_ANCHOR_A, S10_ANCHOR_B)):
+        ax = fig.add_subplot(gsp[6, j])
+        ax.set_xticks([]), ax.set_yticks([])
+        ax.set_title(f"{s10_name(k)}\ntau_hat - truth (±0.8)", fontsize=7)
+        if k in G:
+            ax.imshow((seedmean(k, "tau_hat") - seedmean(k, "ATE")).reshape(8, 8), cmap="RdBu_r", vmin=-0.8, vmax=0.8)
+    ax = fig.add_subplot(gsp[6, 2:])
+    ks = sorted(G, key=lambda k: (k[4], k[0] != "gff_shift", k[3], -k[1], S10_INITS.index(k[2])))
+    ms, lo, hi = [], [], []
+    for k in ks:
+        st = _s10_stat(G[k], "rho")
+        ms.append(st["mean"]), lo.append(st["mean"] - st["ci"][0]), hi.append(st["ci"][1] - st["mean"])
+    ax.bar(range(len(ks)), ms, yerr=[np.nan_to_num(lo), np.nan_to_num(hi)], capsize=2,
+           color=["C3" if k in (S10_ANCHOR_A, S10_ANCHOR_B) else "C1" if k[3] != 1.2 else "C0" for k in ks])
+    for y in (0.10, 0.80):
+        ax.axhline(y, color="0.4", lw=0.6, ls="--")
+    ax.axhline(0, color="0.2", lw=0.6)
+    ax.set_xticks(range(len(ks)), [s10_name(k).replace("gff_shift ", "").replace(" ps 1.2", "") for k in ks],
+                  rotation=70, fontsize=5.5, ha="right")
+    ax.set_ylabel("rho (0 = truth, 1 = naive)", fontsize=7)
+    ax.set_title("retained-confounding fraction, seed mean ± 95% bootstrap CI (dashed: 0.10, 0.80)", fontsize=7)
+    if lev is not None:
+        fig.colorbar(lev, ax=fig.axes[:5], location="right", shrink=0.6, label="logit (±1.6)")
+    fig.suptitle("S10 (Amendment A5): is the confounded recovery genuine? GFF-shift, E2, P1, seeds 31-35 x sf41", fontsize=9)
+    fig.savefig(path, dpi=110)
+    plt.close(fig)
+
+
+def analyse_s10(root: str, croot: str) -> dict:
+    recs = load_stage(root, "S10")
+    s9 = load_stage(croot, "S9")
+    reuse = [r for r in s9 if label(r["cfg"]) == "gff_shift/P1/bs1/E2" and r["cfg"]["seed_fit"] == 41
+             and r["cfg"]["seed_data"] in S10_SEEDS]
+    check_flags(recs + reuse)
+    out = {"stage": "S10", "n_cells": len(recs), "n_reused_s9": len(reuse),
+           "reused_s9": [r["run_id"] for r in reuse],
+           "excluded": [r["run_id"] for r in recs + reuse if excluded(r)],
+           "diverged": [r["run_id"] for r in recs + reuse if r["met"].get("diverged")]}
+    try:
+        out["n_expected"] = json.load(open(os.path.join(root, "S10", "_stage.json")))["n_cells"]
+    except Exception:
+        out["n_expected"] = None
+    out["partial"] = out["n_expected"] is not None and len(recs) < out["n_expected"]
+    G = _s10_group(recs + reuse)
+    T = {k: {ep: _s10_stat(G[k], ep) for ep in S10_EP + ("epochs_run", "best_epoch")} for k in G}
+    for k in G:
+        T[k]["epochs_run_median"] = float(np.median([c for v in G[k].values() for c in [v["ep"]["epochs_run"]]]))
+        T[k]["best_epoch_median"] = float(np.median([v["ep"]["best_epoch"] for v in G[k].values()]))
+    out["consistency_stored_vs_recomputed_maxabs"] = float(max(
+        [r["s10ep"].get("stored_vs_recomputed_maxabs", 0.0) for r in recs if "s10ep" in r] or [float("nan")]))
+    out["table"] = {s10_name(k): {"key": list(k), **T[k]} for k in sorted(G, key=str)}
+    out["clauses"], out["verdict_pass"] = s10_clauses(T)
+    # frengression paired block (exploratory): comparators from S9 (both seed_fits) and S4 ff_full/P1
+    comp_recs = [r for r in s9 if not r["cfg"].get("paper_setting") and r["cfg"]["arm"] in ("gff_shift", "gff_flex")]
+    comp_recs += [r for r in load_stage(croot, "S4") if label(r["cfg"]) in ("ff_full/P1/bs1/E2", "ff_full/P1/bs1/E1")]
+    check_flags(comp_recs)
+    comp: dict = {"E2": {}, "E1": {}}
+    for name, arm in (("GFF-shift (S9)", "gff_shift"), ("GFF-flex (S9)", "gff_flex"), ("FF-uniform (S4 ff_full/P1)", "ff_full")):
+        for e in ("E2", "E1"):
+            rr = [r for r in comp_recs if r["cfg"]["arm"] == arm and r["cfg"]["preset"] == e]
+            gg = _s10_group(rr)
+            if gg:
+                comp[e][name] = next(iter(gg.values())) if len(gg) == 1 else {}
+    out["frengression"] = s10_frengression(os.path.join(root, "S10", "frengression"), comp)
+    adir = os.path.join(root, "_analysis")
+    os.makedirs(adir, exist_ok=True)
+    s10_figure(G, os.path.join(adir, "S10_genuine.png"))
+    json.dump(out, open(os.path.join(adir, "S10_tables.json"), "w"), indent=1, default=float)
+    open(os.path.join(adir, "S10_tables.md"), "w").write(s10_md(out))
+    print(s10_md(out))
+    return out
+
+
+def s10_md(out: dict) -> str:
+    f = lambda st: (f"{st['mean']:+.4f} [{st['ci'][0]:+.4f}, {st['ci'][1]:+.4f}]" if st["n"] else "n/a")
+    L = [f"# S10 tables (Amendment A5)" + (f" — PARTIAL ({out['n_cells']} of {out['n_expected']} cells)"
+                                            if out.get("partial") else ""), "",
+         f"S10 cells: {out['n_cells']} (expected {out['n_expected']}); reused S9 gff_shift E2 sf41 cells "
+         f"(truth +1, init zero): {out['n_reused_s9']}; excluded: {out['excluded']}; diverged: {out['diverged']}; "
+         f"stored-vs-recomputed endpoint max |diff|: {out['consistency_stored_vs_recomputed_maxabs']:.2e}", "",
+         f"## Pass criteria (Amendment A5, evaluated as written) — OVERALL: "
+         f"{'PASS' if out['verdict_pass'] else 'FAIL'}", ""]
+    for c in out["clauses"]:
+        L.append(f"- **{'PASS' if c['pass'] else 'FAIL'}** {c['clause']}")
+        L += [f"    - {d}" for d in c["detail"]]
+    L += ["", "## Per configuration: seed mean [95% bootstrap CI over seed_data]", "",
+          "| config | n_sd | disc tau_hat | disc bias | rho | ATE MAE | active-off E_tau | quiet E_tau | "
+          "dist from init | dist from truth | dist naive-truth | epochs run (median) | best epoch (median) |",
+          "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    for name, t in out["table"].items():
+        L.append(f"| {name} | {t['rho']['n']} | " + " | ".join(f(t[e]) for e in S10_EP)
+                 + f" | {t['epochs_run_median']:.0f} | {t['best_epoch_median']:.0f} |")
+    fr = out["frengression"]
+    L += ["", "## Paired frengression block (EXPLORATORY; frengression - comparator, paired by seed_data)", "",
+          f"dataset identity: {fr['dataset_check']}; all frengression datasets identical to the halo build: "
+          f"{fr['all_identical']} ({fr['n_cells']} cells)", "",
+          "| preset | endpoint | comparator | n | frengression | comparator | diff | 95% CI | Wilcoxon p |",
+          "|---|---|---|---|---|---|---|---|---|"]
+    for r in fr["rows"]:
+        L.append(f"| {r['preset']} | {r['endpoint']} | {r['comparator']} | {r['n']} | {r['fr_mean']:+.4f} | "
+                 f"{r['comp_mean']:+.4f} | {r['diff_mean']:+.4f} | [{r['ci'][0]:+.4f}, {r['ci'][1]:+.4f}] | {r['p']:.4f} |")
+    L += ["", "frengression levels: " + json.dumps({e: {k: round(v["mean"], 4) for k, v in d.items()}
+                                                    for e, d in fr["fr_levels"].items()})]
+    return "\n".join(L) + "\n"
+
+
 def analyse(stage: str, root: str, compare_root: str | None = None) -> dict:
     croot = compare_root or root
+    if stage == "S10":                              # Amendment A5: own grouping (shift_init / placebo keys)
+        return analyse_s10(root, croot)
     recs = load_stage(root, stage)
     if not recs:
         print(f"{stage}: no complete cells under {root}")
@@ -1212,7 +1503,7 @@ def to_md(out: dict, tmap: str) -> str:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stage", required=True, choices=["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "all"])
+    ap.add_argument("--stage", required=True, choices=["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "all"])
     ap.add_argument("--runs-root", default=os.path.expanduser("~/work/halo-runs"))
     ap.add_argument("--compare-root", default=None,
                     help="root holding S0/S1/S2/S4 comparison cells (default: --runs-root); S7 reads S4 from it")

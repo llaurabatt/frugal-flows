@@ -1,7 +1,7 @@
 """Halo ladder driver: enumerate a stage's cells (HALO_PREREG.md), launch one pinned
 subprocess per cell, fail closed on missing / duplicate identities.
 
-    python halo_driver.py --stage {S0,S1,S2,S3,S4,S5,S6,S7,S8,S9,all} [--conc 8] [--threads 1] [--resume]
+    python halo_driver.py --stage {S0,S1,S2,S3,S4,S5,S6,S7,S8,S9,S10,all} [--conc 8] [--threads 1] [--resume]
                           [--dry-run] [--smoke] [--runs-root ~/work/halo-runs]
 
 Outputs: <runs-root>/<stage>/<run_id>/ (halo_fit.py), <runs-root>/<stage>/_stage.json (cell
@@ -92,8 +92,21 @@ def _configs(stage: str) -> list[dict]:
         c = [dict(arm=a, preset=e, **G) for a in ("gff_flex", "gff_shift") for e in ("E2", "E1")]
         c += [dict(arm=a, preset="E2", paper_setting=True, **S9_PAPER, **G) for a in ("gff_flex", "gff_shift")]
         return c
+    if stage == "S10":                                  # Amendment A5: is the confounded recovery genuine?
+        G = dict(preproc="P1", task="cond", preset="E2", rank_mode="spread", placebo_covariate=False)
+        # truth x init at ps_slope 1.2; (base_shift 1, init zero) = the S9 gff_shift E2 sf41 cells (reused)
+        c = [dict(arm="gff_shift", base_shift=b, shift_init=i, ps_slope=1.2, **G)
+             for b in (1.0, 0.0, -1.0) for i in S10_INITS if (b, i) != (1.0, "zero")]
+        c += [dict(arm="gff_shift", base_shift=1.0, shift_init=i, ps_slope=2.4, **G) for i in ("zero", "naive")]
+        c += [dict(arm="lt_n", base_shift=1.0, shift_init="zero", ps_slope=1.2, **G)]          # Anchor A
+        c += [dict(arm="gff_shift", base_shift=1.0, shift_init="zero", ps_slope=1.2,             # Anchor B
+                   **{**G, "placebo_covariate": True})]
+        return c
     raise ValueError(stage)
 
+
+S10_INITS = ("zero", "naive", "plus2")
+S10_SEEDS = tuple(range(31, 36))
 
 # A3 paper-setting check (exploratory): Laura's agreed runner setting (6089a1a) at width 16
 S7_PAPER = dict(lr=1e-3, max_epochs=1000, patience=30)
@@ -112,6 +125,8 @@ def run_id_of(ident: dict) -> str:
         s7 = f"R{ident['copula_rank_rule']}_W{ident['copula_width']}_" + ("paper_" if ident.get("paper_setting") else "")
     elif ident.get("paper_setting"):                    # S9 (A4) paper-setting cells
         s7 = "paper_"
+    elif "shift_init" in ident:                         # S10 (A5) cells
+        s7 = f"init{ident['shift_init']}_ps{ident['ps_slope']:g}_" + ("placebo_" if ident["placebo_covariate"] else "")
     return (f"{ident['stage']}_{ident['corpus']}_{ident['arm']}_{ident['preproc']}_{ident['task']}_bs{ident['base_shift']}_"
             f"{PRESET_SHORT[ident['preset']]}_{s7}sd{ident['seed_data']}_sf{ident['seed_fit']}_"
             f"{identity_sha(ident)}")
@@ -136,7 +151,7 @@ def is_primary(stage: str, c: dict) -> bool:
         return c["preset"] == "E2" and not c.get("paper_setting", False)
     if stage == "S9":                                   # A4: E2 primary; E1 and paper setting exploratory
         return c["preset"] == "E2" and not c.get("paper_setting", False)
-    # S8 (A4): descriptive, seed_fit 41 only
+    # S8 (A4): descriptive, seed_fit 41 only; S10 (A5): seed_fit 41 only, seeds 31-35
     return False
 
 
@@ -149,11 +164,11 @@ def enumerate_cells(stage: str, smoke: bool = False, xla_flags: str | None = Non
     configs = sorted(_configs(stage), key=lambda c: (bool(c.get("paper_setting")), not is_primary(stage, c)))
     for c in configs:
         fits = SEEDS_FIT if is_primary(stage, c) else SEEDS_FIT[:1]
-        seeds = S7_PAPER_SEEDS if c.get("paper_setting") else SEEDS_DATA
+        seeds = S7_PAPER_SEEDS if c.get("paper_setting") else S10_SEEDS if stage == "S10" else SEEDS_DATA
         for sd in ((31,) if smoke else seeds):
             for sf in ((41,) if smoke else fits):
                 cell = {**COMMON, **c, "stage": stage, "seed_data": sd, "seed_fit": sf,
-                        "ps_slope": PS_SLOPE[c["preset"]], "xla_flags": xla_flags,
+                        "ps_slope": c.get("ps_slope", PS_SLOPE[c["preset"]]), "xla_flags": xla_flags,
                         "primary": is_primary(stage, c)}
                 if sd == 31:
                     cell["seed_mc2"] = SEED_MC2
@@ -324,7 +339,7 @@ def run_stage(stage, a) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stage", required=True, choices=["S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "all"])
+    ap.add_argument("--stage", required=True, choices=["S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "all"])
     ap.add_argument("--conc", type=int, default=8)
     ap.add_argument("--threads", type=int, default=1)
     ap.add_argument("--resume", action="store_true")
