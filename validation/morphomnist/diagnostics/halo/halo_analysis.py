@@ -68,6 +68,8 @@ def label(c: dict) -> str:
         s += f"/bs{c['base_shift']:g}/{c['preset']}"
     elif c["stage"] == "S3":
         s += "/uncond"
+    if c.get("copula_rank_rule") is not None:          # S7 (Amendment A3) cells only
+        s += f"/R{c['copula_rank_rule']}/W{c['copula_width']}" + ("/paper" if c.get("paper_setting") else "")
     return s
 
 
@@ -625,6 +627,182 @@ def s6_figure(allg: dict, naive: dict, path: str) -> None:
     plt.close(fig)
 
 
+# ------------------------------------------------------------------ S7 (Amendment A3)
+S7_CFG = {("old", 50): "Rold/W50", ("new", 50): "Rnew/W50", ("old", 16): "Rold/W16", ("new", 16): "Rnew/W16"}
+S7_BASE = "ff_full/P0/bs1/{e}/{c}"
+S7_EP = ("Etau_disc_mean", "ate_mae", "slope_imb_offsupport")
+S7_MIN = {"Etau_disc_mean": 0.01, "ate_mae": 0.003, "slope_imb_offsupport": 0.05}    # A3 minimum effects
+S7_S4_LABELS = {"ff_full/P0/bs1/E2", "ff_full/P0/bs1/E1"}       # the (W50, new) comparators
+
+
+def s7_label(e: str, rule: str, w: int, paper: bool = False) -> str:
+    return S7_BASE.format(e=e, c=S7_CFG[(rule, w)]) + ("/paper" if paper else "")
+
+
+def s7_relabel_s4(recs: list[dict]) -> list[dict]:
+    """S4 ff_full/P0 cells ARE the (W50, new) S7 cells (A3): give them the S7 keys so they group
+    under the S7 label. Only the in-memory cfg copy changes; nothing on disk."""
+    out = []
+    for r in recs:
+        if label(r["cfg"]) in S7_S4_LABELS:
+            out.append({**r, "cfg": {**r["cfg"], "copula_rank_rule": "new", "copula_width": 50}})
+    return out
+
+
+def _s7_cell(r: dict) -> dict:
+    """Per-CELL S7 endpoints: E_tau disc-class mean, ATE MAE = mean |E_tau| over 64 px, and the
+    cell's off-support slope of E_tau on the naive-bias map (halo_fit ``slope_imb_offsupport``)."""
+    m = r["maps"]
+    et = np.asarray(m["E_tau"], float)
+    return {"Etau_disc_mean": _cm(et, m["cls_disc"]), "ate_mae": float(np.mean(np.abs(et))),
+            "slope_imb_offsupport": float(r["met"]["slope_imb_offsupport"])}
+
+
+def _add_s7_derived(groups: dict) -> None:
+    """Per-cell endpoints on every cell (``c['s7']``) and their seed_fit means in each seed's ``ep``."""
+    for G in groups.values():
+        for v in G["seed"].values():
+            if "E_tau" not in v["maps"]:
+                continue
+            for c in v["cells"]:
+                c["s7"] = _s7_cell(c)
+            for k in S7_EP:
+                v["ep"][k] = float(np.nanmean([c["s7"][k] for c in v["cells"]]))
+
+
+def paired_cells(groups, a: str, b: str, ep: str, sf: int | None = None) -> dict:
+    """a - b paired by (seed_data, seed_fit), then averaged within seed_data (A3); ``sf``
+    restricts to one seed_fit. Units = seed_data with at least one matched pair."""
+    if a not in groups or b not in groups:
+        return _test([])
+    d = []
+    for sd in sorted(set(groups[a]["seed"]) & set(groups[b]["seed"])):
+        ca = {c["cfg"]["seed_fit"]: c["s7"][ep] for c in groups[a]["seed"][sd]["cells"]}
+        cb = {c["cfg"]["seed_fit"]: c["s7"][ep] for c in groups[b]["seed"][sd]["cells"]}
+        sfs = [f for f in sorted(set(ca) & set(cb)) if sf is None or f == sf]
+        x = [ca[f] - cb[f] for f in sfs if np.isfinite(ca[f]) and np.isfinite(cb[f])]
+        if x:
+            d.append(float(np.mean(x)))
+    return _test(d)
+
+
+def _s7_expl(groups, a, b, eps, name, sf=None) -> list[dict]:
+    rows = []
+    for ep in eps:
+        r = {"family": name, "kind": "exploratory", "endpoint": ep, "arm": a, "ref": b,
+             **paired_cells(groups, a, b, ep, sf), "p_holm": float("nan"), "resolved": False}
+        lo, hi = r["ci"]
+        r["text"] = f"exploratory: mean {r['mean']:+.4f}, CI [{lo:+.4f}, {hi:+.4f}], unadjusted p {r['p']:.4f}"
+        rows.append(r)
+    return rows
+
+
+def s7_rows(allg: dict) -> tuple[list[dict], list[str], list[str]]:
+    """Amendment A3. Primary family: Holm over 2 widths x 3 endpoints, old - new at W50 (new =
+    the S4 cells) and at W16 on E2, paired by (seed_data, seed_fit) then averaged within
+    seed_data, gated with the A3 minimum effects. Everything else exploratory with CIs."""
+    _add_s7_derived(allg)
+    fam = "S7 primary (Amendment A3)"
+    rows = []
+    for w in (50, 16):
+        a, b = s7_label("E2", "old", w), s7_label("E2", "new", w)
+        rows += [{"family": fam, "kind": "primary", "endpoint": ep, "arm": a, "ref": b, "min_effect": S7_MIN[ep],
+                  **paired_cells(allg, a, b, ep)} for ep in S7_EP if a in allg and b in allg]
+    for r, ph in zip(rows, holm([r["p"] for r in rows])):
+        r["p_holm"] = ph
+        gate(r)
+    gates = [f"{r['arm']} - {r['ref']} [{r['endpoint']}]: {r['text']}" for r in rows]
+    for rule in ("old", "new"):
+        for w in (50, 16):
+            rows += _s7_expl(allg, s7_label("E2", rule, w), s7_label("E1", rule, w), ("Etau_disc_mean",),
+                             f"S7 exploratory E2 - E1 at seed_fit 41 ({rule}, W{w})", sf=41)
+    for w in (50, 16):
+        rows += _s7_expl(allg, s7_label("E1", "old", w), s7_label("E1", "new", w), ("ate_mae", "Etau_disc_mean"),
+                         f"S7 exploratory E1 old - new (W{w})")
+    rows += _s7_expl(allg, s7_label("E2", "new", 16), s7_label("E2", "new", 50), S7_EP,
+                     "S7 exploratory W16/new - W50/new (E2)")
+    rows += _s7_expl(allg, s7_label("E2", "old", 16, True), s7_label("E2", "new", 16, True), S7_EP,
+                     "S7 exploratory paper setting old - new (E2, lr 1e-3, <=1000 ep, W16; n=5)")
+    for L in [s7_label(e, r, w) for e in ("E2", "E1") for r in ("old", "new") for w in (50, 16)] + \
+            [s7_label("E2", r, 16, True) for r in ("old", "new")]:
+        for ep in S7_EP:
+            rows += _level(allg, L, ep, "S7 exploratory level vs 0")
+    # predictions stated in A3 before running, printed beside outcomes; gates are NOT changed
+    preds = []
+    for w, claim in ((16, "old - new > 0 on all three endpoints (the copula cannot adjust for thickness "
+                          "through 48 unseen pixels)"),
+                     (50, "old - new small (the 14 unseen pixels are mostly the quiet bottom rows)")):
+        parts = []
+        for ep in S7_EP:
+            r = _find(rows, "primary", s7_label("E2", "old", w), ep, s7_label("E2", "new", w)) or {}
+            m = r.get("mean", float("nan"))
+            parts.append(f"{ep}: mean {m:+.4f} (sign {'>0' if m > 0 else '<=0' if np.isfinite(m) else 'nan'}); "
+                         f"{r.get('text', 'n/a')}")
+        preds.append(f"PREDICTION W{w}: {claim} | OUTCOME: " + " || ".join(parts)
+                     + " (descriptive; only the gate lines resolve anything)")
+    return rows, gates, preds
+
+
+def s7_fit_summary(allg: dict) -> dict:
+    """Per config: epochs run / best epoch medians, and the copula reachability the cells
+    recorded from their fitted masks (proof of the rule; the S4 comparators predate it)."""
+    out = {}
+    for L, G in allg.items():
+        cells = [c for v in G["seed"].values() for c in v["cells"]]
+        ep = [i["n_epochs"] for c in cells for i in c["met"]["fit_info"]]
+        be = [i["best_epoch"] for c in cells for i in c["met"]["fit_info"]]
+        reach = [c["met"]["copula_reachable"] for c in cells if "copula_reachable" in c["met"]]
+        rules = sorted({c["met"].get("copula_rank_rule", "n/a (S4: package rule)") for c in cells})
+        out[L] = {"n_cells": len(cells), "epochs_run_median": float(np.median(ep)) if ep else float("nan"),
+                  "best_epoch_median": float(np.median(be)) if be else float("nan"),
+                  "epochs_run_range": [int(min(ep)), int(max(ep))] if ep else None,
+                  "copula_reachable": sorted(set(reach)) or "not recorded", "rules_recorded": rules,
+                  "wall_s_median": float(np.median([c["met"].get("wall_s", np.nan) for c in cells]))}
+    return out
+
+
+def s7_figure(allg: dict, path: str) -> None:
+    """Top: seed-mean naive-bias map then seed-mean E_tau maps on E2 (fixed +-0.15) for
+    old/new x W50/W16. Bottom: E2 disc bias and ATE MAE, mean +- 95% bootstrap CI over seed_data."""
+    names = [(r, w) for w in (50, 16) for r in ("old", "new") if s7_label("E2", r, w) in allg]
+    if not names:
+        return
+    fig = plt.figure(figsize=(2.3 * (len(names) + 1), 6.4), layout="constrained")
+    gs = fig.add_gridspec(2, 2 * (len(names) + 1), height_ratios=[1, 1.1])
+    ss0 = list(allg[s7_label("E2", *names[0])]["seed"].values())
+    panels = [("naive bias (naive diff - ATE), clipped", np.mean([s["maps"]["imb"] for s in ss0], 0), len(ss0))]
+    for r, w in names:
+        ss = list(allg[s7_label("E2", r, w)]["seed"].values())
+        panels.append((f"E_tau {r} / W{w}" + (" (S4)" if (r, w) == ("new", 50) else ""),
+                       np.mean([s["maps"]["E_tau"] for s in ss], 0), len(ss)))
+    im = None
+    for j, (t, img, n) in enumerate(panels):
+        ax = fig.add_subplot(gs[0, 2 * j:2 * j + 2])
+        ax.set_xticks([]), ax.set_yticks([])
+        im = ax.imshow(np.asarray(img, float).reshape(8, 8), cmap="RdBu_r", vmin=-0.15, vmax=0.15)
+        ax.set_title(f"{t}\nE2, n_sd={n}", fontsize=7)
+    fig.colorbar(im, ax=fig.axes[:len(panels)], location="right", shrink=0.8, label="logit (fixed ±0.15)")
+    half = len(names) + 1
+    for k, (ep, yl) in enumerate((("Etau_disc_mean", "E2 disc bias (E_tau disc mean)"),
+                                  ("ate_mae", "E2 ATE MAE (mean |E_tau|, 64 px)"))):
+        ax = fig.add_subplot(gs[1, k * half:(k + 1) * half])
+        ms, lo, hi = [], [], []
+        for r, w in names:
+            x = np.array([v for v in _vals(allg, s7_label("E2", r, w), ep).values() if np.isfinite(v)])
+            m = float(x.mean()) if len(x) else float("nan")
+            c = boot_ci(x)
+            ms.append(m), lo.append(m - c[0] if np.isfinite(c[0]) else 0), hi.append(c[1] - m if np.isfinite(c[1]) else 0)
+        ax.bar(range(len(names)), ms, yerr=[lo, hi], capsize=4,
+               color=["C3" if r == "old" else "C0" for r, _ in names])
+        ax.axhline(0, color="0.3", lw=0.6)
+        ax.set_xticks(range(len(names)), [f"{r}\nW{w}" for r, w in names], fontsize=7)
+        ax.set_ylabel(yl, fontsize=7)
+        ax.set_title("mean, 95% bootstrap CI over seed_data", fontsize=7)
+    fig.suptitle("S7 (Amendment A3): copula hidden ranks old vs new; E2, P0, harness settings", fontsize=8)
+    fig.savefig(path, dpi=110)
+    plt.close(fig)
+
+
 def analyse(stage: str, root: str, compare_root: str | None = None) -> dict:
     croot = compare_root or root
     recs = load_stage(root, stage)
@@ -636,6 +814,8 @@ def analyse(stage: str, root: str, compare_root: str | None = None) -> dict:
         extra = [r for st in ("S1", "S2", "S4") for r in load_stage(croot, st) if label(r["cfg"]) in S5_COMPARE]
     if stage == "S6":                               # comparison arms U, A2, LT(P0) from S2 (Amendment A2)
         extra = [r for r in load_stage(croot, "S2") if label(r["cfg"]) in S6_COMPARE]
+    if stage == "S7":                               # (W50, new) comparators = S4 ff_full/P0 (Amendment A3)
+        extra = s7_relabel_s4(load_stage(croot, "S4"))
     check_flags(recs + extra)
     out = {"stage": stage, "n_cells": len(recs),
            "excluded": [r["run_id"] for r in recs if excluded(r)],
@@ -767,6 +947,24 @@ def analyse(stage: str, root: str, compare_root: str | None = None) -> dict:
                                                    for sv in G["seed"].values() for c in sv["cells"])}
         s6_figure(allg, out["naive_ate_mae"], os.path.join(adir, "S6_ate_mae.png"))
         groups = {S6_ARMS[k]: allg[S6_ARMS[k]] for k in S6_ARMS if S6_ARMS[k] in allg}
+    elif stage == "S7":
+        tmap = "E_tau"
+        out["compare_root"] = croot
+        out["compare_cells"] = {L: sum(len(sv["cells"]) for sv in G["seed"].values())
+                                for L, G in allg.items() if L not in groups}
+        r7, gates, preds = s7_rows(allg)
+        rows += r7
+        attr += gates
+        out["predictions"] = preds
+        out["predictions_source"] = "Amendment A3"
+        out["fit_summary"] = s7_fit_summary(allg)
+        cf = os.path.join(root, "S7", "connectivity.json")
+        if os.path.exists(cf):
+            out["connectivity"] = json.load(open(cf))["rows"]
+        out["endpoints"] = {L: {sd: {k: v for k, v in g["ep"].items() if not k.startswith("xt:")}
+                                for sd, g in G["seed"].items()} for L, G in allg.items()}
+        s7_figure(allg, os.path.join(adir, "S7_rankfix.png"))
+        groups = {L: allg[L] for L in [s7_label("E2", r, w) for w in (50, 16) for r in ("old", "new")] if L in allg}
     out["contrasts"], out["attribution"] = rows, attr
     out["templates_descriptive"] = {m: template_table(groups, m) for m in ("E_mu0", "E_sd0", "E_tau")}
     out["template_corr_mean"] = {L: np.mean([c["met"]["template_corr"] for s in G["seed"].values()
@@ -788,7 +986,7 @@ def to_md(out: dict, tmap: str) -> str:
          "## Gate outcomes and attribution (positive findings only)", ""]
     L += [f"- {a}" for a in out["attribution"]] or ["- (none)"]
     if out.get("predictions"):
-        L += ["", "## Predictions stated before running (Amendment A2) beside their outcomes", "",
+        L += ["", f"## Predictions stated before running ({out.get('predictions_source', 'Amendment A2')}) beside their outcomes", "",
               "Descriptive only: the gate lines above are the only resolved/unresolved statements.", ""]
         L += [f"- {p}" for p in out["predictions"]]
     if out.get("naive_ate_mae"):
@@ -813,7 +1011,7 @@ def to_md(out: dict, tmap: str) -> str:
         L.append(f"| {cfg} | " + " | ".join(f"{row[b]['mean']:+.3f} [{row[b]['ci'][0]:+.3f}, {row[b]['ci'][1]:+.3f}]"
                                            for b in TEMPLATE_COEFS + ("r2",)) + " |")
     for k in ("cross_table", "template_corr_mean", "variance_split", "Emu0_corr_across_tau",
-              "lt_ate_vs_sampled_meanabs", "compare_cells"):
+              "lt_ate_vs_sampled_meanabs", "compare_cells", "fit_summary", "connectivity"):
         if k in out:
             L += ["", f"## {k}", "", "```", json.dumps(out[k], indent=1, default=float), "```"]
     return "\n".join(L) + "\n"
@@ -821,10 +1019,10 @@ def to_md(out: dict, tmap: str) -> str:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stage", required=True, choices=["S1", "S2", "S3", "S4", "S5", "S6", "all"])
+    ap.add_argument("--stage", required=True, choices=["S1", "S2", "S3", "S4", "S5", "S6", "S7", "all"])
     ap.add_argument("--runs-root", default=os.path.expanduser("~/work/halo-runs"))
     ap.add_argument("--compare-root", default=None,
-                    help="root holding S0/S1/S2/S4 comparison cells (default: --runs-root)")
+                    help="root holding S0/S1/S2/S4 comparison cells (default: --runs-root); S7 reads S4 from it")
     a = ap.parse_args(argv)
     cr = os.path.expanduser(a.compare_root) if a.compare_root else None
     for s in (["S1", "S2", "S3", "S4"] if a.stage == "all" else [a.stage]):

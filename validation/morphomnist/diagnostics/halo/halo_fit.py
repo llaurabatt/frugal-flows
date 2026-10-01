@@ -23,6 +23,15 @@ sys.path.insert(0, HALO_DIR)
 IDENTITY_KEYS = ("stage", "corpus", "arm", "preproc", "task", "preset", "base_shift", "ps_slope", "synthetic",
                  "seed_data", "seed_fit", "seed_mc", "seed_mc2", "width", "depth", "layers", "knots",
                  "rank_mode", "lr", "max_epochs", "patience", "batch", "n_mc", "x64", "xla_flags")
+# Amendment A3 (S7): identity keys that enter a cell's identity ONLY when the cell carries them,
+# so every S0-S6 identity (and run_id hash) is unchanged by their introduction.
+OPTIONAL_IDENTITY_KEYS = ("copula_rank_rule", "copula_width", "paper_setting")
+
+
+def identity_of(cell: dict) -> dict:
+    ident = {k: cell.get(k) for k in IDENTITY_KEYS}
+    ident.update({k: cell[k] for k in OPTIONAL_IDENTITY_KEYS if k in cell})
+    return ident
 
 
 class _Tee:
@@ -93,15 +102,26 @@ def _fit_and_sample(cfg: dict, data: dict, pre):
         key = jr.PRNGKey(cfg["seed_fit"])
         key, _ = jr.split(key)                              # stage-1 slot (not fitted: ECDF)
         key, sub = jr.split(key)
-        flow, losses = train_frugal_flow(
-            key=sub, y=jnp.asarray(Y), u_z=jnp.asarray(u_z), condition=jnp.asarray(X),
-            causal_model="flexible_continuous", RQS_knots=8, nn_depth=1, nn_width=50, flow_layers=4,
-            learning_rate=cfg["lr"], max_epochs=cfg["max_epochs"], max_patience=cfg["patience"],
-            batch_size=cfg["batch"], show_progress=False,
-            fit_kwargs={"ema_decay": None, "wall_cap_s": None},
-            causal_model_args={"RQS_knots": cfg["knots"], "nn_depth": cfg["depth"],
-                               "nn_width": cfg["width"], "flow_layers": cfg["layers"],
-                               "conditioner": "mlp"})
+        from halo_ranks import copula_rank_rule, fitted_copula_reach
+        rule = cfg.get("copula_rank_rule", "new")       # S7 (A3); absent = the package rule
+        cop_w = cfg.get("copula_width", 50)             # S7 (A3); absent = S4/S5 width 50
+        # The copula masks are built inside train_frugal_flow (-> train_frugal_flow_flexible_
+        # continuous -> masked_autoregressive_flow_first_uniform -> MaskedAutoregressiveFirst
+        # Uniform.__init__), so the whole call runs under the rule.
+        with copula_rank_rule(rule):
+            flow, losses = train_frugal_flow(
+                key=sub, y=jnp.asarray(Y), u_z=jnp.asarray(u_z), condition=jnp.asarray(X),
+                causal_model="flexible_continuous", RQS_knots=8, nn_depth=1, nn_width=cop_w, flow_layers=4,
+                learning_rate=cfg["lr"], max_epochs=cfg["max_epochs"], max_patience=cfg["patience"],
+                batch_size=cfg["batch"], show_progress=False,
+                fit_kwargs={"ema_decay": None, "wall_cap_s": None},
+                causal_model_args={"RQS_knots": cfg["knots"], "nn_depth": cfg["depth"],
+                                   "nn_width": cfg["width"], "flow_layers": cfg["layers"],
+                                   "conditioner": "mlp"})
+        # proof of which rule ran: reachability from the FITTED flow's own copula masks
+        extra.update(copula_rank_rule=rule, copula_width=cop_w, **fitted_copula_reach(flow, Y.shape[1]))
+        if extra["copula_mask_width"] != cop_w:
+            raise RuntimeError(f"copula hidden width {extra['copula_mask_width']} != requested {cop_w}")
 
         # P1 passes its OutcomeTransform into the sampler (unchanged S4 path). P5's transform
         # is not an OutcomeTransform (as_outcome_transform rejects it), so sample on the
@@ -214,6 +234,10 @@ def run(cfg: dict) -> dict:
     metrics["dataset_id"], metrics["data_hash"] = data["dataset_id"], data["data_hash"]
     metrics["ps_slope_data"] = data["ps_slope"]
     metrics["preproc"] = pre.info()                  # P5: fitted floor value, n floored, scales
+    for k in ("copula_rank_rule", "copula_width", "copula_reachable", "copula_blind",
+              "copula_reachable_per_layer", "copula_mask_width", "copula_dim", "copula_nvars"):
+        if k in extra:
+            metrics[k] = extra[k]
     return {"metrics": metrics, "maps": m, "classes": classes, "templates": tpl, "floors": floors,
             "imb": imb, "ATE": data["ATE"], "losses": losses}
 
@@ -233,7 +257,7 @@ def main(argv=None) -> int:
             os.remove(os.path.join(out, f))
     sys.stdout = sys.stderr = _Tee(os.path.join(out, "log.txt"))
     t_start = time.monotonic()
-    rec = {"config": {k: cfg.get(k) for k in IDENTITY_KEYS}, "run_id": cfg.get("run_id"),
+    rec = {"config": identity_of(cfg), "run_id": cfg.get("run_id"),
            "identity_sha": cfg.get("identity_sha"), "git": _git(), "versions": _versions(),
            "x64": False, "xla_flags": os.environ.get("XLA_FLAGS", ""), "pid": os.getpid()}
     json.dump(rec, open(os.path.join(out, "config.json"), "w"), indent=1)

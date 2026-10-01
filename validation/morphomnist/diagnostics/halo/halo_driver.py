@@ -1,7 +1,7 @@
 """Halo ladder driver: enumerate a stage's cells (HALO_PREREG.md), launch one pinned
 subprocess per cell, fail closed on missing / duplicate identities.
 
-    python halo_driver.py --stage {S0,S1,S2,S3,S4,S5,S6,all} [--conc 8] [--threads 1] [--resume]
+    python halo_driver.py --stage {S0,S1,S2,S3,S4,S5,S6,S7,all} [--conc 8] [--threads 1] [--resume]
                           [--dry-run] [--smoke] [--runs-root ~/work/halo-runs]
 
 Outputs: <runs-root>/<stage>/<run_id>/ (halo_fit.py), <runs-root>/<stage>/_stage.json (cell
@@ -77,7 +77,19 @@ def _configs(stage: str) -> list[dict]:
     if stage == "S6":                                   # Amendment A2: N, LT-N and LT at P1, E1
         return [dict(arm=a, preproc="P1", task="cond", preset="E1", base_shift=b, rank_mode="spread")
                 for b in (1.0, 0.0) for a in ("n_cond", "lt_n", "lt")]
+    if stage == "S7":                                   # Amendment A3: copula hidden ranks old vs new
+        F = dict(arm="ff_full", preproc="P0", task="cond", base_shift=1.0, rank_mode="spread")
+        c = [dict(**F, preset=e, copula_width=w, copula_rank_rule=r)
+             for w, r in ((50, "old"), (16, "old"), (16, "new")) for e in ("E2", "E1")]
+        c += [dict(**F, preset="E2", copula_width=16, copula_rank_rule=r, paper_setting=True,
+                   **S7_PAPER) for r in ("old", "new")]
+        return c
     raise ValueError(stage)
+
+
+# A3 paper-setting check (exploratory): Laura's agreed runner setting (6089a1a) at width 16
+S7_PAPER = dict(lr=1e-3, max_epochs=1000, patience=30)
+S7_PAPER_SEEDS = tuple(range(31, 36))
 
 
 def identity_sha(ident: dict) -> str:
@@ -85,8 +97,11 @@ def identity_sha(ident: dict) -> str:
 
 
 def run_id_of(ident: dict) -> str:
+    s7 = ""                                             # A3 keys exist only on S7 cells
+    if "copula_rank_rule" in ident:
+        s7 = f"R{ident['copula_rank_rule']}_W{ident['copula_width']}_" + ("paper_" if ident.get("paper_setting") else "")
     return (f"{ident['stage']}_{ident['corpus']}_{ident['arm']}_{ident['preproc']}_{ident['task']}_bs{ident['base_shift']}_"
-            f"{PRESET_SHORT[ident['preset']]}_sd{ident['seed_data']}_sf{ident['seed_fit']}_"
+            f"{PRESET_SHORT[ident['preset']]}_{s7}sd{ident['seed_data']}_sf{ident['seed_fit']}_"
             f"{identity_sha(ident)}")
 
 
@@ -105,18 +120,22 @@ def is_primary(stage: str, c: dict) -> bool:
         return c["arm"] == "ff_full" and c["preset"] == "E2"
     if stage == "S6":                                   # A2: tau=1 primary; tau=0 exploratory
         return c["base_shift"] == 1.0
+    if stage == "S7":                                   # A3: E2 primary; E1 and paper setting exploratory
+        return c["preset"] == "E2" and not c.get("paper_setting", False)
     return False
 
 
 def enumerate_cells(stage: str, smoke: bool = False, xla_flags: str | None = None) -> list[dict]:
     """Every cell of a stage, primary configs first. smoke: one cell per distinct config
     (seed_data 31, seed_fit 41, max_epochs 5, n_mc 2000). seed_mc2 on seed_data-31 cells only."""
-    from halo_fit import IDENTITY_KEYS
+    from halo_fit import identity_of
     out = []
-    configs = sorted(_configs(stage), key=lambda c: not is_primary(stage, c))   # stable
+    # stable; S7's paper-setting cells (<= 1000 epochs) are queued LAST (Amendment A3)
+    configs = sorted(_configs(stage), key=lambda c: (bool(c.get("paper_setting")), not is_primary(stage, c)))
     for c in configs:
         fits = SEEDS_FIT if is_primary(stage, c) else SEEDS_FIT[:1]
-        for sd in ((31,) if smoke else SEEDS_DATA):
+        seeds = S7_PAPER_SEEDS if c.get("paper_setting") else SEEDS_DATA
+        for sd in ((31,) if smoke else seeds):
             for sf in ((41,) if smoke else fits):
                 cell = {**COMMON, **c, "stage": stage, "seed_data": sd, "seed_fit": sf,
                         "ps_slope": PS_SLOPE[c["preset"]], "xla_flags": xla_flags,
@@ -135,7 +154,7 @@ def enumerate_cells(stage: str, smoke: bool = False, xla_flags: str | None = Non
         out.append({**out[0], "preproc": "P4"})
     for cell in out:
         assert cell["seed_fit"] != cell["seed_data"], "seed alias"
-        ident = {k: cell.get(k) for k in IDENTITY_KEYS}
+        ident = identity_of(cell)
         cell["identity_sha"] = identity_sha(ident)
         cell["run_id"] = run_id_of(ident)
     ids = [c["run_id"] for c in out]
@@ -258,6 +277,10 @@ def run_stage(stage, a) -> int:
         return 0 if a.dry_run else subprocess.call(cmd, env=pinned_env(a.threads), cwd=HALO_DIR)
     xla = pinned_env(a.threads)["XLA_FLAGS"]
     cells = enumerate_cells(stage, smoke=a.smoke, xla_flags=xla)
+    if stage == "S7" and not a.dry_run:               # A3 deterministic connectivity table
+        os.makedirs(stage_root, exist_ok=True)
+        subprocess.call([PY, os.path.join(HALO_DIR, "halo_ranks.py"), "--out",
+                         os.path.join(stage_root, "connectivity.json")], env=pinned_env(a.threads), cwd=HALO_DIR)
     for c in cells:
         c["out_dir"] = os.path.join(stage_root, c["run_id"])
     todo, skipped, held = filter_done(cells, stage_root, a.relaunch_incomplete) if a.resume else (cells, 0, [])
@@ -286,7 +309,7 @@ def run_stage(stage, a) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stage", required=True, choices=["S0", "S1", "S2", "S3", "S4", "S5", "S6", "all"])
+    ap.add_argument("--stage", required=True, choices=["S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7", "all"])
     ap.add_argument("--conc", type=int, default=8)
     ap.add_argument("--threads", type=int, default=1)
     ap.add_argument("--resume", action="store_true")

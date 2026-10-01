@@ -219,3 +219,125 @@ def test_lt_p1_unit_conversion_roundtrip():
     assert np.allclose(z, d / sd, rtol=1e-4, atol=1e-5)
     p0 = hd.Preproc("P0").fit(Y)
     assert np.array_equal(hf.ate_to_data_scale(p0, d), d)
+
+
+# ------------------------------------------------------------------ S7 (Amendment A3)
+import halo_ranks as hr  # noqa: E402
+
+XLA_RUN = "--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1"   # flag string of S0-S6
+WORKTREE = os.path.abspath(os.path.join(HALO, "..", "..", "..", ".."))
+
+
+def _prefix_module():
+    """The TRUE pre-fix copula source (1b2510a^), exec'd into a throwaway module."""
+    import subprocess
+    import types
+    src = subprocess.run(["git", "-C", WORKTREE, "show",
+                          "1b2510a^:frugal_flows/bijections/masked_autoregressive_first_uniform.py"],
+                         capture_output=True, text=True, check=True).stdout
+    assert "hidden_ranks = jnp.arange(nn_width) % dim" in src and "autoregressive_hidden_ranks" not in src
+    name = "_halo_prefix_first_uniform"
+    mod = types.ModuleType(name)
+    sys.modules[name] = mod                    # dataclass (equinox Module) creation looks it up
+    try:
+        exec(compile(src, f"{name}.py", "exec"), mod.__dict__)
+    finally:
+        sys.modules.pop(name, None)
+    return mod
+
+
+@pytest.mark.parametrize("width", [50, 16])
+def test_old_patch_equals_prefix_source(width):
+    """Under copula_rank_rule('old') the current class builds exactly the masks (and weights) of
+    the pre-1b2510a class, for K=64, nvars=1, as train_frugal_flow builds the copula layer."""
+    import jax.random as jr
+    from flowjax.bijections import RationalQuadraticSpline
+    pre = _prefix_module()
+    K = 64
+    a = pre.MaskedAutoregressiveFirstUniform(jr.PRNGKey(0), transformer=RationalQuadraticSpline(knots=8, interval=1),
+                                             dim=K + 1, cond_dim_mask=1, nn_width=width, nn_depth=1, cond_u_y_dim=K)
+    with hr.copula_rank_rule("old"):
+        b = hr.build_copula_layer(K, width)
+    ma, mb = hr.mlp_masks(a), hr.mlp_masks(b)
+    assert len(ma) == len(mb) == 2
+    assert all(x.shape == y.shape and np.array_equal(x, y) for x, y in zip(ma, mb))
+    wa = [np.asarray(l.weight.args[1]) for l in a.masked_autoregressive_mlp.layers]
+    wb = [np.asarray(l.weight.args[1]) for l in b.masked_autoregressive_mlp.layers]
+    assert all(np.array_equal(x, y) for x, y in zip(wa, wb))       # same key -> same raw weights
+    c = hr.build_copula_layer(K, width)                     # outside the block: the fix is back
+    assert not all(np.array_equal(x, y) for x, y in zip(ma, hr.mlp_masks(c)))
+
+
+def test_rank_patch_restores_and_leaves_margin_alone():
+    import importlib
+    import jax.random as jr
+    from flowjax.bijections import RationalQuadraticSpline
+    from frugal_flows.bijections.masked_autoregressive_spread import MaskedAutoregressiveSpread
+    from frugal_flows.bijections.ranks import autoregressive_hidden_ranks
+    cop_mod = importlib.import_module(hr.COPULA_MODULE)
+    spread_mod = importlib.import_module("frugal_flows.bijections.masked_autoregressive_spread")
+    assert cop_mod.autoregressive_hidden_ranks is autoregressive_hidden_ranks
+
+    def margin():
+        return MaskedAutoregressiveSpread(jr.PRNGKey(1), transformer=RationalQuadraticSpline(knots=8, interval=1),
+                                          dim=64, cond_dim=1, nn_width=48, nn_depth=1)
+    ref = hr.mlp_masks(margin())
+    with hr.copula_rank_rule("old"):
+        assert cop_mod.autoregressive_hidden_ranks is hr.old_hidden_ranks
+        assert spread_mod.autoregressive_hidden_ranks is autoregressive_hidden_ranks
+        under = hr.mlp_masks(margin())
+    assert all(np.array_equal(x, y) for x, y in zip(ref, under))
+    assert cop_mod.autoregressive_hidden_ranks is autoregressive_hidden_ranks
+    with pytest.raises(RuntimeError):
+        with hr.copula_rank_rule("old"):
+            raise RuntimeError("boom")
+    assert cop_mod.autoregressive_hidden_ranks is autoregressive_hidden_ranks       # restored on error
+    with pytest.raises(ValueError):
+        with hr.copula_rank_rule("legacy"):
+            pass
+
+
+def test_connectivity_numbers():
+    got = {(r["rule"], r["width"], r["K"]): r["reachable"] for r in hr.connectivity_table()}
+    assert got == {("old", 16, 64): 16, ("old", 16, 256): 16, ("old", 50, 64): 50, ("old", 50, 256): 50,
+                   ("new", 16, 64): 64, ("new", 16, 256): 256, ("new", 50, 64): 64, ("new", 50, 256): 256}
+
+
+def test_s7_cells():
+    cells = hdr.enumerate_cells("S7")
+    assert len(cells) == 100 and len({c["identity_sha"] for c in cells}) == 100
+    assert len({c["run_id"] for c in cells}) == 100
+    assert all(c["arm"] == "ff_full" and c["preproc"] == "P0" and c["corpus"] == "A" and c["base_shift"] == 1.0
+               for c in cells)
+    assert all(c["seed_fit"] != c["seed_data"] for c in cells)
+    from collections import Counter
+    n = Counter((c["copula_rank_rule"], c["copula_width"], c["preset"], bool(c.get("paper_setting"))) for c in cells)
+    for rw in (("old", 50), ("old", 16), ("new", 16)):
+        assert n[(*rw, "E2", False)] == 20 and n[(*rw, "E1", False)] == 10
+    assert ("new", 50, "E2", False) not in n                          # the S4 cells are the comparators
+    paper = [c for c in cells if c.get("paper_setting")]
+    assert len(paper) == 10 and all(c["lr"] == 1e-3 and c["max_epochs"] == 1000 and c["patience"] == 30
+                                    and c["copula_width"] == 16 and c["seed_fit"] == 41 and c["preset"] == "E2"
+                                    for c in paper)
+    assert {c["seed_data"] for c in paper} == set(range(31, 36))
+    assert cells[-10:] == paper                                       # paper setting queued LAST
+    rest = [c for c in cells if not c.get("paper_setting")]
+    assert all(c["lr"] == 1e-2 and c["max_epochs"] == 300 and c["width"] == 48 for c in rest)
+    assert all(c["primary"] == (c["preset"] == "E2") for c in rest) and not any(c["primary"] for c in paper)
+    smoke = hdr.enumerate_cells("S7", smoke=True)
+    assert len(smoke) == 8 and sum(bool(c.get("paper_setting")) for c in smoke) == 2
+
+
+@pytest.mark.parametrize("run_id", [
+    "S4_A_ff_full_P0_cond_bs1.0_e1_sd31_sf41_ad629a29", "S4_A_ff_full_P0_cond_bs1.0_e1_sd32_sf41_0e5121a9",
+    "S5_A_ff_full_P5_cond_bs1.0_e1_sd31_sf42_6c752aad", "S6_A_lt_n_P1_cond_bs1.0_e1_sd31_sf41_980ec255"])
+def test_s4_s5_s6_identities_unchanged(run_id):
+    """Run ids recorded on disk by the S4-S6 batches (before the A3 keys existed) are still
+    produced, and no pre-S7 cell carries an optional key."""
+    stage = run_id[:2]
+    cells = hdr.enumerate_cells(stage, xla_flags=XLA_RUN)
+    assert run_id in {c["run_id"] for c in cells}
+    from halo_fit import IDENTITY_KEYS, OPTIONAL_IDENTITY_KEYS, identity_of
+    for c in cells:
+        assert not any(k in c for k in OPTIONAL_IDENTITY_KEYS)
+        assert identity_of(c) == {k: c.get(k) for k in IDENTITY_KEYS}
