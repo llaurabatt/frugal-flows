@@ -284,3 +284,42 @@ the paper-setting check. Predictions, stated before running: at W=16 old − new
 endpoints (the copula cannot adjust for thickness through 48 unseen pixels); at W=50 the contrast is
 small (the 14 unseen pixels are mostly the quiet bottom rows). Nulls worded as v1.1; no attribution from
 a null. Not tested here: 16×16, and all-digit data (Laura's paper grid).
+
+## Amendment A4 (2026-10-01 17:20, appended before any S8/S9 cell exists) — Gaussian-scale reformulation
+
+**Trigger (Dan).** The difficulties sit at the boundaries of the uniform-rank construction. Replace
+"marginally uniform ranks" by "marginally standard-Gaussian scores" g = Φ⁻¹(u) throughout: the margin maps
+Y to g_Y ~ N(0, I) (Normal base, unbounded spline, no atanh); covariates become normal scores
+g_Z = Φ⁻¹(midrank/(n+1)); the copula is a conditional flow p(g_Z | g_Y) on a Normal base, blind to T. The
+model class is unchanged (copulas are invariant to monotone marginal maps); the geometry is. Pixels stay
+logit + per-pixel standardisation (P1), so the estimand is unchanged. No conversion to the uniform scale
+inside the model.
+
+**S8 — treatment and response only (calibration read-out).** The gated contrasts for this step are S6's
+(U − N, N − LT-N). S8 refits arms U (ff_cond), N (n_cond), LT-N (lt_n) on E1, τ = 1, P1, Corpus A,
+seeds 31–40 × seed_fit 41 (30 cells), storing per cell: KS of each latent coordinate (data pushed through
+the fitted margin's inverse) against its base law, on the 10% validation rows and on all rows; mean
+|off-diagonal correlation| of the latent coordinates; best epoch and epochs run. Descriptive; no gate.
+
+**S9 — full model on the Gaussian scale.** Joint flow on (Y_std, g_Z) given T: base N(0, I_{K+nvars});
+copula block = conditional flow of the nvars covariate coordinates given the K outcome coordinates
+(flowjax masked autoregressive flow over nvars dims with cond_dim = K, RQS(8, interval 5), MLP width 50
+depth 1, 4 layers; identity on the first K coordinates); margin block on the first K coordinates given T.
+Arms: **GFF-flex** (margin N) and **GFF-shift** (margin LT-N: T masked from the residual, explicit
+per-pixel `LocCond` shift, tau_hat read from the shift vector). Harness fit settings (lr 1e-2, ≤ 300
+epochs, patience 30, batch 100), n_mc 5000, read-out by sampling g_Y ~ N(0, I) through the margin at
+T = 0, 1. Corpus A, P1. Cells: E2 seeds 31–40 × {41, 42}; E1 × 41; per arm → 60. Paper-setting check
+(lr 1e-3, ≤ 1000 epochs), E2, seeds 31–35 × 41, both arms → 10, exploratory, queued last. Total 70.
+Comparator **FF-uniform**: the S4 cells ff_full/P1 (E2: 20; E1: 10).
+
+**Endpoints (E2).** `E_tau` disc-class mean; per-cell ATE MAE; off-support slope of `E_tau` on the
+naive-bias map. **Primary family (Holm over 3 contrasts × 3 endpoints, n = 10 seed_data):**
+GFF-flex − FF-uniform; GFF-shift − FF-uniform; GFF-shift − GFF-flex. Gate = v1.1 conjunction with minimum
+effects 0.01 (disc bias), 0.003 (ATE MAE), 0.05 (slope). Secondary/exploratory: E2 − E1 paired disc bias
+at seed_fit 41; E1 ATE MAE and disc bias; latent calibration (g_Y KS; KS of the model-implied g_Z marginal
+against N(0,1) from 20,000 draws; KS of the data g_Z pushed through the copula's inverse); best epoch;
+non-finite draw counts (expected 0, no clamp); the paper-setting check against S7's paper-setting
+new-rank cells. Predictions, stated before running: GFF-flex lowers E2 ATE MAE relative to FF-uniform;
+GFF-shift has the lowest E1 ATE MAE; the effect of either on the E2 disc bias is not predicted. Nulls
+worded as v1.1; no attribution from a null. Not tested: probit pixel transform (not estimand-preserving),
+16×16, all-digit data, heterogeneous presets.
