@@ -77,8 +77,10 @@ def check_flags(recs) -> None:
 
 
 def excluded(r) -> bool:
+    """>0.1% non-finite rows or clamped coordinates, or diverged (max |E_mu| > 10, v1.1)."""
     m = r["met"]
-    return m["frac_nonfinite"] > EXCLUDE_FRAC or m["frac_clamped_coords"] > EXCLUDE_FRAC
+    return (m["frac_nonfinite"] > EXCLUDE_FRAC or m["frac_clamped_coords"] > EXCLUDE_FRAC
+            or bool(m.get("diverged", False)))
 
 
 # ------------------------------------------------------------------ endpoints
@@ -278,7 +280,9 @@ def variance_split(cfg_group: dict, ep_fn) -> dict:
     per-cell scalar; returns the fractions of total SS."""
     rows = [(sd, c["cfg"]["seed_fit"], ep_fn(c)) for sd, v in cfg_group["seed"].items() for c in v["cells"]]
     sds, sfs = sorted({r[0] for r in rows}), sorted({r[1] for r in rows})
-    if len(rows) != len(sds) * len(sfs) or len(sds) < 2 or len(sfs) < 2:
+    if len(sfs) < 2:
+        return {"note": "single seed_fit (exploratory config): no variance split"}
+    if len(rows) != len(sds) * len(sfs) or len(sds) < 2:
         return {"note": "incomplete grid"}
     Y = np.full((len(sds), len(sfs)), np.nan)
     for sd, sf, v in rows:
@@ -394,9 +398,25 @@ def analyse(stage: str, root: str) -> dict:
     check_flags(recs + extra)
     out = {"stage": stage, "n_cells": len(recs),
            "excluded": [r["run_id"] for r in recs if excluded(r)],
+           "diverged": [r["run_id"] for r in recs if r["met"].get("diverged")],
            "quiet_flagged": [r["run_id"] for r in recs if r["met"].get("quiet_flag")]}
+    try:
+        expected = json.load(open(os.path.join(root, stage, "_stage.json")))["n_cells"]
+    except Exception:
+        expected = None
+    out["n_expected"] = expected
+    out["partial"] = expected is not None and len(recs) < expected
     groups = by_config(recs)
     allg = {**by_config(extra), **groups}
+    adir = os.path.join(root, "_analysis")
+    os.makedirs(adir, exist_ok=True)
+    if not groups:                                  # every cell excluded: report, no figures
+        json.dump(out, open(os.path.join(adir, f"{stage}_tables.json"), "w"), indent=1, default=float)
+        open(os.path.join(adir, f"{stage}_tables.md"), "w").write(
+            f"# {stage} tables\n\nALL {len(recs)} cells excluded. diverged: {out['diverged']}; "
+            f"excluded: {out['excluded']}\n")
+        print(f"{stage}: all {len(recs)} cells excluded")
+        return out
     out["endpoints"] = {L: {s: {k: v for k, v in g["ep"].items() if not k.startswith("xt:")}
                             for s, g in G["seed"].items()} for L, G in groups.items()}
     out["cross_table"] = {L: {k: float(np.nanmean([g["ep"].get(k, np.nan) for g in G["seed"].values()]))
@@ -476,8 +496,6 @@ def analyse(stage: str, root: str) -> dict:
     out["templates_descriptive"] = {m: template_table(groups, m) for m in ("E_mu0", "E_sd0", "E_tau")}
     out["template_corr_mean"] = {L: np.mean([c["met"]["template_corr"] for s in G["seed"].values()
                                             for c in s["cells"]], 0).round(3).tolist() for L, G in groups.items()}
-    adir = os.path.join(root, "_analysis")
-    os.makedirs(adir, exist_ok=True)
     panel(groups, root, os.path.join(adir, f"{stage}_maps.png"), stage)
     template_bars(out["templates_descriptive"][tmap], tmap, os.path.join(adir, f"{stage}_templates.png"),
                   f"{stage}: DESCRIPTIVE template coefficients of {tmap} (mean, 95% bootstrap CI over seed_data)")
@@ -488,8 +506,10 @@ def analyse(stage: str, root: str) -> dict:
 
 
 def to_md(out: dict, tmap: str) -> str:
-    L = [f"# {out['stage']} tables", "", f"cells: {out['n_cells']}; excluded (>0.1% non-finite/clamped): "
-         f"{len(out['excluded'])} {out['excluded']}; Corpus-A quiet-count flagged: {len(out['quiet_flagged'])}", "",
+    L = [f"# {out['stage']} tables" + (f" — PARTIAL ({out['n_cells']} of {out['n_expected']} cells)"
+                                         if out.get("partial") else ""), "",
+         f"cells: {out['n_cells']}; diverged (max |E_mu| > 10): {len(out['diverged'])} {out['diverged']}; "
+         f"excluded (>0.1% non-finite/clamped, or diverged): {len(out['excluded'])} {out['excluded']}; Corpus-A quiet-count flagged: {len(out['quiet_flagged'])}", "",
          "## Gate outcomes and attribution (positive findings only)", ""]
     L += [f"- {a}" for a in out["attribution"]] or ["- (none)"]
     eps = sorted({k for g in out["endpoints"].values() for s in g.values() for k in s})

@@ -28,7 +28,7 @@ SEEDS_FIT = (41, 42)
 SEED_MC, SEED_MC2 = 7, 8
 PRESET_SHORT = {"E1": "e1", "E2": "e2"}
 COMMON = dict(corpus="A", width=48, depth=1, layers=4, knots=8, lr=1e-2, max_epochs=300, patience=30,
-              batch=100, n_mc=20000, x64=False, synthetic=None, seed_mc=SEED_MC, seed_mc2=None)
+              batch=100, n_mc=5000, x64=False, synthetic=None, seed_mc=SEED_MC, seed_mc2=None)
 PS_SLOPE = {"E1": 0.0, "E2": 1.2}
 
 
@@ -81,17 +81,35 @@ def run_id_of(ident: dict) -> str:
             f"{identity_sha(ident)}")
 
 
+def is_primary(stage: str, c: dict) -> bool:
+    """Prereg v1.1: configs in the primary families (+ all Corpus B) keep seed_fit {41, 42};
+    every other config is exploratory and runs at seed_fit 41 only."""
+    if c.get("corpus", "A") == "B":
+        return True
+    ap = (c["arm"], c["preproc"])
+    if stage == "S1":
+        return ap in {("A1s", "P0"), ("A1s", "P1"), ("A2", "P1"), ("A1", "P0")}
+    if stage == "S2":
+        return c["base_shift"] == 1.0 and ap in {("ff_cond", "P0"), ("ff_cond", "P1"),
+                                                  ("a2_cond", "P1"), ("lt", "P0")}
+    if stage == "S4":
+        return c["arm"] == "ff_full" and c["preset"] == "E2"
+    return False
+
+
 def enumerate_cells(stage: str, smoke: bool = False, xla_flags: str | None = None) -> list[dict]:
-    """Every cell of a stage. smoke: one cell per distinct config (seed_data 31, seed_fit
-    41, max_epochs 5, n_mc 2000). seed_mc2 is set on seed_data-31 cells (S1-S4) only."""
+    """Every cell of a stage, primary configs first. smoke: one cell per distinct config
+    (seed_data 31, seed_fit 41, max_epochs 5, n_mc 2000). seed_mc2 on seed_data-31 cells only."""
     from halo_fit import IDENTITY_KEYS
     out = []
-    configs = _configs(stage)
+    configs = sorted(_configs(stage), key=lambda c: not is_primary(stage, c))   # stable
     for c in configs:
+        fits = SEEDS_FIT if is_primary(stage, c) else SEEDS_FIT[:1]
         for sd in ((31,) if smoke else SEEDS_DATA):
-            for sf in ((41,) if smoke else SEEDS_FIT):
+            for sf in ((41,) if smoke else fits):
                 cell = {**COMMON, **c, "stage": stage, "seed_data": sd, "seed_fit": sf,
-                        "ps_slope": PS_SLOPE[c["preset"]], "xla_flags": xla_flags}
+                        "ps_slope": PS_SLOPE[c["preset"]], "xla_flags": xla_flags,
+                        "primary": is_primary(stage, c)}
                 if sd == 31:
                     cell["seed_mc2"] = SEED_MC2
                 if smoke:
@@ -100,8 +118,8 @@ def enumerate_cells(stage: str, smoke: bool = False, xla_flags: str | None = Non
     if stage == "S1" and not smoke:                                # P4 demonstration cells
         out += [{**COMMON, "stage": "S1", "arm": "A1s", "preproc": "P4", "task": "uncond",
                  "preset": "E1", "base_shift": 0.0, "rank_mode": "spread", "seed_data": 31,
-                 "seed_fit": sf, "ps_slope": 0.0, "xla_flags": xla_flags, "seed_mc2": SEED_MC2}
-                for sf in (41, 42)]
+                 "seed_fit": 41, "ps_slope": 0.0, "xla_flags": xla_flags, "seed_mc2": SEED_MC2,
+                 "primary": False}]                                  # exploratory: one fit
     if stage == "S1" and smoke:
         out.append({**out[0], "preproc": "P4"})
     for cell in out:
@@ -266,7 +284,7 @@ def main(argv=None) -> int:
     ap.add_argument("--smoke", action="store_true")
     ap.add_argument("--runs-root", default=os.path.expanduser("~/work/halo-runs"))
     a = ap.parse_args(argv)
-    stages = ["S0", "S1", "S2", "S3", "S4"] if a.stage == "all" else [a.stage]
+    stages = ["S0", "S1", "S2", "S4", "S3"] if a.stage == "all" else [a.stage]
     rc = 0
     for s in stages:
         rc |= run_stage(s, a)

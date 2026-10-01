@@ -84,7 +84,7 @@ def test_leak_x_zero_for_perfect_model():
     assert np.isnan(m["LEAK_X0"]).all()
 
 
-@pytest.mark.parametrize("stage,n", [("S1", 302), ("S2", 240), ("S3", 360), ("S4", 120)])
+@pytest.mark.parametrize("stage,n", [("S1", 221), ("S2", 180), ("S3", 180), ("S4", 80)])
 def test_cell_counts_and_identities(stage, n):
     cells = hdr.enumerate_cells(stage)
     assert len(cells) == n
@@ -92,3 +92,7 @@ def test_cell_counts_and_identities(stage, n):
     assert len({c["identity_sha"] for c in cells}) == n
     assert {c["seed_data"] for c in cells} == set(range(31, 41))
     assert all((c["seed_mc2"] is not None) == (c["seed_data"] == 31) for c in cells)
+    assert all(c["n_mc"] == 5000 for c in cells)
+    assert all(c["seed_fit"] == 41 for c in cells if not c["primary"])
+    first_expl = next((i for i, c in enumerate(cells) if not c["primary"]), len(cells))
+    assert all(not c["primary"] for c in cells[first_expl:])          # primary queued first

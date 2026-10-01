@@ -176,6 +176,9 @@ def run(cfg: dict) -> dict:
     floors = hmx.oracle_floors(np.asarray(ref0), None if ref1 is None else np.asarray(ref1),
                                np.random.default_rng(cfg["seed_data"] + 9901))
     t_metrics = time.monotonic() - t0
+    emu_max = max(float(np.nanmax(np.abs(m[k]))) for k in ("E_mu0", "E_mu1") if k in m)
+    metrics["E_mu_maxabs"] = emu_max
+    metrics["diverged"] = bool(not np.isfinite(emu_max) or emu_max > 10.0)   # prereg v1.1 guard
     metrics["timings_s"] = {"data": t_data, "fit": t_fit, "sample": t_sample, "metrics": t_metrics}
     metrics["dataset_id"], metrics["data_hash"] = data["dataset_id"], data["data_hash"]
     metrics["ps_slope_data"] = data["ps_slope"]
