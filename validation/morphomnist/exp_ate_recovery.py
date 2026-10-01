@@ -1559,7 +1559,7 @@ def _git_info() -> dict:
         except Exception:
             return "unavailable"
 
-    return {"commit": run("rev-parse", "HEAD"), "dirty": bool(run("status", "--porcelain"))}
+    return {"commit": run("rev-parse", "HEAD"), "dirty": bool(run("status", "--porcelain", "--untracked-files=no"))}
 
 
 class _Tee:

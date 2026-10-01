@@ -720,7 +720,7 @@ def _git_info() -> dict:
                                   text=True, timeout=10).stdout.strip()
         except Exception:
             return "unavailable"
-    return {"commit": run("rev-parse", "HEAD"), "dirty": bool(run("status", "--porcelain"))}
+    return {"commit": run("rev-parse", "HEAD"), "dirty": bool(run("status", "--porcelain", "--untracked-files=no"))}
 
 
 def _versions() -> dict:

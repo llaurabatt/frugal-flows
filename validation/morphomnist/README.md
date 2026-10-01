@@ -31,7 +31,8 @@ directory.
   2. *E4 / E6:* the copula is blind to the treatment, which is misspecified when the effect
      depends on the covariates (E4, E6). E4 is the preset where the flow lags.
   3. *32×32 cost:* the effect read-out samples one pixel at a time (~2.7 h per fit).
-* **Layout:** code at the top level; launch and analysis scripts in `scripts/`; write-ups in
+* **Layout:** code at the top level; launch and analysis scripts in `scripts/` (index and how to
+  run them: [`scripts/README.md`](scripts/README.md)); write-ups in
   `docs/`; everything generated (run folders, indexes, logs, the dataset cache) in `runs/`,
   which is gitignored.
 
