@@ -834,9 +834,9 @@ def save_run(cfg: Config, data: dict, losses: dict, tau_hat: np.ndarray,
         ATC=np.asarray(data["ATC"]), TAU_U=np.asarray(data["TAU_U"]),
         TAU_MARGINAL=np.asarray(data["TAU_MARGINAL"]),
         THICKNESS=np.asarray(data["THICKNESS"]), PROPENSITY=np.asarray(data["PROPENSITY"]),
-        X=np.asarray(data["X"]), ITE=np.asarray(data["ITE"]),
-        # Kept so --replot needs no refit and no regenerated dataset.
-        Y=np.asarray(data["Y"]),
+        X=np.asarray(data["X"]),
+        # Y and ITE are NOT saved (from 2026-10-01): rebuilt on demand by
+        # dataset_store.load_dataset from config.json (hash-checked); --replot does that.
         **{k: np.asarray(v) for k, v in losses.items()},
         **{k: np.asarray(v) for k, v in (extras or {}).items()},
     )
@@ -848,7 +848,8 @@ def replot(run_dir: str):
     """Regenerate the plots for an existing run, no refit."""
     with open(os.path.join(run_dir, "config.json"), encoding="utf-8") as f:
         cfg = Config(**json.load(f)["config"])
-    a = np.load(os.path.join(run_dir, "arrays.npz"))
+    import dataset_store
+    a = dataset_store.run_arrays(run_dir)     # fills Y / ITE from the rebuilt dataset when not saved
     data = {k: a[k] for k in ("ATE", "ATT", "ATC", "TAU_U", "TAU_MARGINAL",
                               "THICKNESS", "PROPENSITY", "X", "ITE", "Y")}
     losses = {k: a[k] for k in ("iter", "loss", "loss_y", "loss_eta")}

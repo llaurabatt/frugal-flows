@@ -1717,8 +1717,8 @@ def save_run(cfg: Config, data: dict, losses: dict, tau_hat: np.ndarray,
         os.path.join(run_dir, "arrays.npz"),
         tau_hat=tau_hat,
         X=np.asarray(data["X"]),
-        Y=np.asarray(data["Y"]),
-        ITE=np.asarray(data["ITE"]),
+        # Y and ITE are NOT saved (from 2026-10-01): they are the dataset, identical across fits,
+        # and rebuilt on demand from config.json by dataset_store.load_dataset (hash-checked)
         loss_train=np.asarray(losses["train"]),
         loss_val=np.asarray(losses["val"]),
         # u_z exists only for the frugal flow; the margin baselines fit nothing to Z.
@@ -1748,7 +1748,8 @@ def replot(run_dir: str):
 
         return frengression.replot(run_dir)
     cfg = Config(**stored)
-    a = np.load(os.path.join(run_dir, "arrays.npz"))
+    import dataset_store
+    a = dataset_store.run_arrays(run_dir)     # fills Y / ITE from the rebuilt dataset when not saved
     data = {k: a[k] for k in TRUTH_ARRAY_KEYS}
     data.update({"X": a["X"], "Y": a["Y"], "ITE": a["ITE"]})
     losses = {"train": a["loss_train"], "val": a["loss_val"]}

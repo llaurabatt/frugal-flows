@@ -279,7 +279,8 @@ def run_one(cfg, basis: str, runs_root: str = RUNS_ROOT, plots: bool = True) -> 
     metrics = {"run_id": os.path.basename(run_dir), "dataset_id": data["dataset_id"],
                "data_hash": data["data_hash"], "z_hash": data["z_hash"], "basis": basis, "n_units": int(Y.shape[0]),
                "n_pixels": int(Y.shape[1]), "methods": {}}
-    arrays = {k: np.asarray(data[k]) for k in ("ATE", "ATT", "ATC", "Y", "X", "ITE", "PROPENSITY")}
+    # Y and ITE are not saved (from 2026-10-01; dataset_store.load_dataset rebuilds them)
+    arrays = {k: np.asarray(data[k]) for k in ("ATE", "ATT", "ATC", "X", "PROPENSITY")}
     om = E.observed_maps(data)                 # observed difference and imbalance, all images
     arrays["obs_diff"] = om["obs_diff"]
     metrics["imbalance"] = E._regional_metrics("imb", om["imbalance"], masks)

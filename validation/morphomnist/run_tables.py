@@ -176,7 +176,8 @@ def read_run(d: str) -> dict:
                  precision="float64" if c.get("x64") else "float32", precision_note="", batch_note="", cop_note="")
     else:                                                    # ---- exp_ate_recovery.py layout
         met = load_json(f"{d}/metrics.json")
-        a = np.load(f"{d}/arrays.npz")
+        import dataset_store
+        a = dataset_store.run_arrays(d)     # Y / ITE rebuilt when the run did not save them (from 2026-10-01)
         R.update(layout="exp_ate_recovery", metrics=met, info={})
         # runs made before 2026-09-18 have no model field and are all margin + copula
         mdl = c.get("model", "ff")
