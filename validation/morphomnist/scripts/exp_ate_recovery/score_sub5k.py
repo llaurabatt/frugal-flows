@@ -82,8 +82,8 @@ def report(recs):
             continue
         nv = {r["k"]: r["naive_mae"] for r in R}
         lines += [f"## {exp} (naive MAE: " + ", ".join(f"k{k} {v:.3f}" for k, v in sorted(nv.items())) + ")", "",
-                  "| arm | k1 | k2 | k3 | mean | mean rho | mean disc bias | best epoch/iter | wall min |",
-                  "|---|---|---|---|---|---|---|---|---|"]
+                  "| arm | k1 | k2 | k3 | k4 | k5 | mean | mean rho | mean disc bias | best epoch/iter | wall min |",
+                  "|---|---|---|---|---|---|---|---|---|---|---|"]
         for code in ROWS:
             rr = {r["k"]: r for r in R if r["code"] == code}
             if not rr:
@@ -93,7 +93,7 @@ def report(recs):
             cell = lambda k: fmt(rr[k]["mae"]) if k in rr else "…"
             wall = ", ".join(f"{rr[k]['wall_min']:.0f}" for k in sorted(rr))
             disc = [rr[k]["disc"] for k in rr if rr[k]["disc"] is not None]
-            lines.append(f"| {code} | {cell(1)} | {cell(2)} | {cell(3)} | {fmt(np.mean(v))} (n={len(v)}) | "
+            lines.append(f"| {code} | {cell(1)} | {cell(2)} | {cell(3)} | {cell(4)} | {cell(5)} | {fmt(np.mean(v))} (n={len(v)}) | "
                          f"{fmt(np.mean([rr[k]['rho'] for k in rr]), 3)} | {fmt(np.mean(disc), 3) if disc else '—'} | "
                          f"{', '.join(str(rr[k]['best']) for k in sorted(rr))} | "
                          f"{wall} |")
@@ -130,7 +130,7 @@ def figure(recs, path):
                        alpha=0.5)
                 ax.scatter([i] * len(v), v, color="k", s=14, zorder=3)
         ax.set_xticks(range(len(ROWS)), ROWS, rotation=25)
-        ax.set_title(f"{exp}, n = 5000: ATE MAE (dots = datasets 1-3)")
+        ax.set_title(f"{exp}, n = 5000: ATE MAE (dots = datasets 1-5)")
         ax.set_ylabel("ATE MAE")
     fig.tight_layout()
     fig.savefig(path, dpi=130)
@@ -149,7 +149,7 @@ def main():
     if recs:
         figure(recs, os.path.join(OUT, "results.png"))
     print(md)
-    print(f"\n{len(recs)} runs scored (30 expected)")
+    print(f"\n{len(recs)} runs scored (50 expected)")
     if a.wandb and recs:
         import pandas as pd
         import wandb

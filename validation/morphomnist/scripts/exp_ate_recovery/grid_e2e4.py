@@ -72,7 +72,7 @@ def queue(n_fits: int = 5):
 
 
 # --- sub5k suite (2026-10-02 16:17 agreement): Laura's 4 flows on a 5,000-image all-digit subsample -----
-# one fit per dataset (fit seed = k), W&B group sub5k_e2e4; uniform arms raw, Gaussian arms standardised
+# datasets k = 1-5, one fit per dataset (fit seed = k), W&B group sub5k_e2e4; uniform arms raw, Gaussian arms standardised
 SUB5K_GROUP = "sub5k_e2e4"
 SUB5K_ARMS = {  # code -> (arm, y_scaling, extra flags)
     "U-flex-raw": ("flexible_continuous", "none", ["--conditioner", "mlp"]),
@@ -102,18 +102,12 @@ def sub5k_fr_cell(preset, k, s=None):
             "glob": f"*_frengression_{SHORT[preset].lower()}_sa{k}_k64_s{s}_d0-9_*"}
 
 
-def queue_sub5k(n_fits: int = 1):
-    """Dataset-major: all arms on both experiments for k = 1, then k = 2, then k = 3 (fit seed k).
-    n_fits = 5 then adds fit seeds 1001-1004 (the collaborator's 5-fit design), seed-major."""
+def queue_sub5k(n_datasets: int = 5):
+    """Dataset-major: all arms on both experiments for k = 1, then k = 2, ... (one fit per dataset, fit seed k)."""
     q = []
-    for k in (1, 2, 3):
+    for k in range(1, n_datasets + 1):
         for preset in (E2, E4):
             q += [sub5k_flow_cell(code, preset, k) for code in SUB5K_ARMS] + [sub5k_fr_cell(preset, k)]
-    if n_fits == 5:
-        for s in (1001, 1002, 1003, 1004):
-            for k in (1, 2, 3):
-                for preset in (E2, E4):
-                    q += [sub5k_flow_cell(code, preset, k, s) for code in SUB5K_ARMS] + [sub5k_fr_cell(preset, k, s)]
     return q
 
 
@@ -144,8 +138,8 @@ def main():
     ap.add_argument("--threads", type=int, default=8)
     ap.add_argument("--logdir", default=os.path.expanduser("~/work/halo-runs/e2e4"))
     ap.add_argument("--wait-file", default=None)
-    ap.add_argument("--fits", type=int, default=None, choices=(1, 3, 5),
-                    help="fits per cell: e2e4 suite 3 (default) or 5; sub5k suite 1 (default) or 5")
+    ap.add_argument("--fits", type=int, default=3, choices=(3, 5), help="e2e4 suite: fits per cell")
+    ap.add_argument("--datasets", type=int, default=5, help="sub5k suite: datasets k = 1..N, one fit each")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--stagger-s", type=float, default=20.0)
     ap.add_argument("--suite", default="e2e4", choices=("e2e4", "sub5k"))
@@ -158,9 +152,7 @@ def main():
     for d in (FLOW_ROOT, FR_ROOT, a.logdir, os.path.join(a.logdir, "fits")):
         os.makedirs(d, exist_ok=True)
     fh = open(os.path.join(a.logdir, "launcher.log"), "a")
-    if a.fits is None:
-        a.fits = 1 if a.suite == "sub5k" else 3
-    cells = queue_sub5k(a.fits) if a.suite == "sub5k" else queue(a.fits)
+    cells = queue_sub5k(a.datasets) if a.suite == "sub5k" else queue(a.fits)
     for c in cells:
         if c["kind"] == "flow":
             c["prefix"] = G.name_prefix(c["args"])
