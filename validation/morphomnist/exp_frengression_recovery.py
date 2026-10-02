@@ -192,6 +192,8 @@ class Config:
     # save the fitted model's state_dict to model.pt (from 2026-10-01; < 2 MB up to 32x32).
     # Reload with load_model(run_dir): needed for simulation (specify_causal / sample_joint).
     save_model: bool = True
+    # placebo anchor: permute the covariate rows (Z only; Y and X stay paired) with this seed
+    z_shuffle_seed: int | None = None
     # ---- experiment tracking (off by default; local archives are authoritative) ----
     wandb: bool = False
     wandb_entity: str | None = None
@@ -313,6 +315,8 @@ def prepare_inputs(data, cfg: Config) -> Inputs:
     Y = np.asarray(data["Y"], dtype=np.float64)
     X = np.asarray(data["X"], dtype=np.float64)
     Z = np.asarray(data["Z"], dtype=np.float64)
+    if getattr(cfg, "z_shuffle_seed", None) is not None:
+        Z = Z[np.random.default_rng(cfg.z_shuffle_seed).permutation(len(Z))]
     z_cat_idx = np.asarray(data["z_cat_idx"], dtype=bool)
 
     if not np.isfinite(Y).all() or not np.isfinite(X).all() or not np.isfinite(Z).all():
@@ -775,6 +779,8 @@ def wandb_name_for(cfg: Config, uid: str) -> str:
         var.append(f"effect{cfg.base_shift:g}")
     if cfg.seed_assign is not None:
         var.append(f"sa{cfg.seed_assign}")
+    if getattr(cfg, "z_shuffle_seed", None) is not None:
+        var.append(f"zshuf{cfg.z_shuffle_seed}")
     v = "_".join(var)
     digit = "d0-9" if cfg.digit is None else f"d{cfg.digit}"
     return (f"frengression_{PRESET_SHORT[cfg.preset][:2]}{'_' + v if v else ''}"
