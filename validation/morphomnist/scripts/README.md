@@ -41,6 +41,12 @@ choices is in [`../docs/leftover_confounding/STATUS.md`](../docs/leftover_confou
 | `exp_ate_recovery/cleanup_paused_launcher.sh` | one-off: ended the paused first grid launcher once its fits finished. **Bug:** its last line, `screen -S grid8 -X quit`, matched the running screen `grid8b` by prefix and killed 48 fits; use `end_paused_launcher.sh` instead | — |
 | `exp_ate_recovery/end_paused_launcher.sh <pid>` | ends a paused (SIGSTOPped) launcher once its fits finish, by pid only. To change the core count mid-grid: `kill -STOP` the launcher, kill its slot-waiting helper (the child running `sleep 10`), start `SLOTS=<n> bash grid_8x8_alldigits_v2.sh` in a new screen, and run this on the old pid | — |
 
+## Paper outputs (2026-10-02)
+
+| script | what it does | output |
+|---|---|---|
+| `paper/make_paper_outputs.py <topic>` | figures and LaTeX tables for the paper, one topic at a time; each topic also compiles a one-column preview at AISTATS text width. Topics so far: `setup` (table of the six presets with the size of their confounding over the 10 datasets; data figure; truth panels) | `runs/paper/<topic>/` |
+
 ## Margin pixel order (test, 2026-10-02)
 
 | script | what it does | wandb group |
