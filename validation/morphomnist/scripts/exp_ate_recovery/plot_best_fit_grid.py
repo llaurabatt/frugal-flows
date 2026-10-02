@@ -26,8 +26,8 @@ for i, k in enumerate(ks):
         im1 = ax[r1, j].imshow((t - truth).reshape(8, 8), cmap="RdBu_r", vmin=-0.05, vmax=0.05)
         ax[r1, j].set_title(f"error · ATE MAE {maes[s]:.4f}", fontsize=9)
 for a in ax.ravel(): a.set_xticks([]); a.set_yticks([])
-fig.colorbar(im0, ax=ax[0::2, :].ravel().tolist(), shrink=0.3, label="ATE (logit)")
-fig.colorbar(im1, ax=ax[1::2, 1:].ravel().tolist(), shrink=0.3, label="estimate − truth")
+fig.colorbar(im0, ax=ax[1::2, 0].ravel().tolist(), location="left", shrink=0.6, label="ATE (logit)")
+fig.colorbar(im1, ax=ax[:, -1].ravel().tolist(), location="right", shrink=0.35, label="estimate − truth")
 fig.suptitle("E2 (confounded), all digits 8×8: best fit per model against the truth", fontsize=12)
 p = os.path.join(OUT, "gs_best_fit_grid.png"); fig.savefig(p, dpi=115); print(p)
 if "--no-wandb" not in sys.argv:
