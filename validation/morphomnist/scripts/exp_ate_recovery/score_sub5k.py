@@ -81,9 +81,11 @@ def report(recs):
         if not R:
             continue
         nv = {r["k"]: r["naive_mae"] for r in R}
+        KS = sorted({r["k"] for r in R})
+        fr = {r["k"]: r["mae"] for r in R if r["code"] == "freng"}
         lines += [f"## {exp} (naive MAE: " + ", ".join(f"k{k} {v:.3f}" for k, v in sorted(nv.items())) + ")", "",
-                  "| arm | k1 | k2 | k3 | k4 | k5 | mean | mean rho | mean disc bias | best epoch/iter | wall min |",
-                  "|---|---|---|---|---|---|---|---|---|---|---|"]
+                  "| arm | " + " | ".join(f"k{k}" for k in KS) + " | mean | mean rho | mean disc bias | wins vs freng |",
+                  "|---|" + "---|" * (len(KS) + 4)]
         for code in ROWS:
             rr = {r["k"]: r for r in R if r["code"] == code}
             if not rr:
@@ -91,12 +93,11 @@ def report(recs):
             v = [rr[k]["mae"] for k in rr]
             means[(exp, code)] = (np.mean(v), len(v))
             cell = lambda k: fmt(rr[k]["mae"]) if k in rr else "…"
-            wall = ", ".join(f"{rr[k]['wall_min']:.0f}" for k in sorted(rr))
             disc = [rr[k]["disc"] for k in rr if rr[k]["disc"] is not None]
-            lines.append(f"| {code} | {cell(1)} | {cell(2)} | {cell(3)} | {cell(4)} | {cell(5)} | {fmt(np.mean(v))} (n={len(v)}) | "
-                         f"{fmt(np.mean([rr[k]['rho'] for k in rr]), 3)} | {fmt(np.mean(disc), 3) if disc else '—'} | "
-                         f"{', '.join(str(rr[k]['best']) for k in sorted(rr))} | "
-                         f"{wall} |")
+            both = [k for k in rr if k in fr]
+            wins = "—" if code == "freng" or not both else f"{sum(rr[k]['mae'] < fr[k] for k in both)}/{len(both)}"
+            lines.append(f"| {code} | " + " | ".join(cell(k) for k in KS) + f" | {fmt(np.mean(v))} (n={len(v)}) | "
+                         f"{fmt(np.mean([rr[k]['rho'] for k in rr]), 3)} | {fmt(np.mean(disc), 3) if disc else '—'} | {wins} |")
         lines += ["", "Paired ratios (mean over datasets where both arms finished; < 1 favours the first arm):", ""]
         for a, b, note in (("G-flex-std", "U-flex-raw", "Gaussian vs uniform, flexible (std vs raw)"),
                            ("G-LT-std", "U-LT-raw", "Gaussian vs uniform, LT (std vs raw)"),
@@ -112,6 +113,12 @@ def report(recs):
                 lines.append(f"- {note}: {np.mean([ka[k] for k in ks]):.4f} / {np.mean([kb[k] for k in ks]):.4f} "
                              f"= {np.mean([ka[k] for k in ks]) / np.mean([kb[k] for k in ks]):.2f}x "
                              f"(per dataset {', '.join(f'{x:.2f}' for x in ratios)}; first arm wins {sum(x < 1 for x in ratios)}/{len(ks)})")
+        lines += ["", "Best epoch (flows) / loss-min iteration (frengression) and wall minutes, per dataset:", ""]
+        for code in ROWS:
+            rr = {r["k"]: r for r in R if r["code"] == code}
+            if rr:
+                lines.append(f"- {code}: best " + ", ".join(str(rr[k]['best']) for k in sorted(rr))
+                             + "; wall " + ", ".join(f"{rr[k]['wall_min']:.0f}" for k in sorted(rr)))
         lines.append("")
     return "\n".join(lines), means
 
@@ -130,7 +137,7 @@ def figure(recs, path):
                        alpha=0.5)
                 ax.scatter([i] * len(v), v, color="k", s=14, zorder=3)
         ax.set_xticks(range(len(ROWS)), ROWS, rotation=25)
-        ax.set_title(f"{exp}, n = 5000: ATE MAE (dots = datasets 1-5)")
+        ax.set_title(f"{exp}, n = 5000: ATE MAE (dots = datasets)")
         ax.set_ylabel("ATE MAE")
     fig.tight_layout()
     fig.savefig(path, dpi=130)
@@ -149,7 +156,7 @@ def main():
     if recs:
         figure(recs, os.path.join(OUT, "results.png"))
     print(md)
-    print(f"\n{len(recs)} runs scored (50 expected)")
+    print(f"\n{len(recs)} runs scored (100 expected)")
     if a.wandb and recs:
         import pandas as pd
         import wandb
