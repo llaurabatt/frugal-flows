@@ -71,6 +71,42 @@ def queue(n_fits: int = 5):
     return q
 
 
+# --- sub5k suite (2026-10-02 16:17 agreement): Laura's 4 flows on a 5,000-image all-digit subsample -----
+# one fit per dataset (fit seed = k), W&B group sub5k_e2e4; uniform arms raw, Gaussian arms standardised
+SUB5K_GROUP = "sub5k_e2e4"
+SUB5K_ARMS = {  # code -> (arm, y_scaling, extra flags)
+    "U-flex-raw": ("flexible_continuous", "none", ["--conditioner", "mlp"]),
+    "U-LT-raw": ("location_translation", "none", []),                       # ate_init 0.5 (default), lr x1
+    "G-flex-std": ("flexible_continuous_gaussian", "standardize", []),
+    "G-LT-std": ("location_translation_gaussian", "standardize", ["--shift-init", "scalar"]),  # 0.5, lr x1
+}
+
+
+def sub5k_flow_cell(code, preset, k):
+    arm, ys, ex = SUB5K_ARMS[code]
+    args = PAPER + ["--n", "5000", "--preset", preset, "--seed-assign", str(k), "--seed-fit", str(k),
+                    "--arm", arm, "--y-scaling", ys, "--copula-nn-width", "16"] + list(ex) \
+        + ["--wandb", "--wandb-group", SUB5K_GROUP, "--wandb-tags", f"sub5k,{code}"]
+    return {"kind": "flow", "label": f"{code}:{SHORT[preset]}:k{k}", "args": args, "threads": 1}
+
+
+def sub5k_fr_cell(preset, k):
+    args = ["--all-digits", "--n", "5000", "--preset", preset, "--seed-assign", str(k), "--seed-fit", str(k),
+            "--size", "8", "--seed-data", "101", "--num-iters", "5000", "--threads", "2",
+            "--wandb", "--wandb-group", SUB5K_GROUP, "--wandb-tags", "sub5k,freng"]
+    return {"kind": "freng", "label": f"freng:{SHORT[preset]}:k{k}", "args": args, "threads": 2,
+            "glob": f"*_frengression_{SHORT[preset].lower()}_sa{k}_k64_s{k}_d0-9_*"}
+
+
+def queue_sub5k():
+    """Dataset-major: all arms on both experiments for k = 1, then k = 2, then k = 3."""
+    q = []
+    for k in (1, 2, 3):
+        for preset in (E2, E4):
+            q += [sub5k_flow_cell(code, preset, k) for code in SUB5K_ARMS] + [sub5k_fr_cell(preset, k)]
+    return q
+
+
 def done_dir(c):
     if c["kind"] == "flow":
         pre = c["prefix"]
@@ -101,15 +137,21 @@ def main():
     ap.add_argument("--fits", type=int, default=3, choices=(3, 5))
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--stagger-s", type=float, default=20.0)
+    ap.add_argument("--suite", default="e2e4", choices=("e2e4", "sub5k"))
     a = ap.parse_args()
+    global FLOW_ROOT, FR_ROOT
+    if a.suite == "sub5k":
+        FLOW_ROOT, FR_ROOT = os.path.join(MM, "runs", "sub5k"), os.path.join(MM, "runs", "sub5k_frengression")
+        if a.logdir == ap.get_default("logdir"):
+            a.logdir = os.path.expanduser("~/work/halo-runs/sub5k")
     for d in (FLOW_ROOT, FR_ROOT, a.logdir, os.path.join(a.logdir, "fits")):
         os.makedirs(d, exist_ok=True)
     fh = open(os.path.join(a.logdir, "launcher.log"), "a")
-    cells = queue(a.fits)
+    cells = queue_sub5k() if a.suite == "sub5k" else queue(a.fits)
     for c in cells:
         if c["kind"] == "flow":
             c["prefix"] = G.name_prefix(c["args"])
-    log(f"queue: {len(cells)} cells ({a.fits} fits per arm), thread budget {a.threads}", fh)
+    log(f"queue [{a.suite}]: {len(cells)} cells, thread budget {a.threads}", fh)
     for i, c in enumerate(cells):
         log(f"  {i + 1:2d} {c['label']:<22} {c.get('prefix', c.get('glob'))}", fh)
     if a.dry_run:
@@ -121,7 +163,9 @@ def main():
         log("wait-file satisfied, starting", fh)
 
     base = dict(os.environ)
-    base.update({"JAX_PLATFORMS": "cpu", "TF_CPP_MIN_LOG_LEVEL": "2", "WANDB_MODE": "disabled"})
+    base.update({"JAX_PLATFORMS": "cpu", "TF_CPP_MIN_LOG_LEVEL": "2"})
+    if a.suite != "sub5k":
+        base["WANDB_MODE"] = "disabled"
     py = [os.environ.get("MAMBA_EXE", "micromamba"), "run", "-n", "frugal-flows-e2w", "python"]
     running, status, pending = {}, {}, list(cells)
     while pending or running:
