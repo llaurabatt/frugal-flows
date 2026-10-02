@@ -549,15 +549,27 @@ def main():
             open(idf, "w").write(rid)
             run = wandb.init(entity=ENTITY, project=PROJECT, group=GROUP, name="analysis_gaussian_scale", id=rid,
                              resume="allow", job_type="analysis", tags=["gaussian-scale", "analysis"], reinit=True)
-            payload = {"table/per_run": wandb.Table(dataframe=df.astype(str)),
+            def _typed(d):
+                # keep numeric columns numeric so W&B can sort, filter and chart them;
+                # only non-numeric columns become strings
+                d = d.copy()
+                for c in d.columns:
+                    if not __import__("pandas").api.types.is_numeric_dtype(d[c]):
+                        d[c] = d[c].astype(str)
+                return d
+            payload = {"table/per_run": wandb.Table(dataframe=_typed(df)),
                        "table/decisions": wandb.Table(columns=["rule", "verdict"], data=[[n, v] for n, v, _ in dec])}
             if len(pt):
-                payload["table/paired"] = wandb.Table(dataframe=pt[cols].astype(str))
+                payload["table/paired"] = wandb.Table(dataframe=_typed(pt[cols]))
             for name, p in figs.items():
                 if os.path.exists(p):
                     payload[f"plots/{name}"] = wandb.Image(p)
             run.log(payload)
-            run.summary.update({"n_new_fits": int((df.source == "new").sum())})
+            summ = {"n_new_fits": int((df.source == "new").sum())}
+            if {"preset", "code", "ate_mae"} <= set(df.columns):
+                for (pr, code), v in df.groupby(["preset", "code"])["ate_mae"].mean().items():
+                    summ[f"mean_ate_mae/{pr}/{code}"] = float(v)
+            run.summary.update(summ)
             run.finish()
             print(f"logged to W&B run {rid}")
         except Exception as exc:  # noqa: BLE001
