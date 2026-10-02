@@ -545,7 +545,7 @@ def main():
         try:
             import wandb
             idf = os.path.join(OUT, "wandb_run_id.txt")
-            rid = open(idf).read().strip() if os.path.exists(idf) else wandb.util.generate_id()
+            rid = open(idf).read().strip() if os.path.exists(idf) else __import__("uuid").uuid4().hex[:8]
             open(idf, "w").write(rid)
             run = wandb.init(entity=ENTITY, project=PROJECT, group=GROUP, name="analysis_gaussian_scale", id=rid,
                              resume="allow", job_type="analysis", tags=["gaussian-scale", "analysis"], reinit=True)
