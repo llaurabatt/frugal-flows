@@ -23,11 +23,14 @@ import exp_ate_recovery as E  # noqa: E402
 
 FLOW_ROOT, FR_ROOT = os.path.join(MM, "runs", "sub5k"), os.path.join(MM, "runs", "sub5k_frengression")
 OUT = os.path.expanduser("~/work/halo-runs/sub5k")
-EXPS = {"exp2_confounded_homogeneous": "E2", "exp4_covariate_cate": "E4"}
-ARM_CODE = {("flexible_continuous", "none"): "U-flex-raw", ("location_translation", "none"): "U-LT-raw",
-            ("flexible_continuous_gaussian", "standardize"): "G-flex-std",
-            ("location_translation_gaussian", "standardize"): "G-LT-std"}
-ROWS = ["U-flex-raw", "U-LT-raw", "G-flex-std", "G-LT-std", "freng"]
+EXPS = {"exp1_rct_homogeneous": "E1", "exp2_confounded_homogeneous": "E2", "exp3_confounded_heterogeneous": "E3",
+        "exp4_covariate_cate": "E4", "exp5_quantile_effect": "E5", "exp6_spatial_cate": "E6"}
+ARM_CODE = {("flexible_continuous", "none", "zero"): "U-flex-raw", ("location_translation", "none", "zero"): "U-LT-raw",
+            ("flexible_continuous", "standardize", "zero"): "U-flex-std",
+            ("flexible_continuous_gaussian", "standardize", "zero"): "G-flex-std",
+            ("location_translation_gaussian", "standardize", "scalar"): "G-LT-std",
+            ("location_translation_gaussian", "standardize", "naive"): "G-LT-head"}
+ROWS = ["U-flex-raw", "U-flex-std", "U-LT-raw", "G-flex-std", "G-LT-std", "G-LT-head", "freng"]
 _naive = {}
 
 
@@ -52,7 +55,8 @@ def collect():
             c = c.get("config", c)
             if c.get("n") != 5000 or c.get("preset") not in EXPS:
                 continue
-            code = "freng" if kind == "freng" else ARM_CODE.get((c.get("arm"), c.get("y_scaling", "none")))
+            code = "freng" if kind == "freng" else ARM_CODE.get((c.get("arm"), c.get("y_scaling", "none"),
+                                                                c.get("shift_init", "zero")))
             if code is None:
                 continue
             k = int(c["seed_assign"])
@@ -73,7 +77,7 @@ def fmt(x, p=4):
 
 
 def report(recs):
-    lines = ["# sub5k grid: 4 frugal flows + frengression, n = 5000 all digits, E2 and E4", "",
+    lines = ["# sub5k grid: frugal flows + frengression, n = 5000 all digits", "",
              "Uniform arms on raw Y, Gaussian arms on standardised Y (so U vs G includes the standardisation "
              "gain). One fit per dataset, fit seed = dataset. rho: 0 = adjusted, 1 = naive.", ""]
     means = {}
@@ -83,7 +87,7 @@ def report(recs):
     bad = {g: h for g, h in groups.items() if len(h) > 1}
     lines += [f"Data check: {len(groups)} (experiment, dataset) groups, every arm on identical data: "
               + ("YES" if not bad else f"NO, mismatched: {bad}"), ""]
-    for exp in ("E2", "E4"):
+    for exp in ("E1", "E2", "E3", "E4", "E5", "E6"):
         R = [r for r in recs if r["exp"] == exp]
         if not R:
             continue
@@ -106,7 +110,11 @@ def report(recs):
             lines.append(f"| {code} | " + " | ".join(cell(k) for k in KS) + f" | {fmt(np.mean(v))} (n={len(v)}) | "
                          f"{fmt(np.mean([rr[k]['rho'] for k in rr]), 3)} | {fmt(np.mean(disc), 3) if disc else '—'} | {wins} |")
         lines += ["", "Paired ratios (mean over datasets where both arms finished; < 1 favours the first arm):", ""]
-        for a, b, note in (("G-flex-std", "U-flex-raw", "Gaussian vs uniform, flexible (std vs raw)"),
+        for a, b, note in (("G-flex-std", "U-flex-std", "Gaussian vs uniform, flexible, both standardised (scale only)"),
+                           ("U-flex-std", "U-flex-raw", "uniform flexible, standardised vs raw (scaling only)"),
+                           ("G-flex-std", "U-flex-raw", "Gaussian vs uniform, flexible (std vs raw)"),
+                           ("G-LT-head", "G-flex-std", "Gaussian LT with head start vs Gaussian flexible"),
+                           ("G-LT-head", "freng", "Gaussian LT with head start vs frengression"),
                            ("G-LT-std", "U-LT-raw", "Gaussian vs uniform, LT (std vs raw)"),
                            ("U-LT-raw", "U-flex-raw", "LT vs flexible, uniform"),
                            ("G-LT-std", "G-flex-std", "LT vs flexible, Gaussian"),
@@ -134,8 +142,9 @@ def figure(recs, path):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4))
-    for ax, exp in zip(axes, ("E2", "E4")):
+    exps = [e for e in ("E1", "E2", "E3", "E4", "E5", "E6") if any(r["exp"] == e for r in recs)]
+    fig, axes = plt.subplots(1, len(exps), figsize=(5.5 * len(exps), 4), squeeze=False)
+    for ax, exp in zip(axes[0], exps):
         R = [r for r in recs if r["exp"] == exp]
         for i, code in enumerate(ROWS):
             v = [r["mae"] for r in R if r["code"] == code]
@@ -163,7 +172,7 @@ def main():
     if recs:
         figure(recs, os.path.join(OUT, "results.png"))
     print(md)
-    print(f"\n{len(recs)} runs scored (100 expected)")
+    print(f"\n{len(recs)} runs scored (E1-E6 x 10 datasets x 7 arms = 420 expected for the full grid)")
     if a.wandb and recs:
         import pandas as pd
         import wandb

@@ -30,7 +30,9 @@ import grid_gaussian_scale as G  # noqa: E402  (PAPER flags, arm table, run-name
 FLOW_ROOT = os.path.join(MM, "runs", "e2e4")
 FR_ROOT = os.path.join(MM, "runs", "e2e4_frengression")
 E2, E4 = "exp2_confounded_homogeneous", "exp4_covariate_cate"
-SHORT = {E2: "E2", E4: "E4"}
+ALL_E = {"E1": "exp1_rct_homogeneous", "E2": E2, "E3": "exp3_confounded_heterogeneous", "E4": E4,
+         "E5": "exp5_quantile_effect", "E6": "exp6_spatial_cate"}
+SHORT = {v: k for k, v in ALL_E.items()}
 PAPER = [a for a in G.PAPER if a not in ("--wandb", "--wandb-group", G.GROUP, "--wandb-tags", "gaussian-scale")]
 
 
@@ -79,7 +81,12 @@ SUB5K_ARMS = {  # code -> (arm, y_scaling, extra flags)
     "U-LT-raw": ("location_translation", "none", []),                       # ate_init 0.5 (default), lr x1
     "G-flex-std": ("flexible_continuous_gaussian", "standardize", []),
     "G-LT-std": ("location_translation_gaussian", "standardize", ["--shift-init", "scalar"]),  # 0.5, lr x1
+    # added 18:45 (Dan): separate scale from scaling; G-LT with the head start (uniform LT has no per-pixel start)
+    "U-flex-std": ("flexible_continuous", "standardize", ["--conditioner", "mlp"]),
+    "G-LT-head": ("location_translation_gaussian", "standardize", ["--shift-init", "naive", "--shift-lr-mult", "10"]),
 }
+SUB5K_FIRST4 = ["U-flex-raw", "U-LT-raw", "G-flex-std", "G-LT-std"]
+SUB5K_NEW = ["U-flex-std", "G-LT-head"]
 
 
 def sub5k_flow_cell(code, preset, k, s=None):
@@ -102,12 +109,20 @@ def sub5k_fr_cell(preset, k, s=None):
             "glob": f"*_frengression_{SHORT[preset].lower()}_sa{k}_k64_s{s}_d0-9_*"}
 
 
-def queue_sub5k(n_datasets: int = 5):
-    """Dataset-major: all arms on both experiments for k = 1, then k = 2, ... (one fit per dataset, fit seed k)."""
+def queue_sub5k(n_datasets: int = 5, exps=("E2", "E4"), new_arms: bool = False):
+    """Dataset-major: all arms on each experiment for k = 1, then k = 2, ... (one fit per dataset, fit seed k).
+    new_arms adds U-flex-std and G-LT-head: queued first on E2/E4 (whose other arms already exist), then every
+    experiment gets all 6 flows + frengression."""
     q = []
+    codes = SUB5K_FIRST4 + (SUB5K_NEW if new_arms else [])
+    if new_arms:
+        for k in range(1, n_datasets + 1):
+            for e in ("E2", "E4"):
+                if e in exps:
+                    q += [sub5k_flow_cell(c, ALL_E[e], k) for c in SUB5K_NEW]
     for k in range(1, n_datasets + 1):
-        for preset in (E2, E4):
-            q += [sub5k_flow_cell(code, preset, k) for code in SUB5K_ARMS] + [sub5k_fr_cell(preset, k)]
+        for e in exps:
+            q += [sub5k_flow_cell(c, ALL_E[e], k) for c in codes] + [sub5k_fr_cell(ALL_E[e], k)]
     return q
 
 
@@ -140,6 +155,8 @@ def main():
     ap.add_argument("--wait-file", default=None)
     ap.add_argument("--fits", type=int, default=3, choices=(3, 5), help="e2e4 suite: fits per cell")
     ap.add_argument("--datasets", type=int, default=5, help="sub5k suite: datasets k = 1..N, one fit each")
+    ap.add_argument("--exps", default="E2,E4", help="sub5k suite: comma-separated experiments (E1-E6)")
+    ap.add_argument("--new-arms", action="store_true", help="sub5k suite: add U-flex-std and G-LT-head")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--stagger-s", type=float, default=20.0)
     ap.add_argument("--suite", default="e2e4", choices=("e2e4", "sub5k"))
@@ -152,7 +169,8 @@ def main():
     for d in (FLOW_ROOT, FR_ROOT, a.logdir, os.path.join(a.logdir, "fits")):
         os.makedirs(d, exist_ok=True)
     fh = open(os.path.join(a.logdir, "launcher.log"), "a")
-    cells = queue_sub5k(a.datasets) if a.suite == "sub5k" else queue(a.fits)
+    cells = (queue_sub5k(a.datasets, tuple(a.exps.split(",")), a.new_arms) if a.suite == "sub5k"
+             else queue(a.fits))
     for c in cells:
         if c["kind"] == "flow":
             c["prefix"] = G.name_prefix(c["args"])
