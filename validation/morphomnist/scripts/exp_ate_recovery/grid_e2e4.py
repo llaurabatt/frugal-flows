@@ -126,6 +126,46 @@ def queue_sub5k(n_datasets: int = 5, exps=("E2", "E4"), new_arms: bool = False):
     return q
 
 
+# --- gausshp suite: one-at-a-time hyperparameter sweep of the Gaussian spline (G-flex-std) ------------------
+# n = 5000, E2 + E4, TUNING datasets k = 11-13 (disjoint from the k = 1-10 reported in sub5k), W&B group gausshp
+GAUSSHP_GROUP = "gausshp_sub5k"
+GAUSSHP = {  # name -> flag overrides on top of the paper flags (lr 1e-3, patience 30, width 48, knots 8, copw 16)
+    "base": [],
+    "lr3e-4": ["--learning-rate", "0.0003"],
+    "lr3e-3": ["--learning-rate", "0.003"],
+    "pat100": ["--max-patience", "100"],
+    "mw24": ["--nn-width", "24"],
+    "mw128": ["--nn-width", "128"],
+    "kn4": ["--rqs-knots", "4"],
+    "kn16": ["--rqs-knots", "16"],
+    "copw50": ["--copula-nn-width", "50"],
+    "batch256": ["--batch-size", "256"],
+}
+
+
+def _override(args, extra):
+    args = list(args)
+    for i in range(0, len(extra), 2):
+        if extra[i] in args:
+            args[args.index(extra[i]) + 1] = extra[i + 1]
+        else:
+            args += extra[i:i + 2]
+    return args
+
+
+def queue_gausshp(ks=(11, 12, 13), exps=("E2", "E4"), names=None):
+    q = []
+    for k in ks:
+        for e in exps:
+            for name in (names or GAUSSHP):
+                c = sub5k_flow_cell("G-flex-std", ALL_E[e], k)
+                c["args"] = _override(c["args"], GAUSSHP[name])
+                c["args"] = _override(c["args"], ["--wandb-group", GAUSSHP_GROUP, "--wandb-tags", f"gausshp,{name}"])
+                c["label"] = f"hp-{name}:{e}:k{k}"
+                q.append(c)
+    return q
+
+
 def done_dir(c):
     if c["kind"] == "flow":
         pre = c["prefix"]
@@ -159,18 +199,22 @@ def main():
     ap.add_argument("--new-arms", action="store_true", help="sub5k suite: add U-flex-std and G-LT-head")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--stagger-s", type=float, default=20.0)
-    ap.add_argument("--suite", default="e2e4", choices=("e2e4", "sub5k"))
+    ap.add_argument("--suite", default="e2e4", choices=("e2e4", "sub5k", "gausshp"))
     a = ap.parse_args()
     global FLOW_ROOT, FR_ROOT
     if a.suite == "sub5k":
         FLOW_ROOT, FR_ROOT = os.path.join(MM, "runs", "sub5k"), os.path.join(MM, "runs", "sub5k_frengression")
         if a.logdir == ap.get_default("logdir"):
             a.logdir = os.path.expanduser("~/work/halo-runs/sub5k")
+    if a.suite == "gausshp":
+        FLOW_ROOT = os.path.join(MM, "runs", "gausshp")
+        if a.logdir == ap.get_default("logdir"):
+            a.logdir = os.path.expanduser("~/work/halo-runs/gausshp")
     for d in (FLOW_ROOT, FR_ROOT, a.logdir, os.path.join(a.logdir, "fits")):
         os.makedirs(d, exist_ok=True)
     fh = open(os.path.join(a.logdir, "launcher.log"), "a")
     cells = (queue_sub5k(a.datasets, tuple(a.exps.split(",")), a.new_arms) if a.suite == "sub5k"
-             else queue(a.fits))
+             else queue_gausshp() if a.suite == "gausshp" else queue(a.fits))
     for c in cells:
         if c["kind"] == "flow":
             c["prefix"] = G.name_prefix(c["args"])
@@ -187,7 +231,7 @@ def main():
 
     base = dict(os.environ)
     base.update({"JAX_PLATFORMS": "cpu", "TF_CPP_MIN_LOG_LEVEL": "2"})
-    if a.suite != "sub5k":
+    if a.suite == "e2e4":
         base["WANDB_MODE"] = "disabled"
     py = [os.environ.get("MAMBA_EXE", "micromamba"), "run", "-n", "frugal-flows-e2w", "python"]
     running, status, pending = {}, {}, list(cells)
