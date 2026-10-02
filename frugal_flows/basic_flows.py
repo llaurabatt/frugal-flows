@@ -532,6 +532,7 @@ def masked_autoregressive_bijection(
     nn_depth: int = 1,
     nn_width: int = 50,
     flow_layers: int = 4,
+    permute: bool = True,
 ):
     """Masked autoregressive flow.
 
@@ -540,6 +541,9 @@ def masked_autoregressive_bijection(
 
     Args:
         key: Random seed.
+        permute: random permutation after each layer (default). False keeps one fixed
+            coordinate order in every layer, so the whole map is triangular in that order
+            (the Rosenblatt map); same keys, so the layers' initial weights are unchanged.
         base_dist: Base distribution, with ``base_dist.ndim==1``.
         transformer: Bijection parameterised by autoregressive network. Defaults to
             affine.
@@ -566,6 +570,8 @@ def masked_autoregressive_bijection(
             nn_width=nn_width,
             nn_depth=nn_depth,
         )
+        if not permute:
+            return bijection
         return _add_default_permute(bijection, dim, perm_key)
 
     keys = jr.split(key, flow_layers)

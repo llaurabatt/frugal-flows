@@ -41,6 +41,12 @@ choices is in [`../docs/leftover_confounding/STATUS.md`](../docs/leftover_confou
 | `exp_ate_recovery/cleanup_paused_launcher.sh` | one-off: ended the paused first grid launcher once its fits finished. **Bug:** its last line, `screen -S grid8 -X quit`, matched the running screen `grid8b` by prefix and killed 48 fits; use `end_paused_launcher.sh` instead | — |
 | `exp_ate_recovery/end_paused_launcher.sh <pid>` | ends a paused (SIGSTOPped) launcher once its fits finish, by pid only. To change the core count mid-grid: `kill -STOP` the launcher, kill its slot-waiting helper (the child running `sleep 10`), start `SLOTS=<n> bash grid_8x8_alldigits_v2.sh` in a new screen, and run this on the old pid | — |
 
+## Margin pixel order (test, 2026-10-02)
+
+| script | what it does | wandb group |
+|---|---|---|
+| `exp_ate_recovery/margin_order_8x8.sh` | waits for the paper grid to end, then 30 fits with `--margin-order fixed` (tag `mfix`; one pixel order in every margin layer, no permutation): E1/E2 × datasets 1–3 × fit seeds {k, 1001–1004}, otherwise the grid's settings, so each pairs with a grid cell. Not the default | `margin_order_8x8` |
+
 ## Resolution checks (16×16, 32×32)
 
 | script | what it does | wandb group |

@@ -570,6 +570,12 @@ Options that were tested and **not adopted** (kept for reproducibility; evidence
 (empirical-CDF covariate ranks; tag `ecdf`), and the library arm `flexible_reversed`
 (`frugal_flows/reversed_copula.py`; toy only, not wired into this script).
 
+**Under test, not the default** (2026-10-02): `--margin-order fixed` (tag `mfix`, wandb tag
+`margin_order_fixed`) keeps one raster pixel order in every layer of the image margin instead of a
+random permutation after each layer. The margin is then the Rosenblatt map in that order, which makes
+conditioning on the first pixels exact and gives counterfactuals a plain reading. Test:
+`scripts/exp_ate_recovery/margin_order_8x8.sh` (E1/E2 × datasets 1–3 × 5 seeds, paired with the grid).
+
 `--save-model` (default on): the fitted weights go to `model.eqx`; `load_model(run_dir)` rebuilds
 the flow (identical effect map). Frengression saves `model.pt` (`exp_frengression_recovery.load_model`).
 
@@ -808,7 +814,7 @@ The wandb name is `<model>_<preset>_<arm>[-trf]_[<variant>_]k<K>_s<seed>_d<digit
 are reserved for copula-free fits from other scripts); `e1`…`e6` the preset; `flexcont` or
 `loctrans` the arm, `-trf` for a transformer conditioner; a variant tag only when a setting
 differs from the reference (`lr<value>`, `copw<W>`, `mw<W>`, `mkn<K>`, `batch<B>`, `ema<N>`, `coplr<m>`,
-`ep<N>`, `pat<N>`, `cap<s>`, `n<N>`, `ecdf`, `umw<w>`, `copsel`, `coplam<λ>`, `effect<size>`, `sa<k>`, `rct`, …;
+`ep<N>`, `pat<N>`, `cap<s>`, `n<N>`, `ecdf`, `umw<w>`, `mfix`, `copsel`, `coplam<λ>`, `effect<size>`, `sa<k>`, `rct`, …;
 `check_runs.py` checks every tag against `config.json`); `s<seed>`
 the fit seed; `d0` for the single digit class, `d0-9` for all ten; `uid` six hex characters.
 The stamp is UTC (`2026-09-10T14-29-26Z` = 10 Sep 2026, 14:29:26). Built by `run_id_for` /

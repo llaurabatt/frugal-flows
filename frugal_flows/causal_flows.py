@@ -57,6 +57,8 @@ def _build_flexible_margin(key, dim, condition, causal_model_args):
     ``nn_width``) and ``expansion`` (default 2).
     """
     conditioner = causal_model_args.get("conditioner", "mlp")
+    # "margin_permute": False = one fixed outcome order in every layer (mlp only; default True)
+    permute = causal_model_args.get("margin_permute", True)
     if conditioner == "mlp":
         return masked_autoregressive_bijection(
             key=key,
@@ -66,7 +68,10 @@ def _build_flexible_margin(key, dim, condition, causal_model_args):
             nn_width=causal_model_args["nn_width"],
             RQS_knots=causal_model_args["RQS_knots"],
             flow_layers=causal_model_args["flow_layers"],
+            permute=permute,
         )
+    if not permute:
+        raise ValueError("margin_permute=False is implemented for the 'mlp' conditioner only")
     if conditioner == "transformer":
         return transformer_autoregressive_bijection(
             key=key,

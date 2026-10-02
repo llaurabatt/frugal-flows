@@ -499,6 +499,10 @@ class Config:
     # validation / early stopping keep the plain likelihood (2026-09-28)
     copula_umarg_weight: float = 0.0
     copula_umarg_n: int = 128          # draws per step for that penalty
+    # pixel order across the image margin's layers (mlp conditioner): "shuffled" = a random
+    # permutation after each layer (the default); "fixed" = raster order in every layer, so the
+    # margin is the Rosenblatt map in that order (from 2026-10-02; TEST ONLY, not adopted)
+    margin_order: str = "shuffled"
     # save the fitted flow's weights to model.eqx (from 2026-10-01; ~2 / 8 / 31 MB at 8x8 / 16x16 /
     # 32x32). Reload with load_model(run_dir): needed for simulation and counterfactuals.
     save_model: bool = True
@@ -676,6 +680,21 @@ def _uncond_margin_bijection(key, dim, RQS_knots, nn_depth, nn_width, flow_layer
     return Invert(Scan(equinox.filter_vmap(make_layer)(jr.split(key, flow_layers))))
 
 
+def _margin_order_args(cfg: Config) -> dict:
+    """The margin's pixel-order setting for causal_model_args. Empty for the default, so a
+    default fit passes exactly the arguments it passed before the option existed."""
+    order = getattr(cfg, "margin_order", "shuffled")
+    if order == "shuffled":
+        return {}
+    if order != "fixed":
+        raise ValueError(f"margin_order must be 'shuffled' or 'fixed', not {order!r}")
+    if cfg.arm != "flexible_continuous" or cfg.conditioner != "mlp":
+        raise ValueError("margin_order='fixed' is implemented for the flexible arm with the mlp conditioner only")
+    if cfg.model == "margin_sep":
+        raise ValueError("margin_order='fixed' is not implemented for margin_sep")
+    return {"margin_permute": False}
+
+
 def _margin_dist(cfg: Config, key, K: int, condition):
     """The image margin as a distribution on its own: the same spline blocks the
     frugal flow puts after the copula (built by ``_build_flexible_margin`` with the
@@ -691,6 +710,7 @@ def _margin_dist(cfg: Config, key, K: int, condition):
                 "conditioner": cfg.conditioner}
         if cfg.conditioner == "transformer":
             args["nn_heads"] = cfg.nn_heads
+        args.update(_margin_order_args(cfg))
         margin = _build_flexible_margin(key=key, dim=K, condition=condition,
                                         causal_model_args=args)
     dist = Transformed(Uniform(-jnp.ones(K), jnp.ones(K)), margin)
@@ -889,6 +909,7 @@ def fit_flow(cfg: Config, data: dict, timings: dict | None = None):
         causal_model_args["conditioner"] = cfg.conditioner
         if cfg.conditioner == "transformer":
             causal_model_args["nn_heads"] = cfg.nn_heads
+    causal_model_args.update(_margin_order_args(cfg))
 
     key, subkey = jr.split(key)
     _t = time.monotonic()
@@ -1652,6 +1673,9 @@ def variant_tag(cfg: Config) -> str:
     # copula u-marginal penalty weight, when on (from 2026-09-28)
     if getattr(cfg, "copula_umarg_weight", 0.0):
         var.append(f"umw{cfg.copula_umarg_weight:g}")
+    # image margin with one fixed pixel order, no permutation between layers (from 2026-10-02)
+    if getattr(cfg, "margin_order", "shuffled") == "fixed":
+        var.append("mfix")
     return "_".join(var)
 
 
@@ -1824,6 +1848,8 @@ def _wandb_start(cfg: Config, run_id: str):
         return wandb.run, False
 
     extra = [t.strip() for t in (cfg.wandb_tags or "").split(",") if t.strip()]
+    if getattr(cfg, "margin_order", "shuffled") != "shuffled":
+        extra.append(f"margin_order_{cfg.margin_order}")
     cond = cfg.conditioner if cfg.arm == "flexible_continuous" else "n/a"
     run = wandb.init(
         entity=cfg.wandb_entity,
@@ -2025,7 +2051,7 @@ CELL_IDENTITY = ("preset", "arm", "model", "conditioner", "size", "radius", "dig
                  # a copula-stopped fit is not the joint-stopped fit of the same cell
                  "select_on", "seed_assign", "base_shift", "learning_rate", "batch_size", "ema_epochs",
                  "copula_lr_mult", "max_patience", "u_z_method",
-                 "copula_umarg_weight", "copula_umarg_n", "wall_cap_s")
+                 "copula_umarg_weight", "copula_umarg_n", "wall_cap_s", "margin_order")
 
 
 def completed_cells(runs_root: str = RUNS_ROOT) -> set[tuple]:

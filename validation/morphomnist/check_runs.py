@@ -179,6 +179,9 @@ def main():
         # ecdf: present iff the covariate ranks came from the empirical CDF (from 2026-09-28)
         if ("ecdf" in variants) != (c.get("u_z_method") == "ecdf"):
             bad(d, f"ecdf tag {'present' if 'ecdf' in variants else 'absent'} but config u_z_method={c.get('u_z_method')}")
+        # mfix: present iff the image margin kept one fixed pixel order (from 2026-10-02)
+        if ("mfix" in variants) != (c.get("margin_order", "shuffled") == "fixed"):
+            bad(d, f"mfix tag {'present' if 'mfix' in variants else 'absent'} but config margin_order={c.get('margin_order', 'shuffled')}")
         # copsel: present iff early stopping followed the held-out copula loss
         if ("copsel" in variants) != (c.get("select_on") == "copula"):
             bad(d, f"copsel tag {'present' if 'copsel' in variants else 'absent'} but config select_on={c.get('select_on')}")
