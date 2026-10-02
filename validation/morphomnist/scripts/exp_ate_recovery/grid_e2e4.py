@@ -82,28 +82,38 @@ SUB5K_ARMS = {  # code -> (arm, y_scaling, extra flags)
 }
 
 
-def sub5k_flow_cell(code, preset, k):
+def sub5k_flow_cell(code, preset, k, s=None):
+    s = k if s is None else s
     arm, ys, ex = SUB5K_ARMS[code]
-    args = PAPER + ["--n", "5000", "--preset", preset, "--seed-assign", str(k), "--seed-fit", str(k),
+    args = PAPER + ["--n", "5000", "--preset", preset, "--seed-assign", str(k), "--seed-fit", str(s),
                     "--arm", arm, "--y-scaling", ys, "--copula-nn-width", "16"] + list(ex) \
         + ["--wandb", "--wandb-group", SUB5K_GROUP, "--wandb-tags", f"sub5k,{code}"]
-    return {"kind": "flow", "label": f"{code}:{SHORT[preset]}:k{k}", "args": args, "threads": 1}
+    lab = f"{code}:{SHORT[preset]}:k{k}" + ("" if s == k else f":s{s}")
+    return {"kind": "flow", "label": lab, "args": args, "threads": 1}
 
 
-def sub5k_fr_cell(preset, k):
-    args = ["--all-digits", "--n", "5000", "--preset", preset, "--seed-assign", str(k), "--seed-fit", str(k),
+def sub5k_fr_cell(preset, k, s=None):
+    s = k if s is None else s
+    args = ["--all-digits", "--n", "5000", "--preset", preset, "--seed-assign", str(k), "--seed-fit", str(s),
             "--size", "8", "--seed-data", "101", "--num-iters", "5000", "--threads", "2",
             "--wandb", "--wandb-group", SUB5K_GROUP, "--wandb-tags", "sub5k,freng"]
-    return {"kind": "freng", "label": f"freng:{SHORT[preset]}:k{k}", "args": args, "threads": 2,
-            "glob": f"*_frengression_{SHORT[preset].lower()}_sa{k}_k64_s{k}_d0-9_*"}
+    lab = f"freng:{SHORT[preset]}:k{k}" + ("" if s == k else f":s{s}")
+    return {"kind": "freng", "label": lab, "args": args, "threads": 2,
+            "glob": f"*_frengression_{SHORT[preset].lower()}_sa{k}_k64_s{s}_d0-9_*"}
 
 
-def queue_sub5k():
-    """Dataset-major: all arms on both experiments for k = 1, then k = 2, then k = 3."""
+def queue_sub5k(n_fits: int = 1):
+    """Dataset-major: all arms on both experiments for k = 1, then k = 2, then k = 3 (fit seed k).
+    n_fits = 5 then adds fit seeds 1001-1004 (the collaborator's 5-fit design), seed-major."""
     q = []
     for k in (1, 2, 3):
         for preset in (E2, E4):
             q += [sub5k_flow_cell(code, preset, k) for code in SUB5K_ARMS] + [sub5k_fr_cell(preset, k)]
+    if n_fits == 5:
+        for s in (1001, 1002, 1003, 1004):
+            for k in (1, 2, 3):
+                for preset in (E2, E4):
+                    q += [sub5k_flow_cell(code, preset, k, s) for code in SUB5K_ARMS] + [sub5k_fr_cell(preset, k, s)]
     return q
 
 
@@ -134,7 +144,8 @@ def main():
     ap.add_argument("--threads", type=int, default=8)
     ap.add_argument("--logdir", default=os.path.expanduser("~/work/halo-runs/e2e4"))
     ap.add_argument("--wait-file", default=None)
-    ap.add_argument("--fits", type=int, default=3, choices=(3, 5))
+    ap.add_argument("--fits", type=int, default=None, choices=(1, 3, 5),
+                    help="fits per cell: e2e4 suite 3 (default) or 5; sub5k suite 1 (default) or 5")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--stagger-s", type=float, default=20.0)
     ap.add_argument("--suite", default="e2e4", choices=("e2e4", "sub5k"))
@@ -147,7 +158,9 @@ def main():
     for d in (FLOW_ROOT, FR_ROOT, a.logdir, os.path.join(a.logdir, "fits")):
         os.makedirs(d, exist_ok=True)
     fh = open(os.path.join(a.logdir, "launcher.log"), "a")
-    cells = queue_sub5k() if a.suite == "sub5k" else queue(a.fits)
+    if a.fits is None:
+        a.fits = 1 if a.suite == "sub5k" else 3
+    cells = queue_sub5k(a.fits) if a.suite == "sub5k" else queue(a.fits)
     for c in cells:
         if c["kind"] == "flow":
             c["prefix"] = G.name_prefix(c["args"])
