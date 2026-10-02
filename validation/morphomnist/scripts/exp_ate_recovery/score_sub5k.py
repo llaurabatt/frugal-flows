@@ -63,7 +63,8 @@ def collect():
                          "mae": float(np.abs(err).mean()), "naive_mae": float(np.abs(nerr).mean()),
                          "disc": m.get("signed_disc"), "rho": float(err @ nerr / (nerr @ nerr)),
                          "best": m.get("best_epoch", m.get("loss_min_iter")),
-                         "wall_min": (m.get("wall_time_s") or float("nan")) / 60})
+                         "wall_min": (m.get("wall_time_s") or float("nan")) / 60,
+                         "data_hash": m.get("data_hash") or c.get("data_hash")})
     return recs
 
 
@@ -76,6 +77,12 @@ def report(recs):
              "Uniform arms on raw Y, Gaussian arms on standardised Y (so U vs G includes the standardisation "
              "gain). One fit per dataset, fit seed = dataset. rho: 0 = adjusted, 1 = naive.", ""]
     means = {}
+    groups = {}
+    for r in recs:
+        groups.setdefault((r["exp"], r["k"]), set()).add(r["data_hash"])
+    bad = {g: h for g, h in groups.items() if len(h) > 1}
+    lines += [f"Data check: {len(groups)} (experiment, dataset) groups, every arm on identical data: "
+              + ("YES" if not bad else f"NO, mismatched: {bad}"), ""]
     for exp in ("E2", "E4"):
         R = [r for r in recs if r["exp"] == exp]
         if not R:
