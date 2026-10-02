@@ -18,6 +18,7 @@ import collections
 import glob
 import json
 import os
+import re
 import sys
 
 import numpy as np
@@ -40,8 +41,12 @@ def cells(root, model_file):
         need_model = os.environ.get("GRID_TEST_NO_MODEL") != "1"     # test switch: accept weightless runs
         if not (os.path.exists(d + "metrics.json") and (os.path.exists(d + model_file) or not need_model)):
             continue
-        c = json.load(open(d + "config.json"))["config"]
-        if root == "exp_ate_recovery" and (c.get("model") != "ff" or c.get("arm") != "flexible_continuous"):
+        rec = json.load(open(d + "config.json"))
+        c = rec["config"]
+        # the grid's flow fits only: no variant beyond the dataset and the paper settings (so test runs on
+        # the same datasets, e.g. mfix from 2026-10-02, are not averaged in)
+        if root == "exp_ate_recovery" and not re.fullmatch(
+                r"ff_e[1-6]_flexcont_sa\d+_lr0\.001_copw16_k64_s\d+_d0-9_[0-9a-f]{6}", rec.get("wandb_name", "")):
             continue
         out[(SHORT[c["preset"]], c["seed_assign"])].append(d)
     return out
