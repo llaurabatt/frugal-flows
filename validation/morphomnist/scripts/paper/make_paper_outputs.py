@@ -297,6 +297,7 @@ INF_GRID = {   # resolution -> (presets, assignment seeds), as run by the grid l
     16: (["exp1_rct_homogeneous", "exp2_confounded_homogeneous", "exp4_covariate_cate",
           "exp6_spatial_cate"], range(1, 6)),                                 # grid_16x16_alldigits.sh
 }
+READOUT_MC = 5000             # paired draws for every effect read-out (both frugal models)
 FIT_SEEDS = lambda k: [k, 1001, 1002, 1003, 1004]   # noqa: E731  (IFF; Frengression uses seed k)
 BASELINES = [("naive", "Naive difference"), ("ipw", "IPW"), ("ols", "OLS"), ("aipw", "AIPW"),
              ("oracle_ipw", "Oracle IPW")]
@@ -316,11 +317,6 @@ def _runs(root, size, pattern):
         if m:
             out[(m["p"], int(m["k"]), int(m["s"]))] = d
     return out
-
-
-def _tau(run_dir):
-    with np.load(os.path.join(run_dir, "arrays.npz")) as z:
-        return np.asarray(z["tau_hat"])
 
 
 def collect_inference(size):
@@ -364,9 +360,9 @@ def collect_inference(size):
                     for key, name in BASELINES:
                         ests[name] = np.asarray(z[f"tau_hat_{key}"]); score(ests[name], name)
             if fr_run is not None:
-                ests["Frengression"] = _tau(fr_run); score(ests["Frengression"], "Frengression")
+                ests["Frengression"] = DS.effect_map(fr_run, READOUT_MC); score(ests["Frengression"], "Frengression")
             if fits:
-                taus = [_tau(r) for r in fits]
+                taus = [DS.effect_map(r, READOUT_MC) for r in fits]
                 single = pd.DataFrame([{"mae": np.abs(t - ate).mean(), "disc": (t - ate)[disc].mean(),
                                         "ring": (t - ate)[ring].mean(), "far": (t - ate)[far].mean(),
                                         "slope": np.polyfit(imb, t - ate, 1)[0]} for t in taus]).mean()
@@ -490,8 +486,8 @@ def hparams_table(out):
          f"Adam, learning rate {g['lr']:g}, full batch"),
         ("Stopping", f"30 epochs without improvement of the held-out likelihood (10\\,\\% of units), "
                      f"at most {f['max_epochs']} epochs", f"{g['num_iters']} iterations"),
-        ("Effect read-out", f"{f['n_mc']} paired draws under $\\doo{{0}}$ and $\\doo{{1}}$",
-         f"{g['n_mc']} paired draws under $\\doo{{0}}$ and $\\doo{{1}}$"),
+        ("Effect read-out", f"{READOUT_MC} paired draws under $\\doo{{0}}$ and $\\doo{{1}}$",
+         f"{READOUT_MC} paired draws under $\\doo{{0}}$ and $\\doo{{1}}$"),
         ("Fits per dataset", "5 (fit seeds), effect maps averaged", "1"),
     ]
     lines = [r"\begin{table}[t]", r"\centering", r"\small", r"\begin{tabular}{p{0.2\linewidth}p{0.38\linewidth}p{0.32\linewidth}}",

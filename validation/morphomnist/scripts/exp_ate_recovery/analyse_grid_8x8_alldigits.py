@@ -80,10 +80,10 @@ for key in sorted(set(ff) | set(fr)):
     # finished before that decision are reported separately as "freng avgN"
     own = [r for r in fr.get(key, []) if json.load(open(r + "config.json"))["config"]["seed_fit"] == k]
     if own:
-        tau = np.asarray(DS.run_arrays(own[0], need=())["tau_hat"])
+        tau = DS.effect_map(own[0], 5000)        # 5000 paired draws, as the flow (re-read if needed)
         rows.append({"preset": preset, "dataset": k, "method": "freng (seed k)", **scores(tau, ate, imb, masks)})
     for name, runs in (("FF", ff.get(key, [])), ("freng", fr.get(key, []))):
-        taus = [np.asarray(DS.run_arrays(r, need=())["tau_hat"]) for r in runs]
+        taus = [DS.effect_map(r, 5000) for r in runs]   # flow runs use 5000; Frengression re-read at 5000
         if not taus:
             continue
         rows.append({"preset": preset, "dataset": k, "method": f"{name} avg{len(taus)}", **scores(np.mean(taus, 0), ate, imb, masks)})

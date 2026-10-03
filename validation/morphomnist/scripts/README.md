@@ -67,6 +67,7 @@ choices is in [`../docs/leftover_confounding/STATUS.md`](../docs/leftover_confou
 | `exp_ate_recovery/confirm_16x16.sh` | 16×16 digit 0, E1/E2 × 3 datasets × 2 seeds, plain vs weight averaging | `confirm_16x16` |
 | `exp_ate_recovery/size_variants_16x16.sh` | 16×16 digit 0, E2: larger copula / margin (worse or no help) | `size_variants_16x16` |
 | `exp_ate_recovery/alldigits_16x16.sh` | 16×16 **all digits**, E1/E2 × datasets 1–3, one fit each (flow keeps ~9 % of E2 confounding; frengression ~0) | `alldigits_16x16` |
+| `frengression/reread_mc5000.py` | re-reads every saved Frengression run's effect map at 5000 paired draws (runs before 2026-10-03 used 50000; the flow uses 5000) into `readout_mc5000.npz`; analyses read it through `dataset_store.effect_map`. Rerun after new 50000-draw runs finish | — |
 | `frengression/frengression_16x16.sh`, `frengression/frengression_alldigits_16x16.sh` | frengression on the same 16×16 datasets | `confirm_16x16_frengression`, `alldigits_16x16_frengression` |
 
 ## The leftover-confounding investigation (2026-09-27 → 30)

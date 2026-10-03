@@ -84,3 +84,23 @@ def run_arrays(run_dir: str, need=DROPPED_KEYS) -> RunArrays:
         for k in missing:
             out[k] = np.asarray(data[k])
     return out
+
+
+READOUT_FILE = "readout_mc{n}.npz"
+
+
+def effect_map(run_dir: str, n_mc: int = 5000) -> np.ndarray:
+    """A run's effect map read out with ``n_mc`` paired draws: its own tau_hat if the run used n_mc,
+    otherwise a re-read saved as readout_mc<n_mc>.npz (Frengression runs before 2026-10-03 used 50000
+    draws; exp_frengression_recovery.reread_effect_map writes the re-read). Raises FileNotFoundError
+    if neither exists."""
+    with open(os.path.join(run_dir, "config.json")) as f:
+        used = json.load(f)["config"].get("n_mc")
+    if used == n_mc:
+        with np.load(os.path.join(run_dir, "arrays.npz")) as z:
+            return np.asarray(z["tau_hat"])
+    path = os.path.join(run_dir, READOUT_FILE.format(n=int(n_mc)))
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"{path}: run used n_mc={used}; re-read it at {n_mc} draws first")
+    with np.load(path) as z:
+        return np.asarray(z["tau_hat"])

@@ -183,7 +183,9 @@ class Config:
     y_sd_floor: float = 0.25
     # ---- fit / read-out ----
     seed_fit: int = 34
-    n_mc: int = 50000
+    # paired draws for the effect read-out; 5000 from 2026-10-03, the same as the frugal flow's
+    # (runs before then used 50000 and are re-read at 5000 by reread_effect_map)
+    n_mc: int = 5000
     seed_mc: int = 0
     crn: bool = True
     device: str = "cpu"
@@ -869,6 +871,29 @@ def load_model(run_dir: str):
     model.load_state_dict(torch.load(path, map_location=cfg.device))
     model.eval()
     return model, inputs
+
+
+from dataset_store import READOUT_FILE, effect_map  # noqa: E402,F401  (effect_map: see dataset_store)
+
+
+def reread_effect_map(run_dir: str, n_mc: int) -> np.ndarray:
+    """Redraw a saved run's effect map with ``n_mc`` paired draws (same seed_mc, same pairing), from
+    its weights, and save it to readout_mc<n_mc>.npz in the run folder; config.json and arrays.npz
+    are left as they are. Returns tau_hat."""
+    model, inputs = load_model(run_dir)
+    with open(os.path.join(run_dir, "config.json"), encoding="utf-8") as f:
+        stored = json.load(f)["config"]
+    known = {fl.name for fl in fields(Config)}
+    cfg = Config(**{**{k: v for k, v in stored.items() if k in known}, "n_mc": int(n_mc)})
+    with torch.no_grad():
+        y0, y1, diag = sample_margins(cfg, model, inputs)
+    tau = y1 - y0
+    tau_hat = tau.mean(axis=0)
+    se = tau.std(axis=0, ddof=1) / np.sqrt(len(tau))
+    np.savez(os.path.join(run_dir, READOUT_FILE.format(n=int(n_mc))), tau_hat=tau_hat, n_mc=int(n_mc),
+             n_used=int(diag["mc_n_used"]), seed_mc=int(cfg.seed_mc), mc_se_mean=float(se.mean()),
+             mc_se_max=float(se.max()))
+    return tau_hat
 
 
 def replot(run_dir: str):
