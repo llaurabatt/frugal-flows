@@ -2310,7 +2310,11 @@ CELL_IDENTITY = ("preset", "arm", "model", "conditioner", "size", "radius", "dig
                  # a copula-stopped fit is not the joint-stopped fit of the same cell
                  "select_on", "seed_assign", "base_shift", "learning_rate", "batch_size", "ema_epochs",
                  "copula_lr_mult", "max_patience", "u_z_method",
-                 "copula_umarg_weight", "copula_umarg_n", "wall_cap_s", "margin_order")
+                 "copula_umarg_weight", "copula_umarg_n", "wall_cap_s", "margin_order",
+                 "y_scaling", "shift_init", "z_shuffle_seed", "shift_lr_mult")
+
+
+CELL_DEFAULTS = {f.name: f.default for f in fields(Config)}
 
 
 def completed_cells(runs_root: str = RUNS_ROOT) -> set[tuple]:
@@ -2327,7 +2331,9 @@ def completed_cells(runs_root: str = RUNS_ROOT) -> set[tuple]:
         try:
             with open(os.path.join(run_dir, "config.json")) as f:
                 c = json.load(f)["config"]
-            done.add(tuple(c.get(k) for k in CELL_IDENTITY))
+            # a field added after the run was made is missing from its config: it ran with the
+            # field's default, so compare against that (else every older run looks not done)
+            done.add(tuple(c.get(k, CELL_DEFAULTS[k]) for k in CELL_IDENTITY))
         except (OSError, KeyError, json.JSONDecodeError):
             continue  # an unreadable folder just means that cell re-runs
     return done
