@@ -281,6 +281,7 @@ def preview(out, parts):
     body = "\n\\clearpage\n".join(f"\\input{{_preview_{p}.tex}}" for p in parts)
     tex = ("\\documentclass{article}\n\\usepackage[paperwidth=8.5in,paperheight=11in,textwidth=6.75in,"
            "textheight=9.25in]{geometry}\n\\usepackage{amsmath,amssymb,booktabs,graphicx}\n"
+           "\\newcommand{\\doo}[1]{\\mathrm{do}(#1)}\n"
            "\\begin{document}\n" + body + "\n\\end{document}\n")
     open(os.path.join(out, "preview.tex"), "w").write(tex)
     r = subprocess.run(["pdflatex", "-interaction=nonstopmode", "preview.tex"], cwd=out,
@@ -288,7 +289,240 @@ def preview(out, parts):
     print("preview:", os.path.join(out, "preview.pdf") if r.returncode == 0 else "pdflatex failed:\n" + r.stdout[-2000:])
 
 
-TOPICS = {"setup": setup}
+# --------------------------------------------------------------------------------------------- #
+# topic: inference
+# --------------------------------------------------------------------------------------------- #
+INF_GRID = {   # resolution -> (presets, assignment seeds), as run by the grid launchers
+    8: (PRESETS, range(1, 11)),                                               # grid_8x8_alldigits_v2.sh
+    16: (["exp1_rct_homogeneous", "exp2_confounded_homogeneous", "exp4_covariate_cate",
+          "exp6_spatial_cate"], range(1, 6)),                                 # grid_16x16_alldigits.sh
+}
+FIT_SEEDS = lambda k: [k, 1001, 1002, 1003, 1004]   # noqa: E731  (IFF; Frengression uses seed k)
+BASELINES = [("naive", "Naive difference"), ("ipw", "IPW"), ("ols", "OLS"), ("aipw", "AIPW"),
+             ("oracle_ipw", "Oracle IPW")]
+METHOD_ORDER = [m for _, m in BASELINES] + ["Frengression", "IFF, single fit", "IFF, 5-fit average"]
+
+
+def _runs(root, size, pattern):
+    """{(preset short, assignment seed, fit seed): run dir} for finished runs with saved weights."""
+    import glob, json, re
+    rx = re.compile(pattern)
+    model = "model.eqx" if root == "exp_ate_recovery" else "model.pt"
+    out = {}
+    for d in glob.glob(os.path.join(MM, "runs", root, f"*_k{size ** 2}_s*_d0-9_*/")):
+        if not (os.path.exists(d + "metrics.json") and os.path.exists(d + model)):
+            continue
+        m = rx.fullmatch(json.load(open(d + "config.json")).get("wandb_name", ""))
+        if m:
+            out[(m["p"], int(m["k"]), int(m["s"]))] = d
+    return out
+
+
+def _tau(run_dir):
+    with np.load(os.path.join(run_dir, "arrays.npz")) as z:
+        return np.asarray(z["tau_hat"])
+
+
+def collect_inference(size):
+    """One row per (preset, dataset, method) with the scores; plus, per (preset, dataset), the
+    effect estimates of dataset SHOW_DATASET for the error-map figure, and completeness counts."""
+    import json
+    import pandas as pd
+    import dataset_store as DS
+    K = size ** 2
+    ff = _runs("exp_ate_recovery", size,
+               rf"ff_(?P<p>e[1-6])_flexcont_sa(?P<k>\d+)_lr0\.001_copw16_k{K}_s(?P<s>\d+)_d0-9_[0-9a-f]{{6}}")
+    fr = _runs("frengression", size, rf"frengression_(?P<p>e[1-6])_sa(?P<k>\d+)_k{K}_s(?P<s>\d+)_d0-9_[0-9a-f]{{6}}")
+    bidx = pd.read_csv(os.path.join(MM, "runs", "baselines", "index.csv"))
+    presets, seeds = INF_GRID[size]
+    D = disc_mask(size).ravel()
+    disc, ring, far = E.region_masks(size, E.Config(size=size).effective_radius)
+    rows, shown, status = [], {}, []
+    for p in presets:
+        ps = PRESETS.index(p); short = f"e{ps + 1}"
+        for k in seeds:
+            fits = [ff[(short, k, s)] for s in FIT_SEEDS(k) if (short, k, s) in ff]
+            fr_run = fr.get((short, k, k))
+            ref = (fits or [fr_run])[0] if (fits or fr_run) else None
+            status.append({"preset": LABEL[p], "dataset": k, "iff_fits": len(fits), "frengression": int(fr_run is not None)})
+            if ref is None:
+                continue
+            data = DS.run_arrays(ref, need=("Y",))
+            ate = np.asarray(data["ATE"]); T = np.asarray(data["X"])[:, 0].astype(bool); Y = np.asarray(data["Y"])
+            imb = Y[T].mean(0) - Y[~T].mean(0) - ate
+            did = json.load(open(os.path.join(ref, "config.json")))["dataset_id"]
+
+            def score(tau, method, extra=None):
+                err = np.asarray(tau) - ate
+                rows.append({"preset": LABEL[p], "dataset": k, "method": method, "mae": np.abs(err).mean(),
+                             "disc": err[disc].mean(), "ring": err[ring].mean(), "far": err[far].mean(),
+                             "slope": np.polyfit(imb, err, 1)[0], **(extra or {})})
+            ests = {}
+            b = bidx[(bidx.dataset_id == did) & (bidx.method == "ols")]
+            if len(b):
+                with np.load(os.path.join(MM, "runs", "baselines", b.iloc[0].run_id, "arrays.npz")) as z:
+                    for key, name in BASELINES:
+                        ests[name] = np.asarray(z[f"tau_hat_{key}"]); score(ests[name], name)
+            if fr_run is not None:
+                ests["Frengression"] = _tau(fr_run); score(ests["Frengression"], "Frengression")
+            if fits:
+                taus = [_tau(r) for r in fits]
+                single = pd.DataFrame([{"mae": np.abs(t - ate).mean(), "disc": (t - ate)[disc].mean(),
+                                        "ring": (t - ate)[ring].mean(), "far": (t - ate)[far].mean(),
+                                        "slope": np.polyfit(imb, t - ate, 1)[0]} for t in taus]).mean()
+                rows.append({"preset": LABEL[p], "dataset": k, "method": "IFF, single fit", **single.to_dict()})
+                ests["IFF, single fit"] = taus[0]
+                if len(taus) == 5:
+                    ests["IFF, 5-fit average"] = np.mean(taus, 0); score(ests["IFF, 5-fit average"], "IFF, 5-fit average")
+            if k == SHOW_DATASET:
+                shown[LABEL[p]] = {"ate": ate, **ests}
+    return pd.DataFrame(rows), shown, pd.DataFrame(status)
+
+
+def _cell(s, scale):
+    if len(s) == 0:
+        return "--"
+    se = s.std(ddof=1) / np.sqrt(len(s)) if len(s) > 1 else np.nan
+    return f"{s.mean() * scale:.1f}" + (f" ({se * scale:.1f})" if np.isfinite(se) else "")
+
+
+def inference_tables(out, size, x, status):
+    presets = [LABEL[p] for p in INF_GRID[size][0]]
+    ndata = len(INF_GRID[size][1])
+    # ---- error over all pixels: methods x presets ----
+    lines = [r"\begin{table}[t]", r"\centering", r"\small",
+             r"\begin{tabular}{l" + "c" * len(presets) + "}", r"\toprule",
+             "Method & " + " & ".join(presets) + r" \\", r"\midrule"]
+    for m in METHOD_ORDER:
+        if m == "Frengression":
+            lines.append(r"\midrule")
+        cells = [_cell(x[(x.preset == pr) & (x.method == m)].mae, 1e3) for pr in presets]
+        lines.append(f"{m} & " + " & ".join(cells) + r" \\")
+    counts = " & ".join(str(int(((status.preset == pr) & status.included).sum())) for pr in presets)
+    lines += [r"\midrule", f"Datasets & {counts} \\\\", r"\bottomrule", r"\end{tabular}",
+              f"\\caption{{Error of the estimated effect map at ${size}\\times{size}$: mean absolute difference "
+              r"between estimated and true ATE over the $K$ pixels, $\times 10^{3}$, averaged over datasets, "
+              r"with its standard error over datasets in brackets. IFF, single fit: the error of one fit, "
+              r"averaged over the five fits of each dataset; IFF, 5-fit average: the error of the average of the "
+              r"five fits' effect maps. The naive difference measures the size of the confounding; oracle IPW "
+              r"uses the true treatment probabilities. Last row: datasets (assignment draws) included, "
+              f"out of {ndata}.}}",
+              f"\\label{{tab:errors{size}}}", r"\end{table}"]
+    open(os.path.join(out, f"table_errors_{size}x{size}.tex"), "w").write("\n".join(lines) + "\n")
+    # ---- where the error sits: preset x method rows ----
+    meths = ["OLS", "AIPW", "Frengression", "IFF, 5-fit average"]
+    lines = [r"\begin{table}[t]", r"\centering", r"\small", r"\begin{tabular}{llcccc}", r"\toprule",
+             r"Preset & Method & Disc & Ring & Background & Leftover slope \\", r"\midrule"]
+    for i, pr in enumerate(presets):
+        for j, m in enumerate(meths):
+            s = x[(x.preset == pr) & (x.method == m)]
+            cells = [_cell(s[c], 1e3) for c in ("disc", "ring", "far")]
+            sl = "--" if pr == "E1" or len(s) == 0 else (f"{s.slope.mean():.3f}" + (f" ({s.slope.std(ddof=1) / np.sqrt(len(s)):.3f})" if len(s) > 1 else ""))
+            lines.append(f"{pr if j == 0 else ''} & {m} & " + " & ".join(cells) + f" & {sl} \\\\")
+        if i < len(presets) - 1:
+            lines.append(r"\midrule")
+    lines += [r"\bottomrule", r"\end{tabular}",
+              f"\\caption{{Where the error sits at ${size}\\times{size}$. Signed error (estimate minus true "
+              r"ATE, $\times 10^{3}$) averaged over the disc, over the ring of pixels bordering the disc, and over "
+              r"the remaining background, and the leftover slope: the slope of a least-squares fit of the error "
+              r"map on the confounding map (naive estimate minus true ATE) across pixels, which is 0 when no "
+              r"confounding is left in the estimate and 1 when none was removed; not defined for E1, which has "
+              r"no confounding. Means over datasets, standard errors in brackets. These quantities are averages of "
+              r"the signed error, so for IFF they are the same for a single fit (averaged over the five fits) as "
+              r"for the 5-fit average; only the absolute error in Table~\ref{tab:errors" + str(size) + r"} differs.}",
+              f"\\label{{tab:regions{size}}}", r"\end{table}"]
+    open(os.path.join(out, f"table_regions_{size}x{size}.tex"), "w").write("\n".join(lines) + "\n")
+    return [f"table_errors_{size}x{size}", f"table_regions_{size}x{size}"]
+
+
+def inference_error_figure(out, size, shown):
+    presets = [LABEL[p] for p in INF_GRID[size][0] if LABEL[p] in shown]
+    cols = ["OLS", "AIPW", "Frengression", "IFF, single fit", "IFF, 5-fit average"]
+    titles = ["OLS", "AIPW", "Frengression", "IFF\nsingle fit", "IFF\n5-fit average"]
+    D = disc_mask(size)
+    errs = {(pr, c): (shown[pr][c] - shown[pr]["ate"]) if c in shown[pr] else None for pr in presets for c in cols}
+    vmax = max(np.abs(e).max() for e in errs.values() if e is not None)
+    w = TEXTWIDTH * 0.62
+    fig, axes = plt.subplots(len(presets), len(cols), figsize=(w, w * len(presets) / len(cols) * 1.02),
+                             gridspec_kw=dict(wspace=0.06, hspace=0.06), squeeze=False)
+    h = None
+    for r, pr in enumerate(presets):
+        for j, c in enumerate(cols):
+            ax = axes[r, j]; bare(ax)
+            if errs[(pr, c)] is not None:
+                h = ax.imshow(errs[(pr, c)].reshape(size, size), cmap="RdBu_r", vmin=-vmax, vmax=vmax)
+                outline_disc(ax, D)
+            if r == 0:
+                ax.set_title(titles[j], fontsize=7, pad=3)
+            if j == 0:
+                ax.set_ylabel(pr, rotation=0, ha="right", va="center")
+    b0, b4 = axes[-1, 0].get_position(), axes[-1, -1].get_position()
+    cax = fig.add_axes([b0.x0, b0.y0 - 0.035 * 6 / len(presets), b4.x1 - b0.x0, 0.012 * 6 / len(presets)])
+    fig.colorbar(h, cax=cax, orientation="horizontal").ax.tick_params(labelsize=6)
+    name = f"fig_errors_{size}x{size}"
+    fig.savefig(os.path.join(out, name + ".pdf")); plt.close(fig)
+    cap = (f"Error maps at ${size}\\times{size}$: estimated minus true ATE, on the logit scale and one colour "
+           r"scale, for a single simulated dataset (one draw of the treatment assignment). IFF single fit: one "
+           r"of the five fits; IFF 5-fit average: the average of the five fits' effect maps. Black outline: "
+           r"the disc where the true ATE is non-zero.")
+    write_figure_tex(out, name, cap, f"fig:errors{size}", "0.62\\textwidth")
+    return name
+
+
+def hparams_table(out):
+    import glob, json
+    f = json.load(open(glob.glob(os.path.join(MM, "runs", "exp_ate_recovery",
+                                               "*_ff_e2_flexcont_sa1_lr0.001_copw16_k64_s1_d0-9_*/config.json"))[0]))["config"]
+    g = json.load(open(glob.glob(os.path.join(MM, "runs", "frengression",
+                                              "*_frengression_e2_sa1_k64_s1_d0-9_*/config.json"))[0]))["config"]
+    rows = [
+        ("Causal margin", f"{f['flow_layers']} autoregressive spline layers, width {f['nn_width']}, "
+                          f"{f['rqs_knots']} knots, permutation between layers",
+         f"generator, {g['num_layer']} layers of width {g['hidden_dim']}, noise dimension {g['noise_dim']}"),
+        ("Dependence component", f"copula flow, {f['copula_flow_layers']} layers, width {f['copula_nn_width']}, "
+                                 f"{f['copula_rqs_knots']} knots",
+         f"generator, {g['num_layer']} layers of width {g['hidden_dim']}"),
+        ("Covariates", "ranks: spline flow per continuous covariate, empirical CDF for the digit class",
+         "standardised"),
+        ("Outcome", "logit image as is", "standardised per pixel"),
+        ("Objective", "likelihood", "energy score"),
+        ("Optimiser", f"Adam, learning rate {f['learning_rate']:g}, batch {f['batch_size']}",
+         f"Adam, learning rate {g['lr']:g}, full batch"),
+        ("Stopping", f"30 epochs without improvement of the held-out likelihood (10\\,\\% of units), "
+                     f"at most {f['max_epochs']} epochs", f"{g['num_iters']} iterations"),
+        ("Effect read-out", f"{f['n_mc']} paired draws under $\\doo{{0}}$ and $\\doo{{1}}$",
+         f"{g['n_mc']} paired draws under $\\doo{{0}}$ and $\\doo{{1}}$"),
+        ("Fits per dataset", "5 (fit seeds), effect maps averaged", "1"),
+    ]
+    lines = [r"\begin{table}[t]", r"\centering", r"\small", r"\begin{tabular}{p{0.2\linewidth}p{0.38\linewidth}p{0.32\linewidth}}",
+             r"\toprule", r" & IFF & Frengression \\", r"\midrule"]
+    lines += [f"{a} & {b} & {c} \\\\" for a, b, c in rows]
+    lines += [r"\bottomrule", r"\end{tabular}",
+              r"\caption{Settings of the two frugal models, identical at $8\times8$ and $16\times16$ and across "
+              r"presets.}", r"\label{tab:hparams}", r"\end{table}"]
+    open(os.path.join(out, "table_hparams.tex"), "w").write("\n".join(lines) + "\n")
+    return "table_hparams"
+
+
+def inference(out):
+    parts = [hparams_table(out)]
+    for size in INF_GRID:
+        x, shown, status = collect_inference(size)
+        x.to_csv(os.path.join(out, f"scores_{size}x{size}.csv"), index=False)
+        status.to_csv(os.path.join(out, f"status_{size}x{size}.csv"), index=False)
+        # every method on the same datasets: those with all five IFF fits, the Frengression fit and baselines
+        ok = status[(status.iff_fits == 5) & (status.frengression == 1)][["preset", "dataset"]]
+        has_b = x[x.method == "OLS"][["preset", "dataset"]]
+        ok = ok.merge(has_b, on=["preset", "dataset"])
+        x = x.merge(ok, on=["preset", "dataset"])
+        status["included"] = status.set_index(["preset", "dataset"]).index.isin(ok.set_index(["preset", "dataset"]).index)
+        status.to_csv(os.path.join(out, f"status_{size}x{size}.csv"), index=False)
+        print(f"  {size}x{size}: datasets included per preset: {ok.groupby('preset').size().to_dict()}")
+        parts += inference_tables(out, size, x, status) + [inference_error_figure(out, size, shown)]
+    return parts
+
+
+TOPICS = {"setup": setup, "inference": inference}
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
