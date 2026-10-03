@@ -19,7 +19,6 @@ import jax.numpy as jnp
 import jax.random as jr
 import pytest
 from flowjax.bijections import Affine, Concatenate, Invert, Stack
-
 from frugal_flows.basic_flows import univariate_marginal_flow
 from frugal_flows.bijections import (
     MaskedAutoregressiveFirstUniform,

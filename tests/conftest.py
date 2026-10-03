@@ -10,12 +10,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import jax
 import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
 import pytest
-
 from frugal_flows.precision import apply_default_precision
 
 # float64 unless the caller asked otherwise via JAX_ENABLE_X64, so the suite can

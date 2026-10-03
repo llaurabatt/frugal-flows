@@ -19,7 +19,6 @@ from __future__ import annotations
 import jax.numpy as jnp
 import jax.random as jr
 import pytest
-
 from frugal_flows.causal_flows import train_frugal_flow_location_translation
 from frugal_flows.sample_outcome import logistic_outcome, sample_outcome
 

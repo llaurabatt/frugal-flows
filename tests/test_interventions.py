@@ -26,7 +26,6 @@ import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
 import pytest
-
 from frugal_flows.causal_flows import pretrain_causal_margin
 from frugal_flows.interventions import interventional_samples, tau_curve
 from frugal_flows.outcome_transforms import OutcomeTransform

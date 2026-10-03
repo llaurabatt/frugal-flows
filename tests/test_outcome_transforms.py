@@ -24,7 +24,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
 from frugal_flows.outcome_transforms import OutcomeTransform, as_outcome_transform
 
 # A strictly-positive, skewed outcome (all > 0.4, so floor=0.4 is also valid).

@@ -16,8 +16,8 @@ from jaxtyping import ArrayLike
 
 from frugal_flows.bijections import (
     LocCond,
-    MaskedAutoregressiveHeterogeneous,
     MaskedAutoregressiveFirstUniform,
+    MaskedAutoregressiveHeterogeneous,
     UnivariateNormalCDF,
 )
 

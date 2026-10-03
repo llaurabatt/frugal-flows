@@ -15,7 +15,6 @@ import jax.random as jr
 import paramax
 import pytest
 from flowjax.bijections import Affine, Concatenate, Invert, Stack
-
 from frugal_flows.bijections import LocCond
 from frugal_flows.causal_flows import (
     train_frugal_flow,

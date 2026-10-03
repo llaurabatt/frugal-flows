@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 import jax.random as jr
-
 from frugal_flows.train_quantile_propensity_score import (
     train_quantile_propensity_score,
 )

@@ -21,14 +21,13 @@ import jax.numpy as jnp
 import jax.random as jr
 import pytest
 from flowjax.bijections import Affine
-from paramax import unwrap
-
 from frugal_flows.bijections import (
+    MaskedAutoregressiveFirstUniform,
     MaskedAutoregressiveHeterogeneous,
     MaskedAutoregressiveMaskedCond,
     MaskedAutoregressiveTransformerCond,
-    MaskedAutoregressiveFirstUniform,
 )
+from paramax import unwrap
 
 NN = dict(nn_width=16, nn_depth=1)
 
