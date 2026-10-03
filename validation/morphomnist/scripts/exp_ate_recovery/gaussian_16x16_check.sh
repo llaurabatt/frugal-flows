@@ -5,8 +5,8 @@
 set -u
 cd "$(dirname "$0")/../.."
 export JAX_PLATFORMS=cpu PYTHONUNBUFFERED=1
-SLOTS=18; CORES=5; OFFSET=150
-LOCK=runs/exp_ate_recovery/_scripts/gaussian_sanity_slots; LOGD=runs/exp_ate_recovery/_scripts/gaussian_sanity_logs
+SLOTS=${SLOTS:-18}; CORES=5; OFFSET=${OFFSET:-150}
+LOCK=${LOCK:-runs/exp_ate_recovery/_scripts/gaussian_sanity_slots}; LOGD=runs/exp_ate_recovery/_scripts/gaussian_sanity_logs
 mkdir -p "$LOCK" "$LOGD"
 acquire() { while true; do for i in $(seq 0 $((SLOTS-1))); do mkdir "$LOCK/$i" 2>/dev/null && { echo $i; return; }; done; sleep 10; done; }
 echo "=== gaussian 16x16 start $(date -u +%FT%TZ) ==="
@@ -14,6 +14,7 @@ for preset in exp2_confounded_homogeneous exp4_covariate_cate; do
   p=e${preset:3:1}
   for fs in 1 1001 1002 1003 1004; do
     name="C16_${p}_G-flex-std_s${fs}"
+    if ls runs/exp_ate_recovery/*_ff_${p}_flexgauss_sa1_*_ystd_k256_s${fs}_d0-9_*/config.json >/dev/null 2>&1; then echo "skip  $name (started)"; continue; fi
     slot=$(acquire); a=$((OFFSET+slot*CORES)); b=$((a+CORES-1))
     echo "start $name slot $slot cores $a-$b $(date -u +%FT%TZ)"
     ( taskset -c $a-$b micromamba run -n frugal-flows python exp_ate_recovery.py --model ff --conditioner mlp \
