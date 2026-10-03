@@ -297,6 +297,7 @@ INF_GRID = {   # resolution -> (presets, assignment seeds), as run by the grid l
     16: (["exp1_rct_homogeneous", "exp2_confounded_homogeneous", "exp4_covariate_cate",
           "exp6_spatial_cate"], range(1, 6)),                                 # grid_16x16_alldigits.sh
 }
+ERROR_MAP_VMAX = {8: 0.15}    # colour-scale limit of the error-map figure per resolution
 READOUT_MC = 5000             # paired draws for every effect read-out (both frugal models)
 FIT_SEEDS = lambda k: [k, 1001, 1002, 1003, 1004]   # noqa: E731  (IFF; Frengression uses seed k)
 BASELINES = [("naive", "Naive difference"), ("ipw", "IPW"), ("ols", "OLS"), ("aipw", "AIPW"),
@@ -436,7 +437,8 @@ def inference_error_figure(out, size, shown):
     titles = ["OLS", "AIPW", "Frengression", "IFF\nsingle fit", "IFF\n5-fit average"]
     D = disc_mask(size)
     errs = {(pr, c): (shown[pr][c] - shown[pr]["ate"]) if c in shown[pr] else None for pr in presets for c in cols}
-    vmax = max(np.abs(e).max() for e in errs.values() if e is not None)
+    # colour scale: fixed where set (user, 2026-10-03: +-0.15 at 8x8), else the largest error shown
+    vmax = ERROR_MAP_VMAX.get(size) or max(np.abs(e).max() for e in errs.values() if e is not None)
     w = TEXTWIDTH * 0.62
     fig, axes = plt.subplots(len(presets), len(cols), figsize=(w, w * len(presets) / len(cols) * 1.02),
                              gridspec_kw=dict(wspace=0.06, hspace=0.06), squeeze=False)
