@@ -53,6 +53,12 @@ choices is in [`../docs/leftover_confounding/STATUS.md`](../docs/leftover_confou
 |---|---|---|
 | `exp_ate_recovery/margin_order_8x8.sh` | waits for the paper grid to end, then 30 fits with `--margin-order fixed` (tag `mfix`; one pixel order in every margin layer, no permutation): E1/E2 × datasets 1–3 × fit seeds {k, 1001–1004}, otherwise the grid's settings, so each pairs with a grid cell. Not the default | `margin_order_8x8` |
 
+## 16×16 grid (all ten digits, 2026-10-03)
+
+| script | what it does | output / wandb group |
+|---|---|---|
+| `exp_ate_recovery/grid_16x16_alldigits.sh` | E1, E2, E4, E6 × datasets 1–5; flow with fit seeds {k, 1001–1004} (method = 5-fit average), frengression one fit (seed k); paper defaults, `--size 16`, weights saved; slot pool `SLOTS` × 5 cores (default 48) | `runs/exp_ate_recovery/`, `runs/frengression/`; `grid_16x16_alldigits`, `grid_16x16_alldigits_frengression` |
+
 ## Resolution checks (16×16, 32×32)
 
 | script | what it does | wandb group |
