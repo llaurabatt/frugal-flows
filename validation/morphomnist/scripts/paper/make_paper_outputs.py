@@ -266,17 +266,10 @@ def setup(out):
     for p in PRESETS:
         lines.append(f"{LABEL[p]} & {assignment_text(gen[p])} & {effect_formula(gen[p])} \\\\")
     lines += [r"\bottomrule", r"\end{tabular}",
-              r"\caption{The six MorphoMNIST presets. Each unit $i$ is an MNIST training image "
-              r"($n = 60\,000$, all ten digits), average-pooled to $8\times8$ or $16\times16$ "
-              r"($K = 64$ or $256$ pixels), dequantised and mapped to logits. The treated image is "
-              r"$Y_i(1) = Y_i(0) + \tau_i$, with $m$ a disc at the image centre (value 1 inside, 0 "
-              r"outside; radius 2 pixels at $8\times8$, 4 at $16\times16$). $\tilde t_i$ is the "
-              r"standardised thickness. $h_i$, $b_i$ are the thickness and brightness ranks and $g_{ik}$ "
-              r"the rank of $Y_{ik}(0)$ among all units, each rescaled to $[-1, 1]$ and centred to sample "
-              r"mean exactly zero; $(hb)_i$ is their centred product and $\psi_k$ a top-to-bottom gradient "
-              r"over the disc. Because every modulating term has mean zero, the true ATE equals $m$ exactly "
-              r"in every preset. Brightness is included in the covariates $Z_i$ in E4 and E6, where the "
-              r"effect depends on it.}",
+              r"\caption{The six presets. Second column: the probability of treatment "
+              r"(Section~\ref{app:setup-assignment}), with $\tilde t_i$ the standardised thickness. Third "
+              r"column: the individual effect at pixel $k$, with $m$ the disc and the modulators $h_i$, "
+              r"$b_i$, $(hb)_i$, $g_{ik}$ and $\psi_k$ defined in Section~\ref{app:setup-effect}.}",
               r"\label{tab:presets}", r"\end{table}"]
     with open(os.path.join(out, "table_presets.tex"), "w") as f:
         f.write("\n".join(lines) + "\n")
