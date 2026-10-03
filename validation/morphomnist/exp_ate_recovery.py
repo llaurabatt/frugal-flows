@@ -1852,6 +1852,12 @@ def variant_tag(cfg: Config) -> str:
         var.append(f"mw{cfg.nn_width}")
     if cfg.rqs_knots != 8:
         var.append(f"mkn{cfg.rqs_knots}")
+    # margin depth / flow layers, when not the defaults 1 / 4 (from 2026-10-03, gausshp sweep; every
+    # earlier run used 1 / 4, so no existing name changes)
+    if cfg.nn_depth != 1:
+        var.append(f"md{cfg.nn_depth}")
+    if cfg.flow_layers != 4:
+        var.append(f"fl{cfg.flow_layers}")
     # stopping: epoch cap when not 1000, early-stopping patience when not 30 (from 2026-09-27;
     # every run with the fixed layers before then used 1000 / 30)
     if cfg.max_epochs != 1000:

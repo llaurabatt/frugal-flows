@@ -140,6 +140,9 @@ GAUSSHP = {  # name -> flag overrides on top of the paper flags (lr 1e-3, patien
     "kn16": ["--rqs-knots", "16"],
     "copw50": ["--copula-nn-width", "50"],
     "batch256": ["--batch-size", "256"],
+    "fl2": ["--flow-layers", "2"],
+    "fl8": ["--flow-layers", "8"],
+    "md2": ["--nn-depth", "2"],
 }
 
 
