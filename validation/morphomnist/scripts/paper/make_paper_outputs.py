@@ -301,7 +301,7 @@ READOUT_MC = 5000             # paired draws for every effect read-out (both fru
 FIT_SEEDS = lambda k: [k, 1001, 1002, 1003, 1004]   # noqa: E731  (IFF; Frengression uses seed k)
 BASELINES = [("naive", "Naive difference"), ("ipw", "IPW"), ("ols", "OLS"), ("aipw", "AIPW"),
              ("oracle_ipw", "Oracle IPW")]
-METHOD_ORDER = [m for _, m in BASELINES] + ["Frengression", "IFF, single fit", "IFF, 5-fit average"]
+METHOD_ORDER = [m for k, m in BASELINES if k != "oracle_ipw"] + ["Frengression", "IFF, single fit", "IFF, 5-fit average"]
 
 
 def _runs(root, size, pattern):
@@ -400,8 +400,7 @@ def inference_tables(out, size, x, status):
               r"between estimated and true ATE over the $K$ pixels, $\times 10^{3}$, averaged over datasets, "
               r"with its standard error over datasets in brackets. IFF, single fit: the error of one fit, "
               r"averaged over the five fits of each dataset; IFF, 5-fit average: the error of the average of the "
-              r"five fits' effect maps. The naive difference measures the size of the confounding; oracle IPW "
-              r"uses the true treatment probabilities. Last row: datasets (assignment draws) included, "
+              r"five fits' effect maps. The naive difference measures the size of the confounding. Last row: datasets (assignment draws) included, "
               f"out of {ndata}.}}",
               f"\\label{{tab:errors{size}}}", r"\end{table}"]
     open(os.path.join(out, f"table_errors_{size}x{size}.tex"), "w").write("\n".join(lines) + "\n")
@@ -502,7 +501,7 @@ def hparams_table(out):
 
 def runtime_table(out):
     """Wall-clock time per fit (metrics.json total_s: data, both IFF stages or Frengression training,
-    and the effect read-out) for the grid runs, and per dataset for all five baselines together."""
+    and the effect read-out) for the grid runs, and per dataset for all baselines together."""
     import glob, json, re
     rows = []
     for size in INF_GRID:
@@ -526,7 +525,7 @@ def runtime_table(out):
             if os.path.exists(d + "metrics.json"):
                 b.append(json.load(open(d + "metrics.json"))["wall_s"])
         if b:
-            rows.append(("All five baselines", size, 1, f"{np.median(b):.0f} s ({min(b):.0f}--{max(b):.0f})",
+            rows.append(("Baselines", size, 1, f"{np.median(b):.0f} s ({min(b):.0f}--{max(b):.0f})",
                          "$<0.1$", len(b)))
     lines = [r"\begin{table}[t]", r"\centering", r"\small", r"\begin{tabular}{llcccc}", r"\toprule",
              r"Method & Resolution & Fits per dataset & Time per fit & Core-hours per dataset & Fits timed \\",
@@ -538,7 +537,7 @@ def runtime_table(out):
               r"the effect read-out, median over the fits timed, with the range in brackets; each IFF and "
               r"Frengression fit ran on five CPU cores. Core-hours per "
               r"dataset: fits per dataset $\times$ 5 cores $\times$ the median time per fit. Baselines: wall-clock "
-              r"time for all five estimators on one dataset, single process.}",
+              r"time for all baseline estimators on one dataset, single process.}",
               r"\label{tab:runtime}", r"\end{table}"]
     open(os.path.join(out, "table_runtime.tex"), "w").write("\n".join(lines) + "\n")
     return "table_runtime"
