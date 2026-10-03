@@ -197,7 +197,7 @@ def assignment_figure(out, data):
     for ax in axes:
         ax.spines[["top", "right"]].set_visible(False)
     fig.savefig(os.path.join(out, "fig_assignment.pdf")); plt.close(fig)
-    cap = (r"Treatment assignment. (a, b) Density of thickness $t_i$ (MorphoMNIST's measured thickness, "
+    cap = (r"Treatment assignment. (a, b) Density of thickness $t_i$ (MorphoMNIST's thickness attribute, "
            r"rescaled to $[-1, 1]$) among untreated and treated units, kernel density estimates over the "
            f"$n = 60\\,000$ units of dataset {SHOW_DATASET} (assignment seed {SHOW_DATASET}); dashed lines "
            r"are the group means. E2--E6 share the same assignment (same rule, same seed), so one panel "
