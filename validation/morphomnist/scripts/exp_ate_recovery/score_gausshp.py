@@ -44,22 +44,32 @@ def report(recs):
     for r in recs:
         by[r["name"]][(r["exp"], r["k"])] = r
     base = by.get("base", {})
-    pairs = sorted({(r["exp"], r["k"]) for r in recs})
+    exps = sorted({r["exp"] for r in recs})
     lines = ["# Gaussian spline hyperparameter sweep (n = 5000, tuning datasets)", "",
-             "Ratio = geometric mean of (setting / base) ATE MAE over paired (experiment, dataset); < 1 is better.", "",
-             "| setting | " + " | ".join(f"{e} k{k}" for e, k in pairs) + " | mean E2 | mean E4 | ratio vs base | wins | best epoch | wall min |",
-             "|---|" + "---|" * (len(pairs) + 6)]
+             "Per experiment: mean ATE MAE, then geometric-mean ratio vs base over paired datasets and wins "
+             "(< 1 is better). Overall = geometric mean over all pairs.", "",
+             "| setting | " + " | ".join(f"{e} mean | {e} ratio (wins)" for e in exps)
+             + " | overall ratio | t | best epoch | wall min |",
+             "|---|" + "---|---|" * len(exps) + "---|---|---|---|"]
     rows = []
     for name, d in by.items():
         both = [p for p in d if p in base]
-        ratio = float(np.exp(np.mean([np.log(d[p]["mae"] / base[p]["mae"]) for p in both]))) if both else float("nan")
-        wins = sum(d[p]["mae"] < base[p]["mae"] for p in both)
-        rows.append((ratio if name != "base" else 1.0, name, d, both, wins))
-    for ratio, name, d, both, wins in sorted(rows, key=lambda t: t[0]):
-        cells = " | ".join(f"{d[p]['mae']:.4f}" if p in d else "…" for p in pairs)
-        m = lambda e: np.mean([d[p]["mae"] for p in d if p[0] == e]) if any(p[0] == e for p in d) else float("nan")
-        lines.append(f"| {name} | {cells} | {m('E2'):.4f} | {m('E4'):.4f} | {ratio:.2f} | "
-                     f"{'—' if name == 'base' else f'{wins}/{len(both)}'} | "
+        lr = np.array([np.log(d[p]["mae"] / base[p]["mae"]) for p in both])
+        ratio = float(np.exp(lr.mean())) if len(lr) else float("nan")
+        t = float(lr.mean() / (lr.std(ddof=1) / np.sqrt(len(lr)))) if len(lr) > 2 and lr.std() > 0 else float("nan")
+        rows.append((ratio, name, d, t))
+    for ratio, name, d, t in sorted(rows, key=lambda r: (r[1] != "base", r[0])):
+        cells = []
+        for e in exps:
+            pe = [p for p in d if p[0] == e]
+            pb = [p for p in pe if p in base]
+            m = np.mean([d[p]["mae"] for p in pe]) if pe else float("nan")
+            if name == "base" or not pb:
+                cells.append(f"{m:.4f} | —")
+            else:
+                r = np.exp(np.mean([np.log(d[p]["mae"] / base[p]["mae"]) for p in pb]))
+                cells.append(f"{m:.4f} | {r:.2f} ({sum(d[p]['mae'] < base[p]['mae'] for p in pb)}/{len(pb)})")
+        lines.append(f"| {name} | " + " | ".join(cells) + f" | {ratio:.3f} | {t:.2f} | "
                      f"{np.median([d[p]['best'] for p in d]):.0f} | {np.median([d[p]['wall_min'] for p in d]):.1f} |")
     return "\n".join(lines)
 
