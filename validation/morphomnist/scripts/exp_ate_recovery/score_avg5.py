@@ -37,9 +37,12 @@ def main():
         if r["code"] == "freng":
             frs.setdefault((r["exp"], r["k"]), []).append(tau(os.path.join(S.FR_ROOT, r["run"])))
     pat = re.compile(r"END\s+hp-base:(E\d):k(\d+):s(\d+) rc=0 done (\S+)")
-    for line in open(os.path.join(LOG, "launcher.log")):
+    seen = set()
+    for lf in sorted(glob.glob(os.path.expanduser("~/work/halo-runs/avg5_gauss*/launcher.log"))):
+      for line in open(lf):
         m = pat.search(line)
-        if m:
+        if m and m[4] not in seen:
+            seen.add(m[4])
             flows.setdefault((m[1], int(m[2])), []).append(tau(os.path.join(MM, "runs", "gausshp", m[4])))
     for d in glob.glob(os.path.join(S.FR_ROOT, "*_frengression_*_s100[1-4]_*")):  # extra frengression seeds
         if os.path.exists(os.path.join(d, "arrays.npz")):
@@ -58,7 +61,7 @@ def main():
             fr = frs.get((exp, k), [])
             rows.append({"k": k, "f_single": np.mean([mae(t) for t in f]), "f_avg": mae(np.mean(f, 0)),
                          "fr_single": mae(fr[0]) if fr else np.nan,
-                         "fr_avg": mae(np.mean(fr, 0)) if len(fr) > 1 else np.nan, "n_fr": len(fr)})
+                         "fr_avg": mae(np.mean(fr, 0)) if len(fr) == 5 else np.nan, "n_fr": len(fr)})
         g = lambda key: np.array([r[key] for r in rows])
         lines += [f"## {exp} ({len(ks)} datasets with 5 flow fits)", "",
                   "| k | flow single (mean of 5) | flow avg5 | frengression single | frengression avgN | N fr |",

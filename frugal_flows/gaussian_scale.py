@@ -40,6 +40,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jr
+import numpy as np
 import optax
 import paramax
 from flowjax.bijections import (
@@ -235,6 +236,21 @@ def shift_vector(flow):
 def outcome_scores(flow, y: ArrayLike, condition: ArrayLike):
     """g_Y = margin^{-1}(y; T), row-wise: N(0, I) at the optimum."""
     return jax.vmap(margin_of(flow).inverse)(jnp.asarray(y), jnp.asarray(condition))
+
+
+def counterfactual_gaussian(flow, y: ArrayLike, t: ArrayLike, t_new: ArrayLike):
+    """Counterfactual images for observed units (2026-10-03): the Gaussian-scale counterpart of
+    ``interventions.counterfactual_flexible``. Abduction ``g_Y = margin^{-1}(y; t)``, action and
+    prediction ``y' = margin(g_Y; t_new)`` (rank-preserving margin transport; the copula never sees
+    T, so it plays no part). ``y`` (n, K) on the fitting scale; ``t``, ``t_new`` (n,) or
+    (n, cond_dim). Returns (n, K) on the fitting scale (apply the outcome transform's inverse for
+    standardised Y)."""
+    y = jnp.asarray(y)
+    c_old = jnp.asarray(t, dtype=y.dtype).reshape(len(y), -1)
+    c_new = jnp.asarray(t_new, dtype=y.dtype).reshape(len(y), -1)
+    m = margin_of(flow)
+    g = jax.vmap(m.inverse)(y, c_old)
+    return np.asarray(jax.vmap(m.transform)(g, c_new))
 
 
 def copula_residuals(flow, g_y: ArrayLike, g_z: ArrayLike):
