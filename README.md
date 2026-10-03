@@ -39,6 +39,34 @@ The dependencies of ```frugal-flows``` can be found in the ```pyproject.toml``` 
 
 
 
+# Multivariate outcomes: the Gaussian-scale frugal flow
+
+For multivariate outcomes (images, many columns), use the Gaussian-scale frugal flow (`frugal_flows.gaussian_scale`). It is the frugal flow written on a standard-normal scale:
+- a causal margin p(y | do(t)), a spline flow conditioned on the treatment;
+- a copula flow for the covariates given the outcome.
+
+```python
+import jax.random as jr
+import frugal_flows as ff
+
+# Y: (n, K) outcomes, Z: (n, d) covariates, T: (n,) binary treatment
+flow, ot, info = ff.fit_gaussian_frugal_flow(jr.key(0), Y, Z, T)          # standardises Y, ranks Z, fits
+
+s = ff.interventional_samples(jr.key(1), flow, 1, 5000, outcome_transform=ot, dim_y=Y.shape[1])
+ate = s["ate"]                                                          # (K,) on the original Y scale
+
+y_cf = ot.inverse(ff.counterfactual_gaussian(flow, ot.forward(Y), T, 1 - T))   # unit-level counterfactuals
+
+ff.save_gaussian_flow("my_fit", flow, info["build_kwargs"], outcome_transform=ot)
+flow, ot = ff.load_gaussian_flow("my_fit")
+```
+
+- **The model, its settings and its known limitation:** [docs/gaussian_scale/README.md](./docs/gaussian_scale/README.md). The limitation is a treatment-blind copula.
+- **Pretrained example fits** of every model on one MorphoMNIST 8×8 dataset: [examples/morphomnist_8x8_n5000](./examples/morphomnist_8x8_n5000/).
+- **The MorphoMNIST experiments:** [validation/morphomnist/README.md](./validation/morphomnist/README.md).
+
+`pip install -e .` installs the core package. `pip install -e ".[validation,fid]"` adds what the MorphoMNIST runners and the realism (FID) scorer need. Python 3.11 or later; flowjax is pinned to 19.1.0.
+
 # General Structure
 * The main bulk of the frugal flow implementation can be found in [frugal_flows](./frugal_flows/).
 * The script containing functions to generate the simulated data for the inference experiments can be found [here](./data/template_causl_simulations.py).

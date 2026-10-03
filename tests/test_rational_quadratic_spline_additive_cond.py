@@ -22,9 +22,8 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 import pytest
-from paramax import unwrap
-
 from frugal_flows.bijections import RationalQuadraticSplineAdditiveCond
+from paramax import unwrap
 
 
 def _spline(ate=0.0, *, perturb=True, seed=1):

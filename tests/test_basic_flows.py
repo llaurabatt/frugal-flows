@@ -12,13 +12,12 @@ import jax.numpy as jnp
 import jax.random as jr
 import pytest
 from flowjax.distributions import Uniform
-from paramax import unwrap
-
 from frugal_flows.basic_flows import (
     masked_autoregressive_flow_first_uniform,
     masked_independent_flow,
     univariate_marginal_flow,
 )
+from paramax import unwrap
 
 DIM = 4
 SMALL = dict(flow_layers=2, nn_width=8, nn_depth=1)

@@ -1,12 +1,17 @@
 import sys
+
 import jax
 import numpy as np
 import pandas as pd
+
 from frugal_flows.causal_flows import get_independent_quantiles, train_frugal_flow
 from frugal_flows.interventions import interventional_samples
 from frugal_flows.outcome_transforms import as_outcome_transform
+from frugal_flows.sample_marginals import (
+    from_quantiles_to_marginal_cont,
+    from_quantiles_to_marginal_discr,
+)
 from frugal_flows.sample_outcome import sample_outcome
-from frugal_flows.sample_marginals import from_quantiles_to_marginal_cont, from_quantiles_to_marginal_discr
 from frugal_flows.train_quantile_propensity_score import train_quantile_propensity_score
 
 sys.path.append("../")  # go to parent dir
@@ -14,8 +19,9 @@ sys.path.append("../")  # go to parent dir
 # import data.template_causl_simulations as causl_py
 
 
-import jax.random as jr
 import jax.numpy as jnp
+import jax.random as jr
+
 from frugal_flows.precision import apply_default_precision
 
 # float64 unless the caller asked otherwise via JAX_ENABLE_X64 or set_x64();

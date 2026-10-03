@@ -6,8 +6,6 @@ import jax.random as jr
 import numpy as np
 import paramax
 from flowjax.train.losses import MaximumLikelihoodLoss
-from paramax import NonTrainable
-
 from frugal_flows.reversed_copula import (
     COPULA_BLOCK,
     MARGIN_BLOCK,
@@ -18,6 +16,7 @@ from frugal_flows.reversed_copula import (
     interventional_samples_reversed,
     train_frugal_flow_reversed,
 )
+from paramax import NonTrainable
 
 K, D = 3, 1
 ARGS = {"RQS_knots": 4, "nn_depth": 1, "nn_width": 8, "flow_layers": 2, "conditioner": "mlp"}

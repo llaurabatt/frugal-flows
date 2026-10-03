@@ -1,9 +1,9 @@
 [project]
 name = "frugal-flows"
-version = "0.1.0"
-description = "Deep copula frugal simulations in JAX."
+version = "0.2.0"
+description = "Frugal flows: causal generative models with a directly parametrised causal margin, in JAX."
 readme = "README.md"
-requires-python ="~=3.9"
+requires-python = ">=3.11"
 authors = [
   {name = "Laura Battaglia", email = "battaglia@stats.ox.ac.uk"},
   {name = "Daniel de Vassimon Manela", email = "manela@stats.ox.ac.uk"},
@@ -18,7 +18,17 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Mathematics",
 ]
 urls = {repository = "https://github.com/llaurabat91/deep-copula-frugal" }
-dependencies = ["jax", "flowjax", "equinox>=0.10", "tqdm", "optax"]
+# flowjax is pinned: the package imports private flowjax symbols (_StandardUniform,
+# _add_default_permute) and the spline parameter count changed between releases.
+dependencies = ["jax>=0.7", "flowjax==19.1.0", "equinox>=0.11", "paramax>=0.0.5", "jaxtyping",
+                "optax", "numpy", "scipy", "pandas", "tqdm"]
+
+[project.optional-dependencies]
+# the MorphoMNIST validation runners, baselines and plots
+validation = ["torch", "torchvision", "matplotlib", "scikit-learn", "wandb"]
+# benchmark-style realism (FID) of generated images
+fid = ["torchmetrics", "torch-fidelity"]
+test = ["pytest"]
 
 
 [build-system]
@@ -30,8 +40,9 @@ include = ["frugal_flows*"]
 exclude = ["tests", "tests.*", "examples"]
 
 [tool.ruff]
+src = []
+
+[tool.ruff.lint]
 fixable = ["I001", "F401"]
 ignore = ["E402", "E501",  "E721", "E731", "E741", "F722", "F811"]
-ignore-init-module-imports = true
 select = ["E", "F", "I001"]
-src = []

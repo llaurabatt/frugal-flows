@@ -2,7 +2,6 @@
 import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
-
 from frugal_flows.causal_flows import train_frugal_flow
 from frugal_flows.interventions import counterfactual_flexible
 

@@ -2,9 +2,12 @@
 
 
 frugal_flows/
-├── __init__.py                          # exports masked_independent_flow only
+├── __init__.py                          # public API: train_frugal_flow, fit_gaussian_frugal_flow, interventional_samples, counterfactuals, save/load
 ├── benchmarking.py                      # FrugalFlowModel: end-to-end pipeline class
-├── causal_flows.py                      # all flow training functions
+├── causal_flows.py                      # all flow training functions (train_frugal_flow dispatches every arm)
+├── gaussian_scale.py                    # Gaussian-scale frugal flow for multivariate Y (fit, counterfactuals, save/load)
+├── interventions.py                     # interventional_samples, counterfactual_flexible
+├── outcome_transforms.py                # OutcomeTransform (per-column Y scaling)
 ├── basic_flows.py                       # flow architecture constructors
 ├── sample_outcome.py                    # outcome sampling from a trained flow
 ├── sample_marginals.py                  # quantile → original-scale inversion

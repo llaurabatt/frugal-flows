@@ -13,9 +13,8 @@ import jax.numpy as jnp
 import jax.random as jr
 import pytest
 from flowjax.bijections import Affine
-from paramax import unwrap
-
 from frugal_flows.bijections import MaskedIndependent
+from paramax import unwrap
 
 
 def _make(key, *, dim=3, cond_dim=None):

@@ -8,8 +8,6 @@ import jax.random as jr
 import numpy as np
 import paramax
 from flowjax.train.losses import MaximumLikelihoodLoss
-from paramax import NonTrainable
-
 from frugal_flows.causal_flows import (
     CopulaUMarginalPenaltyLoss,
     _energy_distance,
@@ -17,6 +15,7 @@ from frugal_flows.causal_flows import (
     copula_u_marginal_samples,
     train_frugal_flow,
 )
+from paramax import NonTrainable
 
 K = 3
 

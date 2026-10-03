@@ -6,6 +6,7 @@ import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
 import optax
+import paramax
 from flowjax.bijections import (
     Affine,
     Concatenate,
@@ -17,9 +18,8 @@ from flowjax.bijections import (
 from flowjax.bijections.utils import Identity
 from flowjax.distributions import Transformed, Uniform, _StandardUniform
 from flowjax.flows import masked_autoregressive_flow
-from jaxtyping import ArrayLike
-import paramax
 from flowjax.train.losses import MaximumLikelihoodLoss
+from jaxtyping import ArrayLike
 from paramax import NonTrainable
 
 from frugal_flows.basic_flows import (
@@ -906,12 +906,49 @@ def train_frugal_flow(
     copula_umarg_n: int = 128,  # draws per step for that penalty (flexible_continuous only)
     rank_penalty_weight: float = 0.0,  # pooled-rank uniformity penalty (flexible_reversed only)
 ):
+    """Fit a frugal flow: a causal margin for ``y`` given the treatment plus a copula flow for the
+    covariates' dependence on the outcome.
+
+    Args:
+        key: JAX PRNG key.
+        y: (n, K) outcomes (K = 1 for a scalar outcome).
+        u_z: (n, d) covariate ranks in (0, 1) (for example ``frugal_flows.ecdf_ranks(Z)``).
+        condition: (n, cond_dim) treatment. Required by every arm except ``"gaussian"`` without a
+            treatment.
+        causal_model: the margin family.
+
+            * ``"gaussian"``, ``"logistic"``, ``"location_translation"``, ...: the scalar-outcome
+              arms of the NeurIPS 2024 paper (uniform base, ``tanh`` link).
+            * ``"flexible_continuous"``: a flexible spline margin on a uniform base; any effect.
+            * ``"flexible_continuous_gaussian"``: the same model class on a standard-normal base
+              (``frugal_flows.gaussian_scale``); the recommended arm for multivariate Y, fitted to
+              standardised Y. ``fit_gaussian_frugal_flow`` wraps the preprocessing.
+            * ``"location_translation_gaussian"``: a per-column location shift on a normal base.
+
+        causal_model_args: margin settings. For the two Gaussian-scale arms: ``RQS_knots``,
+            ``nn_depth``, ``nn_width``, ``flow_layers`` (missing keys default to
+            ``gaussian_scale.MARGIN_DEFAULTS``), optional ``interval`` and, for the shift margin,
+            ``ate`` (its starting value). Other arms: see their builders in this module.
+        RQS_knots, nn_depth, nn_width, flow_layers: size of the copula flow.
+        learning_rate, max_epochs, max_patience, batch_size, optimizer, show_progress: training
+            (Adam, early stopping on a held-out split, best validation checkpoint returned).
+        mask_condition: uniform arms only (ignored by the Gaussian-scale arms).
+        u_z_hetero, pretrained_margin, fit_kwargs, copula_lr_mult, copula_umarg_weight,
+            copula_umarg_n, rank_penalty_weight: arm-specific options, see the comments above.
+
+    Returns:
+        ``(flow, losses)``: the fitted flowjax distribution (outcome in the first K output
+        columns) and the train/validation loss curves.
+    """
     valid_causal_models = [
         "gaussian",
         "flexible_continuous",
         "flexible_discrete_output",
         "location_translation",
         "flexible_reversed",  # reversed copula, frugal_flows.reversed_copula (2026-09-30)
+        # Gaussian-scale frugal flow, frugal_flows.gaussian_scale
+        "flexible_continuous_gaussian",
+        "location_translation_gaussian",
     ]
 
     if (causal_model != "gaussian") & (u_z_hetero is not None):
@@ -1021,6 +1058,17 @@ def train_frugal_flow(
             condition=condition,
             mask_condition=mask_condition,
             causal_model_args=causal_model_args,
+        )
+
+    elif causal_model in ("flexible_continuous_gaussian", "location_translation_gaussian"):
+        from frugal_flows import gaussian_scale
+
+        frugal_flow, losses = gaussian_scale.train_frugal_flow_gaussian(
+            key=key, y=y, u_z=u_z, condition=condition, margin=gaussian_scale.CAUSAL_MODELS[causal_model],
+            RQS_knots=RQS_knots, nn_depth=nn_depth, nn_width=nn_width, flow_layers=flow_layers,
+            learning_rate=learning_rate, max_epochs=max_epochs, max_patience=max_patience,
+            batch_size=batch_size, causal_model_args=causal_model_args, show_progress=show_progress,
+            fit_kwargs=fit_kwargs, optimizer=optimizer,
         )
 
     else:

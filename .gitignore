@@ -23,3 +23,6 @@ validation/morphomnist/runs/
 
 # Claude context files (personal working files) — never tracked
 .claude/
+
+# example fits shipped with the repo (examples/README)
+!examples/**/*.npz

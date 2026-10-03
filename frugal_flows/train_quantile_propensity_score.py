@@ -11,8 +11,8 @@ from flowjax.bijections import (
 from flowjax.distributions import Transformed, Uniform, _StandardUniform
 from flowjax.flows import masked_autoregressive_flow
 from flowjax.train import fit_to_data
-from paramax import NonTrainable
 from jaxtyping import Array
+from paramax import NonTrainable
 
 from frugal_flows.causal_flows import univariate_discrete_cdf
 

@@ -10,20 +10,20 @@ seeds set below; only re-run if you intentionally want to change a fixture.
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
-import jax.numpy as jnp
 import numpy as np
-from rpy2.robjects import default_converter, pandas2ri
 import rpy2.robjects as ro
+from rpy2.robjects import default_converter, pandas2ri
 
 ro.conversion.set_conversion(default_converter + pandas2ri.converter)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "validation"))
-from data_processing_and_simulations import causl_sim_data_generation as causl_py  # noqa: E402
+from data_processing_and_simulations import (
+    causl_sim_data_generation as causl_py,  # noqa: E402
+)
 
 FIXTURES_DIR = Path(__file__).resolve().parent
 

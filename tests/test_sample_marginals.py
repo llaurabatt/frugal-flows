@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 import jax.random as jr
-
 from frugal_flows.basic_flows import univariate_marginal_flow
 from frugal_flows.sample_marginals import (
     from_quantiles_to_marginal_cont,

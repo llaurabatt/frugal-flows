@@ -55,7 +55,9 @@ def build_reversed_flow(key, dim_y: int, t_dim: int, u_dim: int, causal_model_ar
                         copula_nn_width: int = 16, copula_nn_depth: int = 1,
                         copula_flow_layers: int = 4, copula_rqs_knots: int = 8):
     """The unfitted reversed-copula flow over y (dim_y), conditioned on [t, u]."""
-    from frugal_flows.causal_flows import _build_flexible_margin   # the current arm's margin builder
+    from frugal_flows.causal_flows import (
+        _build_flexible_margin,  # the current arm's margin builder
+    )
 
     k_m, k_c = jr.split(key)
     cond_dim = t_dim + u_dim
