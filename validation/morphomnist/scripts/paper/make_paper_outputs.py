@@ -6,9 +6,7 @@ Each topic writes PDFs, LaTeX snippets and a compiled preview to runs/paper/<top
 written into the paper repository; the snippets are copied there by hand once checked.
 
 Topic "setup" (no fits needed; everything comes from the data generator):
-  table_presets.tex       one row per preset: assignment, the individual effect, and how large the
-                          confounding is at each resolution (mean over the pixels of |naive estimate -
-                          true ATE|; mean and range over the 10 datasets)
+  table_presets.tex       one row per preset: assignment rule and the individual effect
   fig_assignment.pdf      thickness of treated and untreated units (E1; E2-E6, which share one
                           assignment) and the assignment probability against thickness
   fig_treated_<s>x<s>.pdf one figure per resolution: five units along the thickness range, untreated
@@ -18,7 +16,7 @@ Topic "setup" (no fits needed; everything comes from the data generator):
                           naive estimate minus true ATE (dataset 1, named in the caption)
 Datasets: all ten digits (n = 60000), seed_data 101, assignment seeds 1-10, as in the 8x8 paper grid
 (scripts/exp_ate_recovery/grid_8x8_alldigits_v2.sh); the same seeds at 16x16. Units, potential
-outcomes and individual effects are the same in all ten datasets of a preset; only the assignment, and
+outcomes and individual effects do not depend on the assignment draw; only the assignment, and
 so the observed images and the naive estimate, differ.
 """
 import argparse
@@ -163,8 +161,8 @@ def truth_figure(out, size, data):
            r"value, and thick digits have brighter pixels; in E4 and E6 thickness enters the effect "
            r"directly, and in E6 it also moves the effect towards the bottom (thick) or the top (thin) "
            r"of the disc. Columns 4--5: the naive estimate (mean treated image minus mean untreated "
-           r"image) and its difference from the true ATE, for one of the ten datasets; columns 1--3 are "
-           r"the same in all ten. All panels "
+           r"image) and its difference from the true ATE, for one draw of the treatment assignment; "
+           r"columns 1--3 do not depend on the assignment. All panels "
            r"share one colour scale.")
     write_figure_tex(out, name, cap, f"fig:truth{size}", "0.62\\textwidth")
     return name
@@ -199,8 +197,8 @@ def assignment_figure(out, data):
     fig.savefig(os.path.join(out, "fig_assignment.pdf")); plt.close(fig)
     cap = (r"Treatment assignment. (a, b) Density of thickness $t_i$ (MorphoMNIST's thickness attribute, "
            r"rescaled to $[-1, 1]$) among untreated and treated units, kernel density estimates over the "
-           r"$n = 60\,000$ units of one of the ten datasets; dashed lines are the group means. E2--E6 "
-           r"assign treatment by the same rule, so one panel covers all five. (c) The assignment probability: $\tfrac12$ in E1 and "
+           r"$n = 60\,000$ units, for one draw of the treatment assignment; dashed lines are the group "
+           r"means. E2--E6 assign treatment by the same rule, so one panel covers all five. (c) The assignment probability: $\tfrac12$ in E1 and "
            f"$\\sigma({c2.ps_slope:g}\\,\\tilde t_i)$ in E2--E6, with $\\tilde t_i$ the standardised thickness. "
            r"Thickness is the only variable that enters the assignment, so it is the only confounder; "
            r"assignment does not depend on the image resolution.")
@@ -256,31 +254,17 @@ def treated_figure(out, size, data):
 
 
 def setup(out):
-    data = {s: {} for s in SIZES}
-    conf = {s: {p: [] for p in PRESETS} for s in SIZES}
-    for s in SIZES:
-        for p in PRESETS:
-            for k in ASSIGN_SEEDS:
-                d = build(p, s, k)
-                if k == SHOW_DATASET:
-                    data[s][p] = d
-                conf[s][p].append(np.abs(naive(d) - np.asarray(d["ATE"])).mean())
-            c = conf[s][p]
-            print(f"  {s}x{s} {LABEL[p]}: confounding {np.mean(c):.4f} [{min(c):.4f}, {max(c):.4f}]")
+    """Describes how the data are generated only; how many datasets are drawn, and the size of the
+    confounding in them, belong to the inference topic. The figures use one draw of the assignment."""
+    data = {s: {p: build(p, s, SHOW_DATASET) for p in PRESETS} for s in SIZES}
 
     # ---------------- table ----------------
     gen = {p: P.PRESETS[p] for p in PRESETS}
-    res_cols = " & ".join(f"${s}\\times{s}$" for s in SIZES)
     lines = [r"\begin{table}[t]", r"\centering", r"\small",
-             r"\begin{tabular}{lll" + "c" * len(SIZES) + "}", r"\toprule",
-             r" & & & \multicolumn{" + str(len(SIZES)) + r"}{c}{Confounding} \\",
-             r"\cmidrule(l){4-" + str(3 + len(SIZES)) + "}",
-             r"Preset & $P(T_i = 1 \mid Z_i)$ & Individual effect $\tau_{ik}$ & " + res_cols + r" \\",
-             r"\midrule"]
+             r"\begin{tabular}{lll}", r"\toprule",
+             r"Preset & $P(T_i = 1 \mid Z_i)$ & Individual effect $\tau_{ik}$ \\", r"\midrule"]
     for p in PRESETS:
-        cells = " & ".join(f"{np.mean(conf[s][p]):.3f} [{min(conf[s][p]):.3f}, {max(conf[s][p]):.3f}]"
-                           for s in SIZES)
-        lines.append(f"{LABEL[p]} & {assignment_text(gen[p])} & {effect_formula(gen[p])} & {cells} \\\\")
+        lines.append(f"{LABEL[p]} & {assignment_text(gen[p])} & {effect_formula(gen[p])} \\\\")
     lines += [r"\bottomrule", r"\end{tabular}",
               r"\caption{The six MorphoMNIST presets. Each unit $i$ is an MNIST training image "
               r"($n = 60\,000$, all ten digits), average-pooled to $8\times8$ or $16\times16$ "
@@ -292,10 +276,7 @@ def setup(out):
               r"mean exactly zero; $(hb)_i$ is their centred product and $\psi_k$ a top-to-bottom gradient "
               r"over the disc. Because every modulating term has mean zero, the true ATE equals $m$ exactly "
               r"in every preset. Brightness is included in the covariates $Z_i$ in E4 and E6, where the "
-              r"effect depends on it. Confounding: mean absolute difference between the naive estimate "
-              r"(mean treated image minus mean untreated image) and the true ATE over the $K$ pixels; mean "
-              f"over the {len(ASSIGN_SEEDS)} datasets (assignment seeds) and, in brackets, the smallest "
-              r"and largest. In E1 it reflects only the randomness of the assignment.}",
+              r"effect depends on it.}",
               r"\label{tab:presets}", r"\end{table}"]
     with open(os.path.join(out, "table_presets.tex"), "w") as f:
         f.write("\n".join(lines) + "\n")
