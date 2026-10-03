@@ -135,7 +135,7 @@ def connectivity_table(widths=(16, 50), Ks=(64, 256), nvars: int = 1) -> list[di
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=os.path.expanduser("~/work/halo-runs/S7/connectivity.json"))
+    ap.add_argument("--out", default=os.path.expanduser(os.environ.get("FF_RUNS_LOG", "~/work/halo-runs") + "/S7/connectivity.json"))
     a = ap.parse_args(argv)
     rows = connectivity_table()
     os.makedirs(os.path.dirname(a.out), exist_ok=True)

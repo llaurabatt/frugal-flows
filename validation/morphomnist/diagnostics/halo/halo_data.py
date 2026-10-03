@@ -55,7 +55,7 @@ import prepare_morphomnist_exps as pme  # noqa: E402
 SIZE, RADIUS, DIGIT, N_DIGIT0 = 8, 2, 0, 5923
 SEEDS_DATA = tuple(range(31, 41))
 CORPUS_B_SEED = 1000   # one master permutation of all 60,000 train images (Corpus B)
-CACHE_DIR = os.path.expanduser("~/work/halo-runs/_cache")
+CACHE_DIR = os.path.expanduser(os.environ.get("FF_RUNS_LOG", "~/work/halo-runs") + "/_cache")
 PRESETS = {"E1": "exp1_rct_homogeneous", "E2": "exp2_confounded_homogeneous"}
 PREPROCS = ("P0", "P1", "P2", "P3", "P4", "P5")
 P5_SD_FLOOR = 0.25   # frengression frozen tuning setting y_sd_floor
@@ -444,7 +444,7 @@ def run_s0(out: str, seeds=SEEDS_DATA, corpus: str = "A") -> dict:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage", default="S0", choices=["S0"])
-    ap.add_argument("--out", default=os.path.expanduser("~/work/halo-runs/S0"))
+    ap.add_argument("--out", default=os.path.expanduser(os.environ.get("FF_RUNS_LOG", "~/work/halo-runs") + "/S0"))
     ap.add_argument("--seeds", type=int, nargs="*", default=list(SEEDS_DATA))
     ap.add_argument("--corpus", default="A", choices=["A", "B"])
     a = ap.parse_args(argv)

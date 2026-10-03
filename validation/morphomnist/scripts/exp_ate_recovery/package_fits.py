@@ -29,12 +29,12 @@ KEEP = ("model.eqx", "config.json", "metrics.json", "wandb.json", "arrays.npz", 
 
 def fits():
     out = []
-    for r in json.load(open(os.path.expanduser("~/work/halo-runs/sub5k/results.json"))):
+    for r in json.load(open(os.path.expanduser(os.environ.get("FF_RUNS_LOG", "~/work/halo-runs") + "/sub5k/results.json"))):
         if r["code"] == "G-flex-std":
             out.append((os.path.join(MM, "runs", "sub5k", r["run"]), "phase1 (fit seed = k)"))
     pat = re.compile(r"END\s+hp-base:(E\d):k(\d+):s(\d+) rc=0 done (\S+)")
     seen = set()
-    for lf in sorted(glob.glob(os.path.expanduser("~/work/halo-runs/avg5_gauss*/launcher.log"))):
+    for lf in sorted(glob.glob(os.path.expanduser(os.environ.get("FF_RUNS_LOG", "~/work/halo-runs") + "/avg5_gauss*/launcher.log"))):
         for line in open(lf):
             m = pat.search(line)
             if m and m[4] not in seen:

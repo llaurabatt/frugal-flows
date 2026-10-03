@@ -21,7 +21,7 @@ MM = os.path.abspath(os.path.join(HERE, "..", ".."))
 sys.path.insert(0, HERE)
 import score_sub5k as S  # noqa: E402
 
-LOG = os.path.expanduser("~/work/halo-runs/avg5_gauss")
+LOG = os.path.expanduser(os.environ.get("FF_RUNS_LOG", "~/work/halo-runs") + "/avg5_gauss")
 SHORT2PRESET = {v: k for k, v in S.EXPS.items()}
 
 
@@ -31,14 +31,14 @@ def tau(d):
 
 def main():
     flows, frs = {}, {}
-    for r in json.load(open(os.path.expanduser("~/work/halo-runs/sub5k/results.json"))):
+    for r in json.load(open(os.path.expanduser(os.environ.get("FF_RUNS_LOG", "~/work/halo-runs") + "/sub5k/results.json"))):
         if r["code"] == "G-flex-std":
             flows.setdefault((r["exp"], r["k"]), []).append(tau(os.path.join(S.FLOW_ROOT, r["run"])))
         if r["code"] == "freng":
             frs.setdefault((r["exp"], r["k"]), []).append(tau(os.path.join(S.FR_ROOT, r["run"])))
     pat = re.compile(r"END\s+hp-base:(E\d):k(\d+):s(\d+) rc=0 done (\S+)")
     seen = set()
-    for lf in sorted(glob.glob(os.path.expanduser("~/work/halo-runs/avg5_gauss*/launcher.log"))):
+    for lf in sorted(glob.glob(os.path.expanduser(os.environ.get("FF_RUNS_LOG", "~/work/halo-runs") + "/avg5_gauss*/launcher.log"))):
       for line in open(lf):
         m = pat.search(line)
         if m and m[4] not in seen:

@@ -22,7 +22,7 @@ sys.path.insert(0, MM)
 import exp_ate_recovery as E  # noqa: E402
 
 FLOW_ROOT, FR_ROOT = os.path.join(MM, "runs", "sub5k"), os.path.join(MM, "runs", "sub5k_frengression")
-OUT = os.path.expanduser("~/work/halo-runs/sub5k")
+OUT = os.path.expanduser(os.environ.get("FF_RUNS_LOG", "~/work/halo-runs") + "/sub5k")
 EXPS = {"exp1_rct_homogeneous": "E1", "exp2_confounded_homogeneous": "E2", "exp3_confounded_heterogeneous": "E3",
         "exp4_covariate_cate": "E4", "exp5_quantile_effect": "E5", "exp6_spatial_cate": "E6"}
 ARM_CODE = {("flexible_continuous", "none", "zero"): "U-flex-raw", ("location_translation", "none", "zero"): "U-LT-raw",

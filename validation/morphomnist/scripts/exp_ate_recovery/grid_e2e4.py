@@ -216,7 +216,7 @@ def log(msg, fh):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--threads", type=int, default=8)
-    ap.add_argument("--logdir", default=os.path.expanduser("~/work/halo-runs/e2e4"))
+    ap.add_argument("--logdir", default=os.path.expanduser(os.environ.get("FF_RUNS_LOG", "~/work/halo-runs") + "/e2e4"))
     ap.add_argument("--wait-file", default=None)
     ap.add_argument("--fits", type=int, default=3, choices=(3, 5), help="e2e4 suite: fits per cell")
     ap.add_argument("--datasets", type=int, default=5, help="sub5k suite: datasets k = 1..N, one fit each")
@@ -235,11 +235,11 @@ def main():
     if a.suite in ("sub5k", "fravg"):
         FLOW_ROOT, FR_ROOT = os.path.join(MM, "runs", "sub5k"), os.path.join(MM, "runs", "sub5k_frengression")
         if a.logdir == ap.get_default("logdir"):
-            a.logdir = os.path.expanduser("~/work/halo-runs/sub5k")
+            a.logdir = os.path.expanduser(os.environ.get("FF_RUNS_LOG", "~/work/halo-runs") + "/sub5k")
     if a.suite == "gausshp":
         FLOW_ROOT = os.path.join(MM, "runs", "gausshp")
         if a.logdir == ap.get_default("logdir"):
-            a.logdir = os.path.expanduser("~/work/halo-runs/gausshp")
+            a.logdir = os.path.expanduser(os.environ.get("FF_RUNS_LOG", "~/work/halo-runs") + "/gausshp")
     for d in (FLOW_ROOT, FR_ROOT, a.logdir, os.path.join(a.logdir, "fits")):
         os.makedirs(d, exist_ok=True)
     fh = open(os.path.join(a.logdir, "launcher.log"), "a")

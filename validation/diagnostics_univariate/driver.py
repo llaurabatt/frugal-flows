@@ -27,7 +27,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
-ROOT = os.path.expanduser("~/work/halo-runs/S11")
+ROOT = os.path.expanduser(os.environ.get("FF_RUNS_LOG", "~/work/halo-runs") + "/S11")
 DATA, FITS, LOGS = (os.path.join(ROOT, d) for d in ("data", "fits", "_logs"))
 MAMBA = os.path.expanduser("~/.local/bin/micromamba")
 ARMS = ("gaussian", "location_translation", "flexible_continuous",

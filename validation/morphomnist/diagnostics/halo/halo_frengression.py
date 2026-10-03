@@ -38,7 +38,7 @@ SEED_FIT = 41
 FROZEN = ["--lr", "1e-3", "--hidden-dim", "100", "--num-layer", "3", "--noise-dim", "64",
           "--y-scaling", "per_pixel", "--y-sd-floor", "0.25", "--num-iters", "5000", "--n-mc", "50000",
           "--size", "8", "--digit", "0"]
-DEFAULT_ROOT = os.path.expanduser("~/work/halo-runs/S10/frengression")
+DEFAULT_ROOT = os.path.expanduser(os.environ.get("FF_RUNS_LOG", "~/work/halo-runs") + "/S10/frengression")
 
 
 def cells(smoke: bool) -> list[tuple[str, int]]:

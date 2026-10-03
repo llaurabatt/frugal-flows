@@ -38,6 +38,42 @@ directory.
 
 ---
 
+## Gaussian-scale arms and the n = 5000 grid (2026-10-03)
+
+The Gaussian-scale frugal flow is the recommended arm. See `docs/gaussian_scale/README.md` for the model and the package API.
+
+Runner arms (`--arm`):
+- `flexible_continuous_gaussian`: flexible margin. Use with `--y-scaling standardize`.
+- `location_translation_gaussian`: shift margin.
+  - `--shift-init naive|scalar` sets the start.
+  - `--shift-lr-mult` scales the shift's learning rate.
+
+The 5k grid: all ten digits, 8×8, one fixed subsample of `--n 5000` images, datasets k = 1–10.
+
+| | E1 | E2 | E3 | E4 | E5 | E6 |
+|---|---|---|---|---|---|---|
+| Gaussian spline, single fit | 0.0119 | 0.0143 | 0.0162 | 0.0175 | 0.0172 | 0.0152 |
+| Gaussian spline, 5 fits averaged | 0.0082 | 0.0097 | 0.0109 | 0.0136 | 0.0123 | 0.0112 |
+| frengression, single fit | 0.0134 | 0.0135 | 0.0170 | 0.0130 | 0.0170 | 0.0126 |
+| uniform flexible (raw Y), single fit | 0.0182 | 0.0294 | 0.0269 | 0.0253 | 0.0265 | 0.0282 |
+
+Values are ATE MAE, the mean over datasets.
+
+Scripts in `scripts/exp_ate_recovery/`:
+
+| Script | Purpose |
+|---|---|
+| `grid_e2e4.py --suite sub5k / gausshp / fravg` | launcher |
+| `score_sub5k.py` | phase-1 grid tables |
+| `score_gausshp.py` | hyperparameter sweep |
+| `score_avg5.py` | 5-fit averaging |
+| `wandb_map.py` | maps every fit to its W&B run |
+| `realism.py`, `score_realism.py` | benchmark-style FID and unit counterfactual error; needs the `fid` extras |
+| `make_examples.py` | builds `examples/` |
+| `package_fits.py` | builds the shareable bundle of all fits |
+
+Logs and summaries go to `$FF_RUNS_LOG` (default `~/work/halo-runs`).
+
 ## Quick start
 
 ```bash

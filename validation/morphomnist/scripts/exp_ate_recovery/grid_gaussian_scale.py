@@ -157,7 +157,7 @@ def log(msg, fh):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--slots", type=int, default=8)
-    ap.add_argument("--logdir", default=os.path.expanduser("~/work/halo-runs/gsw"))
+    ap.add_argument("--logdir", default=os.path.expanduser(os.environ.get("FF_RUNS_LOG", "~/work/halo-runs") + "/gsw"))
     ap.add_argument("--order", default="ACBD", help="round priority order, e.g. ACBD or ACBDE")
     ap.add_argument("--b-seeds", default="1001,1002")
     ap.add_argument("--with-e", action="store_true")

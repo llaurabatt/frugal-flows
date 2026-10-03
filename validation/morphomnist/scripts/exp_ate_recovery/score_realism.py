@@ -10,7 +10,7 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MM = os.path.abspath(os.path.join(HERE, "..", ".."))
-OUT = os.path.expanduser("~/work/halo-runs/realism")
+OUT = os.path.expanduser(os.environ.get("FF_RUNS_LOG", "~/work/halo-runs") + "/realism")
 EXP = {"exp1_rct_homogeneous": "E1", "exp2_confounded_homogeneous": "E2", "exp3_confounded_heterogeneous": "E3",
        "exp4_covariate_cate": "E4", "exp5_quantile_effect": "E5", "exp6_spatial_cate": "E6"}
 CODE = {("flexible_continuous", "none"): "U-flex-raw", ("flexible_continuous", "standardize"): "U-flex-std",

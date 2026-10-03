@@ -318,7 +318,7 @@ def template_table(groups: dict, mapname: str) -> dict:
 # ------------------------------------------------------------------ figures
 def _s0_floor(root: str) -> dict:
     fs = sorted(glob.glob(os.path.join(root, "S0", "s0_sd*.npz"))) or \
-        sorted(glob.glob(os.path.expanduser("~/work/halo-runs/S0/s0_sd*.npz")))
+        sorted(glob.glob(os.path.expanduser(os.environ.get("FF_RUNS_LOG", "~/work/halo-runs") + "/S0/s0_sd*.npz")))
     if not fs:
         return {}
     zs = [np.load(f) for f in fs]
@@ -1504,7 +1504,7 @@ def to_md(out: dict, tmap: str) -> str:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage", required=True, choices=["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "all"])
-    ap.add_argument("--runs-root", default=os.path.expanduser("~/work/halo-runs"))
+    ap.add_argument("--runs-root", default=os.path.expanduser(os.environ.get("FF_RUNS_LOG", "~/work/halo-runs")))
     ap.add_argument("--compare-root", default=None,
                     help="root holding S0/S1/S2/S4 comparison cells (default: --runs-root); S7 reads S4 from it")
     a = ap.parse_args(argv)

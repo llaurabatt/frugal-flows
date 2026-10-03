@@ -346,7 +346,7 @@ def main(argv=None) -> int:
     ap.add_argument("--relaunch-incomplete", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--smoke", action="store_true")
-    ap.add_argument("--runs-root", default=os.path.expanduser("~/work/halo-runs"))
+    ap.add_argument("--runs-root", default=os.path.expanduser(os.environ.get("FF_RUNS_LOG", "~/work/halo-runs")))
     a = ap.parse_args(argv)
     stages = ["S0", "S1", "S2", "S4", "S3"] if a.stage == "all" else [a.stage]
     rc = 0

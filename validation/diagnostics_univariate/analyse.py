@@ -27,8 +27,8 @@ import os
 
 import numpy as np
 
-ROOT = os.path.expanduser("~/work/halo-runs/S11")
-OUT = os.path.expanduser("~/work/halo-runs/_analysis")
+ROOT = os.path.expanduser(os.environ.get("FF_RUNS_LOG", "~/work/halo-runs") + "/S11")
+OUT = os.path.expanduser(os.environ.get("FF_RUNS_LOG", "~/work/halo-runs") + "/_analysis")
 ARMS = ("gaussian", "location_translation", "flexible_continuous",
         "location_translation_gaussian", "flexible_continuous_gaussian")
 NEW = ("location_translation_gaussian", "flexible_continuous_gaussian")

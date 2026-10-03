@@ -19,7 +19,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 MM = os.path.abspath(os.path.join(HERE, "..", ".."))
 ROOT = os.path.join(MM, "runs", "gausshp")
-LOG = os.path.expanduser("~/work/halo-runs/gausshp")
+LOG = os.path.expanduser(os.environ.get("FF_RUNS_LOG", "~/work/halo-runs") + "/gausshp")
 
 
 def collect(logdir):
