@@ -45,7 +45,7 @@ choices is in [`../docs/leftover_confounding/STATUS.md`](../docs/leftover_confou
 
 | script | what it does | output |
 |---|---|---|
-| `paper/make_paper_outputs.py <topic>` | figures and LaTeX tables for the paper, one topic at a time; each topic also compiles a one-column preview at AISTATS text width. Topics so far: `setup` (table of the six presets with the size of their confounding at 8×8 and 16×16 over the 10 datasets; treatment-assignment figure; one truth figure per resolution) | `runs/paper/<topic>/` |
+| `paper/make_paper_outputs.py <topic>` | figures and LaTeX tables for the paper, one topic at a time; each topic also compiles a one-column preview at AISTATS text width. Topics so far: `setup` (table of the six presets with the size of their confounding at 8×8 and 16×16 over the 10 datasets; treatment-assignment figure; treated-digit examples and truth figure, one each per resolution) | `runs/paper/<topic>/` |
 
 ## Margin pixel order (test, 2026-10-02)
 

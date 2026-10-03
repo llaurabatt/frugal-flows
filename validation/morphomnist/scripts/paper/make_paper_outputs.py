@@ -11,6 +11,8 @@ Topic "setup" (no fits needed; everything comes from the data generator):
                           true ATE|; mean and range over the 10 datasets)
   fig_assignment.pdf      thickness of treated and untreated units (E1; E2-E6, which share one
                           assignment) and the assignment probability against thickness
+  fig_treated_<s>x<s>.pdf one figure per resolution: five units along the thickness range, untreated
+                          and treated under E2 and under E6, as pixel intensities
   fig_truth_<s>x<s>.pdf   one figure per resolution, one row per preset: true ATE, average individual
                           effect of the thinnest and of the thickest 10 % of units, naive estimate, and
                           naive estimate minus true ATE (dataset 1, named in the caption)
@@ -207,6 +209,52 @@ def assignment_figure(out, data):
     return "fig_assignment"
 
 
+def treated_figure(out, size, data):
+    """Five units along the thickness range: untreated image, and the same unit treated under E2 and
+    under E6, as pixel intensities in [0, 1]."""
+    from prepare_data import inverse_logit
+    D = disc_mask(size)
+    e2, e6 = data["exp2_confounded_homogeneous"], data["exp6_spatial_cate"]
+    assert np.array_equal(np.asarray(e2["Y0"]), np.asarray(e6["Y0"])), "E2 and E6 untreated images differ"
+    t = e2["THICKNESS"]
+    qs = (0.1, 0.3, 0.5, 0.7, 0.9)
+    units = [int(np.argmin(np.abs(t - np.quantile(t, q)))) for q in qs]
+    rows = [("Untreated\n$Y_i(0)$", e2["Y0"]), ("Treated, E2\n$Y_i(1)$", e2["Y1"]),
+            ("Treated, E6\n$Y_i(1)$", e6["Y1"])]
+    w = TEXTWIDTH * 0.62
+    fig, axes = plt.subplots(len(rows), len(units), figsize=(w, w * len(rows) / len(units) * 1.04),
+                             gridspec_kw=dict(wspace=0.06, hspace=0.06))
+    for r, (lab, Y) in enumerate(rows):
+        pix = inverse_logit(np.asarray(Y)[units])
+        for j, u in enumerate(units):
+            ax = axes[r, j]
+            h = ax.imshow(pix[j].reshape(size, size), cmap="gray", vmin=0, vmax=1)
+            bare(ax)
+            if r > 0:
+                for patch in list(ax.patches):
+                    patch.remove()
+                outline_disc(ax, D)
+                for patch in ax.patches:
+                    patch.set_edgecolor("C3"); patch.set_linewidth(0.5)
+            if r == 0:
+                ax.set_title(f"{int(qs[j] * 100)}th pct.\n$t_i = {t[u]:+.2f}$", fontsize=7, pad=3)
+            if j == 0:
+                ax.set_ylabel(lab, fontsize=7)
+    b0, b4 = axes[-1, 0].get_position(), axes[-1, -1].get_position()
+    cax = fig.add_axes([b0.x0, b0.y0 - 0.05, b4.x1 - b0.x0, 0.018])
+    fig.colorbar(h, cax=cax, orientation="horizontal", label="pixel intensity").ax.tick_params(labelsize=6)
+    name = f"fig_treated_{size}x{size}"
+    fig.savefig(os.path.join(out, name + ".pdf")); plt.close(fig)
+    cap = (f"What treatment does to a digit, at ${size}\\times{size}$. Columns: five units at the 10th, "
+           r"30th, 50th, 70th and 90th percentile of thickness $t_i$. Row 1: the untreated image. Rows 2--3: "
+           r"the same unit treated, under E2 (every unit gets the same effect, the disc) and under E6 (the "
+           r"effect grows with thickness and brightness and, for thick digits, is shifted towards the bottom "
+           r"of the disc). Images are shown as pixel intensities; the effect is added on the logit scale, "
+           r"so it mainly brightens dark pixels inside the disc (red outline) and changes white pixels little.")
+    write_figure_tex(out, name, cap, f"fig:treated{size}", "0.62\\textwidth")
+    return name
+
+
 def setup(out):
     data = {s: {} for s in SIZES}
     conf = {s: {p: [] for p in PRESETS} for s in SIZES}
@@ -253,6 +301,7 @@ def setup(out):
         f.write("\n".join(lines) + "\n")
 
     return (["table_presets", assignment_figure(out, data[SIZES[0]])]
+            + [treated_figure(out, s, data[s]) for s in SIZES]
             + [truth_figure(out, s, data[s]) for s in SIZES])
 
 
