@@ -11,8 +11,11 @@ quantiles (~0 for a pure location shift, > 0 for a real treatment-conditioned
 spline effect).
 
 This read-out is **model-agnostic**: it works for every ``causal_model`` arm
-(``gaussian``, ``flexible_continuous``, ...), unlike reading a parametric ``.ate``
-field that only the additive/``gaussian`` arm exposes.
+(``gaussian``, ``flexible_continuous``, ``flexible_continuous_gaussian``, ...), unlike
+reading a parametric ``.ate`` field that only the additive ``gaussian`` arm exposes. (The
+``gaussian`` arm is the paper's parametric scalar margin; it is unrelated to the Gaussian-scale
+multivariate flow in ``frugal_flows.gaussian_scale``.) For the Gaussian-scale flow, unit-level
+counterfactuals are ``gaussian_scale.counterfactual_gaussian``.
 
 If the flow was fitted on a TRANSFORMED outcome (see
 ``frugal_flows.outcome_transforms``), pass that transform so the samples are
@@ -173,7 +176,7 @@ def tau_curve(y0, y1, n_bins=TAU_CURVE_BINS):
 
 
 def counterfactual_flexible(flow, y, u_z, t, t_new):
-    """Counterfactual images for observed units under the flexible-continuous arm (2026-10-01).
+    """Counterfactual images for observed units under the flexible-continuous (uniform-base) arm.
 
     Rank-preserving margin transport: each image ``y`` (rows) is mapped to its ranks under the causal
     margin at its observed treatment ``t``, and back to an image at ``t_new``:
