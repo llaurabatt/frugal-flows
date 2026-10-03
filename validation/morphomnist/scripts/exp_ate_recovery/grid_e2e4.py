@@ -186,6 +186,11 @@ def queue_gausshp(ks=(11, 12, 13), exps=("E2", "E4"), names=None, seeds=None, gr
     return q
 
 
+def queue_fravg(ks, exps, seeds):
+    """Extra frengression fits (fit seeds other than k) on the sub5k datasets, for frengression averaging."""
+    return [sub5k_fr_cell(ALL_E[e], k, sd) for k in ks for e in exps for sd in seeds]
+
+
 def done_dir(c):
     if c["kind"] == "flow":
         pre = c["prefix"]
@@ -224,10 +229,10 @@ def main():
     ap.add_argument("--hp-group", default=None, help="gausshp suite: W&B group (default gausshp_sub5k)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--stagger-s", type=float, default=20.0)
-    ap.add_argument("--suite", default="e2e4", choices=("e2e4", "sub5k", "gausshp"))
+    ap.add_argument("--suite", default="e2e4", choices=("e2e4", "sub5k", "gausshp", "fravg"))
     a = ap.parse_args()
     global FLOW_ROOT, FR_ROOT
-    if a.suite == "sub5k":
+    if a.suite in ("sub5k", "fravg"):
         FLOW_ROOT, FR_ROOT = os.path.join(MM, "runs", "sub5k"), os.path.join(MM, "runs", "sub5k_frengression")
         if a.logdir == ap.get_default("logdir"):
             a.logdir = os.path.expanduser("~/work/halo-runs/sub5k")
@@ -238,7 +243,9 @@ def main():
     for d in (FLOW_ROOT, FR_ROOT, a.logdir, os.path.join(a.logdir, "fits")):
         os.makedirs(d, exist_ok=True)
     fh = open(os.path.join(a.logdir, "launcher.log"), "a")
-    cells = (queue_sub5k(a.datasets, tuple(a.exps.split(",")), a.new_arms) if a.suite == "sub5k"
+    cells = (queue_fravg([int(x) for x in a.hp_ks.split(",")], a.hp_exps.split(","),
+                         [int(x) for x in a.hp_seeds.split(",")]) if a.suite == "fravg" else
+             queue_sub5k(a.datasets, tuple(a.exps.split(",")), a.new_arms) if a.suite == "sub5k"
              else queue_gausshp(tuple(int(x) for x in a.hp_ks.split(",")), exps=tuple(a.hp_exps.split(",")), names=a.hp_names.split(",") if a.hp_names else None,
                            seeds=[int(x) for x in a.hp_seeds.split(",")] if a.hp_seeds else None, group=a.hp_group)
              if a.suite == "gausshp" else queue(a.fits))
@@ -260,6 +267,7 @@ def main():
     base.update({"JAX_PLATFORMS": "cpu", "TF_CPP_MIN_LOG_LEVEL": "2"})
     if a.suite == "e2e4":
         base["WANDB_MODE"] = "disabled"
+    # fravg: frengression fits log to the sub5k group (tag freng), alongside their seed-k fits
     py = [os.environ.get("MAMBA_EXE", "micromamba"), "run", "-n", "frugal-flows-e2w", "python"]
     running, status, pending = {}, {}, list(cells)
     while pending or running:
