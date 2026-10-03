@@ -200,6 +200,8 @@ def main():
     ap.add_argument("--datasets", type=int, default=5, help="sub5k suite: datasets k = 1..N, one fit each")
     ap.add_argument("--exps", default="E2,E4", help="sub5k suite: comma-separated experiments (E1-E6)")
     ap.add_argument("--new-arms", action="store_true", help="sub5k suite: add U-flex-std and G-LT-head")
+    ap.add_argument("--hp-names", default=None, help="gausshp suite: comma-separated settings (default all)")
+    ap.add_argument("--hp-ks", default="11,12,13", help="gausshp suite: comma-separated datasets")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--stagger-s", type=float, default=20.0)
     ap.add_argument("--suite", default="e2e4", choices=("e2e4", "sub5k", "gausshp"))
@@ -217,7 +219,8 @@ def main():
         os.makedirs(d, exist_ok=True)
     fh = open(os.path.join(a.logdir, "launcher.log"), "a")
     cells = (queue_sub5k(a.datasets, tuple(a.exps.split(",")), a.new_arms) if a.suite == "sub5k"
-             else queue_gausshp() if a.suite == "gausshp" else queue(a.fits))
+             else queue_gausshp(tuple(int(x) for x in a.hp_ks.split(",")), names=a.hp_names.split(",") if a.hp_names else None)
+             if a.suite == "gausshp" else queue(a.fits))
     for c in cells:
         if c["kind"] == "flow":
             c["prefix"] = G.name_prefix(c["args"])
