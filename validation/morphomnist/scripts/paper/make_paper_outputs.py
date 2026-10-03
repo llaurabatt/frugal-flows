@@ -152,18 +152,11 @@ def truth_figure(out, size, data):
     fig.colorbar(h, cax=cax, orientation="horizontal").ax.tick_params(labelsize=6)
     name = f"fig_truth_{size}x{size}"
     fig.savefig(os.path.join(out, name + ".pdf")); plt.close(fig)
-    radius = E.Config(size=size).effective_radius
-    cap = (f"Ground truth at ${size}\\times{size}$ for the six presets (rows), on the logit scale. "
-           r"Columns 1--3: the true ATE, which is the same in every preset (a disc of radius "
-           f"{radius} pixels, black outline), and the average individual effect over the 10\\,\\% "
-           r"thinnest and the 10\,\% thickest units. They coincide with the ATE in E1 and E2. In E3 "
-           r"and E5 they differ partly or wholly because the effect grows with the pixel's own untreated "
-           r"value, and thick digits have brighter pixels; in E4 and E6 thickness enters the effect "
-           r"directly, and in E6 it also moves the effect towards the bottom (thick) or the top (thin) "
-           r"of the disc. Columns 4--5: the naive estimate (mean treated image minus mean untreated "
-           r"image) and its difference from the true ATE, for one draw of the treatment assignment; "
-           r"columns 1--3 do not depend on the assignment. All panels "
-           r"share one colour scale.")
+    cap = (f"True and naive effects at ${size}\\times{size}$ for the six presets (rows), on the logit scale "
+           r"and one colour scale. Columns 1--3: the true ATE (the disc, black outline) and the average "
+           r"individual effect of the 10\,\% thinnest and of the 10\,\% thickest units. Columns 4--5: the "
+           r"naive estimate (mean treated image minus mean untreated image) and its difference from the true "
+           r"ATE, from a single simulated dataset (one draw of the treatment assignment).")
     write_figure_tex(out, name, cap, f"fig:truth{size}", "0.62\\textwidth")
     return name
 
