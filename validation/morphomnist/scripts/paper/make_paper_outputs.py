@@ -536,7 +536,7 @@ def runtime_table(out):
     lines += [r"\bottomrule", r"\end{tabular}",
               r"\caption{Computational cost. Time per fit: wall-clock time of one fit, from building the data to "
               r"the effect read-out, median over the fits timed, with the range in brackets; each IFF and "
-              r"Frengression fit ran on five CPU cores, with 48 fits running at the same time. Core-hours per "
+              r"Frengression fit ran on five CPU cores. Core-hours per "
               r"dataset: fits per dataset $\times$ 5 cores $\times$ the median time per fit. Baselines: wall-clock "
               r"time for all five estimators on one dataset, single process.}",
               r"\label{tab:runtime}", r"\end{table}"]
