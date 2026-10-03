@@ -249,9 +249,8 @@ def treated_figure(out, size, data):
            r"the same unit treated, under E2 (every unit gets the same effect, the disc) and under E6 (the "
            r"effect grows with thickness and brightness and, for thick digits, is shifted towards the bottom "
            r"of the disc). The red outline marks the disc. Images are shown as pixel intensities. The "
-           r"effect is added on the logit scale, so in intensity it is largest for mid-grey pixels (for an "
-           r"effect of 1, about $+0.24$ at intensities between 0.3 and 0.7) and smallest for black and nearly "
-           r"white pixels (about $+0.05$).")
+           r"effect is added on the logit scale, so in intensity it is largest for mid-grey pixels and "
+           r"smallest for black and nearly white pixels.")
     write_figure_tex(out, name, cap, f"fig:treated{size}", "0.62\\textwidth")
     return name
 
