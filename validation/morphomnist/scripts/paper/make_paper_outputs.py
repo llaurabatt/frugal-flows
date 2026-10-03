@@ -163,8 +163,8 @@ def truth_figure(out, size, data):
            r"value, and thick digits have brighter pixels; in E4 and E6 thickness enters the effect "
            r"directly, and in E6 it also moves the effect towards the bottom (thick) or the top (thin) "
            r"of the disc. Columns 4--5: the naive estimate (mean treated image minus mean untreated "
-           f"image) and its difference from the true ATE, on dataset {SHOW_DATASET} (assignment seed "
-           f"{SHOW_DATASET}); columns 1--3 are the same for all ten datasets of a preset. All panels "
+           r"image) and its difference from the true ATE, for one of the ten datasets; columns 1--3 are "
+           r"the same in all ten. All panels "
            r"share one colour scale.")
     write_figure_tex(out, name, cap, f"fig:truth{size}", "0.62\\textwidth")
     return name
@@ -199,9 +199,8 @@ def assignment_figure(out, data):
     fig.savefig(os.path.join(out, "fig_assignment.pdf")); plt.close(fig)
     cap = (r"Treatment assignment. (a, b) Density of thickness $t_i$ (MorphoMNIST's thickness attribute, "
            r"rescaled to $[-1, 1]$) among untreated and treated units, kernel density estimates over the "
-           f"$n = 60\\,000$ units of dataset {SHOW_DATASET} (assignment seed {SHOW_DATASET}); dashed lines "
-           r"are the group means. E2--E6 share the same assignment (same rule, same seed), so one panel "
-           r"covers all five. (c) The assignment probability: $\tfrac12$ in E1 and "
+           r"$n = 60\,000$ units of one of the ten datasets; dashed lines are the group means. E2--E6 "
+           r"assign treatment by the same rule, so one panel covers all five. (c) The assignment probability: $\tfrac12$ in E1 and "
            f"$\\sigma({c2.ps_slope:g}\\,\\tilde t_i)$ in E2--E6, with $\\tilde t_i$ the standardised thickness. "
            r"Thickness is the only variable that enters the assignment, so it is the only confounder; "
            r"assignment does not depend on the image resolution.")
