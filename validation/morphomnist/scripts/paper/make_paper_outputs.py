@@ -500,8 +500,52 @@ def hparams_table(out):
     return "table_hparams"
 
 
+def runtime_table(out):
+    """Wall-clock time per fit (metrics.json total_s: data, both IFF stages or Frengression training,
+    and the effect read-out) for the grid runs, and per dataset for all five baselines together."""
+    import glob, json, re
+    rows = []
+    for size in INF_GRID:
+        K = size ** 2
+        for name, root, rx, nfits in (
+                ("IFF", "exp_ate_recovery", rf"ff_e[1-6]_flexcont_sa\d+_lr0\.001_copw16_k{K}_s\d+_d0-9_[0-9a-f]{{6}}", 5),
+                ("Frengression", "frengression", rf"frengression_e[1-6]_sa\d+_k{K}_s\d+_d0-9_[0-9a-f]{{6}}", 1)):
+            h = []
+            for d in glob.glob(os.path.join(MM, "runs", root, f"*_k{K}_s*_d0-9_*/")):
+                if not os.path.exists(d + "metrics.json"):
+                    continue
+                if re.fullmatch(rx, json.load(open(d + "config.json")).get("wandb_name", "")):
+                    m = json.load(open(d + "metrics.json"))
+                    if "total_s" in m:
+                        h.append(m["total_s"] / 3600)
+            if h:
+                rows.append((name, size, nfits, f"{np.median(h):.1f} h ({min(h):.1f}--{max(h):.1f})",
+                             f"{nfits * 5 * np.median(h):.0f}", len(h)))
+        b = []
+        for d in glob.glob(os.path.join(MM, "runs", "baselines", f"*_baselines_e[1-6]_sa*_k{K}_sd101_d0-9_*/")):
+            if os.path.exists(d + "metrics.json"):
+                b.append(json.load(open(d + "metrics.json"))["wall_s"])
+        if b:
+            rows.append(("All five baselines", size, 1, f"{np.median(b):.0f} s ({min(b):.0f}--{max(b):.0f})",
+                         "$<0.1$", len(b)))
+    lines = [r"\begin{table}[t]", r"\centering", r"\small", r"\begin{tabular}{llcccc}", r"\toprule",
+             r"Method & Resolution & Fits per dataset & Time per fit & Core-hours per dataset & Fits timed \\",
+             r"\midrule"]
+    for name, size, nf, t, ch, n in rows:
+        lines.append(f"{name} & ${size}\\times{size}$ & {nf} & {t} & {ch} & {n} \\\\")
+    lines += [r"\bottomrule", r"\end{tabular}",
+              r"\caption{Computational cost. Time per fit: wall-clock time of one fit, from building the data to "
+              r"the effect read-out, median over the fits timed, with the range in brackets; each IFF and "
+              r"Frengression fit ran on five CPU cores, with 48 fits running at the same time. Core-hours per "
+              r"dataset: fits per dataset $\times$ 5 cores $\times$ the median time per fit. Baselines: wall-clock "
+              r"time for all five estimators on one dataset, single process.}",
+              r"\label{tab:runtime}", r"\end{table}"]
+    open(os.path.join(out, "table_runtime.tex"), "w").write("\n".join(lines) + "\n")
+    return "table_runtime"
+
+
 def inference(out):
-    parts = [hparams_table(out)]
+    parts = [hparams_table(out), runtime_table(out)]
     for size in INF_GRID:
         x, shown, status = collect_inference(size)
         x.to_csv(os.path.join(out, f"scores_{size}x{size}.csv"), index=False)
