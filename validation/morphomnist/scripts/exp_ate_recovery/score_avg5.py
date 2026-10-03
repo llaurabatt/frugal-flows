@@ -46,7 +46,7 @@ def main():
             mm = re.search(r"frengression_(e\d)_sa(\d+)_", os.path.basename(d))
             frs.setdefault((mm[1].upper(), int(mm[2])), []).append(tau(d))
     lines = ["# Gaussian spline 5-fit averaging, n = 5000 (Laura's criterion: averaged flow map vs frengression)", ""]
-    for exp in ("E4", "E6"):
+    for exp in ("E1", "E2", "E3", "E4", "E5", "E6"):
         ks = sorted(k for (e, k) in flows if e == exp and len(flows[(e, k)]) == 5)
         if not ks:
             continue
