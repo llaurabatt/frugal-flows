@@ -9,6 +9,8 @@ Topic "setup" (no fits needed; everything comes from the data generator):
   table_presets.tex       one row per preset: assignment, the individual effect, and how large the
                           confounding is at each resolution (mean over the pixels of |naive estimate -
                           true ATE|; mean and range over the 10 datasets)
+  fig_assignment.pdf      thickness of treated and untreated units (E1; E2-E6, which share one
+                          assignment) and the assignment probability against thickness
   fig_truth_<s>x<s>.pdf   one figure per resolution, one row per preset: true ATE, average individual
                           effect of the thinnest and of the thickest 10 % of units, naive estimate, and
                           naive estimate minus true ATE (dataset 1, named in the caption)
@@ -166,6 +168,45 @@ def truth_figure(out, size, data):
     return name
 
 
+def assignment_figure(out, data):
+    """Thickness of treated and untreated units (E1; E2-E6, which share one assignment) and the
+    assignment probability against thickness. Resolution-independent: assignment uses thickness only."""
+    from scipy.stats import gaussian_kde
+    e1, e2 = data["exp1_rct_homogeneous"], data["exp2_confounded_homogeneous"]
+    for p in PRESETS[2:]:
+        assert np.array_equal(np.asarray(data[p]["X"]), np.asarray(e2["X"])), f"{p} assignment differs from E2"
+    t = e2["THICKNESS"]
+    grid = np.linspace(np.quantile(t, 0.001), np.quantile(t, 0.999), 300)
+    fig, axes = plt.subplots(1, 3, figsize=(TEXTWIDTH, 1.65), gridspec_kw=dict(wspace=0.3))
+    for ax, d, title in ((axes[0], e1, "(a) E1: random assignment"), (axes[1], e2, "(b) E2--E6: confounded")):
+        T = np.asarray(d["X"])[:, 0].astype(bool)
+        for sel, lab, col in ((~T, "untreated", "C0"), (T, "treated", "C3")):
+            ax.plot(grid, gaussian_kde(t[sel])(grid), color=col, lw=1, label=lab)
+            ax.axvline(t[sel].mean(), color=col, lw=0.6, ls="--")
+        ax.set_title(title, pad=3); ax.set_xlabel("thickness $t_i$"); ax.set_ylabel("density")
+        ax.legend(frameon=False, loc="upper right")
+    z = (grid - t.mean()) / t.std()
+    c2, c1 = P.PRESETS["exp2_confounded_homogeneous"], P.PRESETS["exp1_rct_homogeneous"]
+    axes[2].plot(grid, 1 / (1 + np.exp(-(c2.ps_intercept + c2.ps_slope * z))), color="k", lw=1, label="E2--E6")
+    axes[2].plot(grid, np.full_like(grid, 1 / (1 + np.exp(-c1.ps_intercept))), color="k", lw=1, ls=":", label="E1")
+    axes[2].set_ylim(0, 1); axes[2].set_title("(c) assignment probability", pad=3)
+    axes[2].set_xlabel("thickness $t_i$"); axes[2].set_ylabel("$P(T_i = 1 \\mid t_i)$")
+    axes[2].legend(frameon=False, loc="upper left")
+    for ax in axes:
+        ax.spines[["top", "right"]].set_visible(False)
+    fig.savefig(os.path.join(out, "fig_assignment.pdf")); plt.close(fig)
+    cap = (r"Treatment assignment. (a, b) Density of thickness $t_i$ (MorphoMNIST's measured thickness, "
+           r"rescaled to $[-1, 1]$) among untreated and treated units, kernel density estimates over the "
+           f"$n = 60\\,000$ units of dataset {SHOW_DATASET} (assignment seed {SHOW_DATASET}); dashed lines "
+           r"are the group means. E2--E6 share the same assignment (same rule, same seed), so one panel "
+           r"covers all five. (c) The assignment probability: $\tfrac12$ in E1 and "
+           f"$\\sigma({c2.ps_slope:g}\\,\\tilde t_i)$ in E2--E6, with $\\tilde t_i$ the standardised thickness. "
+           r"Thickness is the only variable that enters the assignment, so it is the only confounder; "
+           r"assignment does not depend on the image resolution.")
+    write_figure_tex(out, "fig_assignment", cap, "fig:assignment", "\\textwidth")
+    return "fig_assignment"
+
+
 def setup(out):
     data = {s: {} for s in SIZES}
     conf = {s: {p: [] for p in PRESETS} for s in SIZES}
@@ -211,7 +252,8 @@ def setup(out):
     with open(os.path.join(out, "table_presets.tex"), "w") as f:
         f.write("\n".join(lines) + "\n")
 
-    return ["table_presets"] + [truth_figure(out, s, data[s]) for s in SIZES]
+    return (["table_presets", assignment_figure(out, data[SIZES[0]])]
+            + [truth_figure(out, s, data[s]) for s in SIZES])
 
 
 # --------------------------------------------------------------------------------------------- #
