@@ -224,7 +224,9 @@ def read_run(d: str) -> dict:
                  nonfinite=None,
                  dropped=(met.get("mc_n") or 0) - (met.get("mc_n_used") or 0), anynan=met.get("mc_anynan"))
         cond = c.get("conditioner") if c["arm"] == "flexible_continuous" else None
-        R.update(arm={"flexible_continuous": "flexcont", "location_translation": "loctrans"}[c["arm"]],
+        R.update(arm={"flexible_continuous": "flexcont", "location_translation": "loctrans",
+                      "flexible_continuous_gaussian": "flexgauss",
+                      "location_translation_gaussian": "loctransgauss"}[c["arm"]],
                  conditioner=cond, nn_width=c.get("nn_width"), nn_depth=c.get("nn_depth"),
                  flow_layers=c.get("flow_layers"), knots=c.get("rqs_knots"), heads=c.get("nn_heads"),
                  expansion=c.get("expansion", 2),
