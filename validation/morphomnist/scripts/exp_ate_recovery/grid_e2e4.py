@@ -143,7 +143,20 @@ GAUSSHP = {  # name -> flag overrides on top of the paper flags (lr 1e-3, patien
     "fl2": ["--flow-layers", "2"],
     "fl8": ["--flow-layers", "8"],
     "md2": ["--nn-depth", "2"],
+    # round 2 (3 Oct): copula capacity, covariate ranks, and flow layers 8 combined (the one E4 gain)
+    "cfl2": ["--copula-flow-layers", "2"],
+    "cfl8": ["--copula-flow-layers", "8"],
+    "cmd2": ["--copula-nn-depth", "2"],
+    "ckn4": ["--copula-rqs-knots", "4"],
+    "ckn16": ["--copula-rqs-knots", "16"],
+    "copw8": ["--copula-nn-width", "8"],
+    "ecdf": ["--u-z-method", "ecdf"],
+    "fl8+cfl8": ["--flow-layers", "8", "--copula-flow-layers", "8"],
+    "fl8+ecdf": ["--flow-layers", "8", "--u-z-method", "ecdf"],
 }
+
+
+ROUND2 = {"cfl2", "cfl8", "cmd2", "ckn4", "ckn16", "copw8", "ecdf", "fl8+cfl8", "fl8+ecdf"}
 
 
 def _override(args, extra):
@@ -156,16 +169,20 @@ def _override(args, extra):
     return args
 
 
-def queue_gausshp(ks=(11, 12, 13), exps=("E2", "E4"), names=None):
+def queue_gausshp(ks=(11, 12, 13), exps=("E2", "E4"), names=None, seeds=None, group=None):
+    """seeds: fit seeds per (setting, experiment, dataset) instead of the default fit seed = k (5-fit averaging)."""
+    names = names or [n for n in GAUSSHP if n not in ROUND2] or None
     q = []
     for k in ks:
         for e in exps:
             for name in (names or GAUSSHP):
-                c = sub5k_flow_cell("G-flex-std", ALL_E[e], k)
-                c["args"] = _override(c["args"], GAUSSHP[name])
-                c["args"] = _override(c["args"], ["--wandb-group", GAUSSHP_GROUP, "--wandb-tags", f"gausshp,{name}"])
-                c["label"] = f"hp-{name}:{e}:k{k}"
-                q.append(c)
+                for sd in (seeds or [k]):
+                    c = sub5k_flow_cell("G-flex-std", ALL_E[e], k, sd)
+                    c["args"] = _override(c["args"], GAUSSHP[name])
+                    c["args"] = _override(c["args"], ["--wandb-group", group or GAUSSHP_GROUP,
+                                                      "--wandb-tags", f"gausshp,{name}"])
+                    c["label"] = f"hp-{name}:{e}:k{k}" + ("" if sd == k else f":s{sd}")
+                    q.append(c)
     return q
 
 
@@ -202,6 +219,9 @@ def main():
     ap.add_argument("--new-arms", action="store_true", help="sub5k suite: add U-flex-std and G-LT-head")
     ap.add_argument("--hp-names", default=None, help="gausshp suite: comma-separated settings (default all)")
     ap.add_argument("--hp-ks", default="11,12,13", help="gausshp suite: comma-separated datasets")
+    ap.add_argument("--hp-exps", default="E2,E4", help="gausshp suite: comma-separated experiments")
+    ap.add_argument("--hp-seeds", default=None, help="gausshp suite: comma-separated fit seeds (default: fit seed = k)")
+    ap.add_argument("--hp-group", default=None, help="gausshp suite: W&B group (default gausshp_sub5k)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--stagger-s", type=float, default=20.0)
     ap.add_argument("--suite", default="e2e4", choices=("e2e4", "sub5k", "gausshp"))
@@ -219,7 +239,8 @@ def main():
         os.makedirs(d, exist_ok=True)
     fh = open(os.path.join(a.logdir, "launcher.log"), "a")
     cells = (queue_sub5k(a.datasets, tuple(a.exps.split(",")), a.new_arms) if a.suite == "sub5k"
-             else queue_gausshp(tuple(int(x) for x in a.hp_ks.split(",")), names=a.hp_names.split(",") if a.hp_names else None)
+             else queue_gausshp(tuple(int(x) for x in a.hp_ks.split(",")), exps=tuple(a.hp_exps.split(",")), names=a.hp_names.split(",") if a.hp_names else None,
+                           seeds=[int(x) for x in a.hp_seeds.split(",")] if a.hp_seeds else None, group=a.hp_group)
              if a.suite == "gausshp" else queue(a.fits))
     for c in cells:
         if c["kind"] == "flow":

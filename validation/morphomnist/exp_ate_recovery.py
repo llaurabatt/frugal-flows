@@ -1858,6 +1858,14 @@ def variant_tag(cfg: Config) -> str:
         var.append(f"md{cfg.nn_depth}")
     if cfg.flow_layers != 4:
         var.append(f"fl{cfg.flow_layers}")
+    # copula depth / layers / knots, when not the defaults 1 / 4 / 8 (from 2026-10-03, gausshp round 2;
+    # no earlier run changed them, so no existing name changes)
+    if cfg.copula_nn_depth != 1:
+        var.append(f"cmd{cfg.copula_nn_depth}")
+    if cfg.copula_flow_layers != 4:
+        var.append(f"cfl{cfg.copula_flow_layers}")
+    if cfg.copula_rqs_knots != 8:
+        var.append(f"ckn{cfg.copula_rqs_knots}")
     # stopping: epoch cap when not 1000, early-stopping patience when not 30 (from 2026-09-27;
     # every run with the fixed layers before then used 1000 / 30)
     if cfg.max_epochs != 1000:
