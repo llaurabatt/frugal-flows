@@ -467,29 +467,35 @@ def inference_error_figure(out, size, shown):
 
 
 def hparams_table(out):
+    """Settings table. IFF = the Gaussian-scale flexible flow (from 2026-10-05), read from a 16x16 run's
+    config; frengression from an 8x8 grid run (its settings do not depend on the resolution)."""
     import glob, json
-    f = json.load(open(glob.glob(os.path.join(MM, "runs", "exp_ate_recovery",
-                                               "*_ff_e2_flexcont_sa1_lr0.001_copw16_k64_s1_d0-9_*/config.json"))[0]))["config"]
+    import frugal_flows.gaussian_scale as GS
+    f = json.load(open(sorted(glob.glob(os.path.join(MM, "runs", "exp_ate_recovery",
+                       "*_ff_e2_flexgauss_sa1_lr0.001_copw16_ystd_k256_s1_d0-9_*/config.json")))[-1]))["config"]
+    assert f["arm"] == "flexible_continuous_gaussian" and f["y_scaling"] == "standardize"
     g = json.load(open(glob.glob(os.path.join(MM, "runs", "frengression",
                                               "*_frengression_e2_sa1_k64_s1_d0-9_*/config.json"))[0]))["config"]
+    B = f"{GS.DEFAULT_INTERVAL:g}"
     rows = [
-        ("Causal margin", f"{f['flow_layers']} autoregressive spline layers, width {f['nn_width']}, "
-                          f"{f['rqs_knots']} knots, permutation between layers",
+        ("Causal margin", f"normal base; {f['flow_layers']} autoregressive spline layers, width {f['nn_width']}, "
+                          f"{f['rqs_knots']} knots, splines on $[-{B}, {B}]$ with identity tails, "
+                          f"permutation between layers",
          f"generator, {g['num_layer']} layers of width {g['hidden_dim']}, noise dimension {g['noise_dim']}"),
-        ("Dependence component", f"copula flow, {f['copula_flow_layers']} layers, width {f['copula_nn_width']}, "
-                                 f"{f['copula_rqs_knots']} knots",
+        ("Dependence component", f"copula flow on normal scores, {f['copula_flow_layers']} layers, width "
+                                 f"{f['copula_nn_width']}, {f['copula_rqs_knots']} knots, initialised at independence",
          f"generator, {g['num_layer']} layers of width {g['hidden_dim']}"),
-        ("Covariates", "ranks: spline flow per continuous covariate, empirical CDF for the digit class",
-         "standardised"),
-        ("Outcome", "logit image as is", "standardised per pixel"),
+        ("Covariates", "ranks (spline flow per continuous covariate, empirical CDF for the digit class), "
+                       "as normal scores", "standardised"),
+        ("Outcome", "standardised per pixel", "standardised per pixel"),
         ("Objective", "likelihood", "energy score"),
         ("Optimiser", f"Adam, learning rate {f['learning_rate']:g}, batch {f['batch_size']}",
          f"Adam, learning rate {g['lr']:g}, full batch"),
-        ("Stopping", f"30 epochs without improvement of the held-out likelihood (10\\,\\% of units), "
-                     f"at most {f['max_epochs']} epochs", f"{g['num_iters']} iterations"),
+        ("Stopping", f"{f['max_patience']} epochs without improvement of the held-out likelihood (10\\,\\% of "
+                     f"units), at most {f['max_epochs']} epochs", f"{g['num_iters']} iterations"),
         ("Effect read-out", f"{READOUT_MC} paired draws under $\\doo{{0}}$ and $\\doo{{1}}$",
          f"{READOUT_MC} paired draws under $\\doo{{0}}$ and $\\doo{{1}}$"),
-        ("Fits per dataset", "5 (fit seeds), effect maps averaged", "1"),
+        ("Fits per dataset", "5, effect maps averaged", "5, effect maps averaged"),
     ]
     lines = [r"\begin{table}[t]", r"\centering", r"\small", r"\begin{tabular}{p{0.2\linewidth}p{0.38\linewidth}p{0.32\linewidth}}",
              r"\toprule", r" & IFF & Frengression \\", r"\midrule"]
