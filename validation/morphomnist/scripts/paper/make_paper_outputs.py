@@ -307,7 +307,7 @@ CAPTION_NOTE = {   # status notes appended to the captions of the inference tabl
        r"dataset; to be updated with the Gaussian-scale IFF and five Frengression fits.}",
     16: r" \lb{Frengression: {fr} of its five fits per dataset so far; to be updated when complete.}",
 }
-ERROR_MAP_VMAX = {8: 0.15}    # colour-scale limit of the error-map figure per resolution
+ERROR_MAP_VMAX = {8: 0.2, 16: 0.2}   # colour-scale limit of the error maps (user, 2026-10-05: +-0.2 at both)
 READOUT_MC = 5000             # paired draws for every effect read-out (both frugal models)
 FIT_SEEDS = lambda k: [k, 1001, 1002, 1003, 1004]   # noqa: E731
 # frengression's fit seeds per resolution: five at 16x16; at 8x8 only seed k for now (the placeholder tables
