@@ -585,7 +585,8 @@ def runtime_table(out):
 
 def main_table(out, results):
     """Main-text table: 5-fit averages of IFF and Frengression and OLS, 8x8 and 16x16 blocks, E1-E6."""
-    meths = [("OLS", "OLS"), ("Frengression, 5-fit average", "Frengression"), ("IFF, 5-fit average", "IFF")]
+    meths = [("Naive difference", "Naive difference"), ("OLS", "OLS"), ("Frengression, 5-fit average", "Frengression"),
+             ("IFF, 5-fit average", "IFF")]
     lines = [r"\begin{table*}[t]", r"\centering", r"\small", r"\begin{tabular}{l" + "c" * len(PRESETS) + "}",
              r"\toprule", "Method & " + " & ".join(LABEL[p] for p in PRESETS) + r" \\"]
     notes = []
@@ -603,8 +604,9 @@ def main_table(out, results):
               r"\caption{Error of the estimated effect map: mean absolute difference between the estimated and "
               r"the true ATE over the pixels, $\times 10^{3}$, averaged over the datasets of each preset (ten at "
               r"$8\times8$, five at $16\times16$), standard error over datasets in brackets. IFF and Frengression: "
-              r"average of five fits per dataset. OLS (per-pixel regression on treatment and covariates) is shown "
-              r"as the strongest classical baseline; the other baselines, single fits and errors by region are in "
+              r"average of five fits per dataset. The naive difference in means makes no adjustment, so its error "
+              r"measures the size of the confounding. OLS (per-pixel regression on treatment and covariates) is "
+              r"shown as the strongest classical baseline; the other baselines, single fits and errors by region are in "
               r"Appendix~\ref{app:inference}." + "".join(notes) + "}",
               r"\label{tab:main-errors}", r"\end{table*}"]
     open(os.path.join(out, "table_main_errors.tex"), "w").write("\n".join(lines) + "\n")
