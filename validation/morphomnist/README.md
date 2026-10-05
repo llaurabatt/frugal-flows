@@ -9,32 +9,50 @@ directory.
 
 ---
 
-## Current state (2026-10-01) — read this first
+## Current state (2026-10-05) — read this first
 
-* **Benchmark: all ten MNIST digits** (`--all-digits`, n = 60000). Digit 0 (n = 5923, the
-  default `--digit 0`) was the development setting only.
-* **Method:** the frugal flow with the flexible-continuous margin (`--arm flexible_continuous
-  --conditioner mlp`) in the paper setting, which is now the default for every other knob
-  (learning rate 1e-3, copula width 16, margin width 48 / 8 knots, batch 100, patience 30, max 1000
-  epochs). **The estimate is the average of 5 fits** with fit seeds `{k, 1001, 1002, 1003, 1004}`
-  on dataset `k`: single fits are 1.5–2× worse.
-* **Criterion:** "performs as frengression on the ATE" — on the same datasets, the flow's 5-fit
-  average has an effect-map error not larger than frengression's (one fit, seed `k`) beyond noise.
-* **Paper grid, 8×8, all digits** (E1–E6 × datasets 1–10): launcher
-  `scripts/exp_ate_recovery/grid_8x8_alldigits_v2.sh`, analysis
-  `scripts/exp_ate_recovery/analyse_grid_8x8_alldigits.py` → `runs/exp_ate_recovery/analysis/`.
-  Early results: the flow matches or beats frengression on E1, E2, E3, E5, E6; **E4 is behind**.
-* **Known problems** (evidence and scope in `docs/leftover_confounding/STATUS.md`):
-  1. *Leftover confounding at higher resolution.* At 16×16 the flow keeps ~9 % of the E2
-     confounding even on all digits (error 2.5–3× frengression's); larger networks do not help.
-     8×8 on all digits is clean. Not yet fixed.
-  2. *E4 / E6:* the copula is blind to the treatment, which is misspecified when the effect
-     depends on the covariates (E4, E6). E4 is the preset where the flow lags.
-  3. *32×32 cost:* the effect read-out samples one pixel at a time (~2.7 h per fit).
-* **Layout:** code at the top level; launch and analysis scripts in `scripts/` (index and how to
-  run them: [`scripts/README.md`](scripts/README.md)); write-ups in
-  `docs/`; everything generated (run folders, indexes, logs, the dataset cache) in `runs/`,
-  which is gitignored.
+* **Branch:** `multi-y-gaussian` = `multi-y` plus Dan Manela's `gaussian-spline` branch (the
+  Gaussian-scale frugal flow) and the work since. Check out this branch to use or reproduce anything below.
+* **Benchmark: all ten MNIST digits** (`--all-digits`, n = 60000), at 8×8 and 16×16. Digit 0 (n = 5923,
+  the default `--digit 0`) was the development setting only.
+* **Models compared** (same datasets, same truth):
+  * our uniform-base frugal flow, `--arm flexible_continuous` (the paper's IFF so far);
+  * the Gaussian-scale frugal flow, `--arm flexible_continuous_gaussian --y-scaling standardize`
+    (section below and `docs/gaussian_scale/README.md`);
+  * frengression (`exp_frengression_recovery.py`), and the baselines naive / IPW / OLS / AIPW
+    (`baselines.py`).
+  All settings are the defaults (learning rate 1e-3, copula width 16, margin width 48 / 8 knots,
+  batch 100, patience 30, max 1000 epochs). **Every effect is read out with 5000 paired draws**,
+  for the flows and for frengression (frengression runs made before 2026-10-03 used 50000 draws and
+  were re-read at 5000 from their weights; `dataset_store.effect_map(run)` returns the 5000-draw map).
+* **5 fits per dataset:** each model is fitted with fit seeds `{k, 1001, 1002, 1003, 1004}` on
+  dataset `k`; the estimate is the average of the 5 effect maps. Single fits are clearly worse.
+* **What has been run** (all digits; each cell = datasets × fit seeds; weights saved):
+
+  | | 8×8 | 16×16 |
+  |---|---|---|
+  | our flow | E1–E6: 10 × 5 | E1, E2, E4, E6: 5 × 5 |
+  | Gaussian-scale flow | E2, E4 dataset 1: 1 × 5 | **E1–E6: 5 × 5** |
+  | frengression | E1–E6: 10 × 1 | E1–E6: 5 × 1, seeds 1001–1004 running (→ 5 × 5) |
+  | baselines | E1–E6: 10 | E1–E6: 5 |
+
+  Launchers and analyses: [`scripts/README.md`](scripts/README.md). Tables:
+  `runs/exp_ate_recovery/analysis/` (`grid_8x8_alldigits.md`, `grid_16x16_alldigits.md`,
+  `gaussian_vs_*_16x16*.csv`).
+* **Results in short** (effect-map error, mean over datasets):
+  * 8×8: our flow's 5-fit average matches or beats frengression on E1, E2, E3, E5, E6; behind on E4.
+  * 16×16: our flow keeps part of the confounding and is about twice frengression's error on E2, E4,
+    E6. The Gaussian-scale flow is better than our flow on every preset; against frengression (both
+    averaged) it is better on E1, about level on E3, behind on E5 and well behind on E2, E4, E6.
+    OLS and AIPW have the lowest errors on most presets.
+* **Known problems:** the copula does not see the treatment, the leading (untested) explanation for
+  the gap on E4 / E6, where the effect depends on the covariates; the 32×32 read-out is slow.
+* **Paper figures and tables:** `scripts/paper/make_paper_outputs.py {setup,inference}` →
+  `runs/paper/<topic>/`.
+* **Shared weights:** the 16×16 runs are shared separately (Google Drive); see "Shared run folders"
+  below for what they contain and where to put them.
+* **Layout:** code at the top level; launch and analysis scripts in `scripts/`; write-ups in `docs/`;
+  everything generated (run folders, indexes, logs, the dataset cache) in `runs/`, which is gitignored.
 
 ---
 
@@ -617,10 +635,24 @@ the flow (identical effect map). Frengression saves `model.pt` (`exp_frengressio
 
 ### Using a saved fit: effect map, samples, counterfactuals
 
-Fits made from 2026-10-01 save their weights (`model.eqx`). This reloads one, reproduces its effect
-map, and transports observed images to the other treatment (checked on an all-digits E2 fit: the
-effect map matches the saved one exactly; counterfactual error 0.037 per pixel against the truth,
-versus 0.19 for leaving the image unchanged).
+Fits made from 2026-10-01 save their weights (`model.eqx`). The quickest check that a run reloads
+correctly is
+
+```python
+import exp_ate_recovery as E, dataset_store as DS
+tau = E.reload_effect_map("runs/exp_ate_recovery/<run-id>")   # recomputed from the weights
+assert abs(tau - DS.effect_map("runs/exp_ate_recovery/<run-id>")).max() == 0
+```
+
+`reload_effect_map` works for both flexible arms. For the Gaussian-scale arm with
+`--y-scaling standardize` the flow is fitted to standardised outcomes, so draws must be mapped back
+with the run's outcome transform (`E.outcome_transform_for(cfg, data)`, passed as
+`outcome_transform=` to `interventional_samples`); the helper does this. Checked on a 16×16 Gaussian
+run and an 8×8 uniform run: identical maps.
+
+The lower-level pieces, for samples and counterfactuals (uniform arm shown; checked on an all-digits
+E2 fit: counterfactual error 0.037 per pixel against the truth, versus 0.19 for leaving the image
+unchanged):
 
 ```python
 import exp_ate_recovery as E, dataset_store as DS
@@ -932,13 +964,26 @@ pathology.
 
 ---
 
-## TO DO (2026-10-01)
+## Shared run folders (weights)
 
-1. Finish the 8×8 all-digits paper grid and read `runs/exp_ate_recovery/analysis/grid_8x8_alldigits.md`.
-2. 16×16: choose a fix for the leftover confounding (candidates: an energy-score term in the flow's
-   training; an AIPW-style correction of the estimate) or report it as a limitation; then the 16×16 grid.
-3. E4: investigate the treatment-blind copula's misspecification when the effect depends on covariates.
+Run folders are not in git (`runs/` is gitignored). The 16×16 runs are shared as archives that unpack
+into `validation/morphomnist/` with the same layout:
+
+```
+runs/exp_ate_recovery/<run-id>/   config.json  metrics.json  wandb.json  model.eqx
+runs/frengression/<run-id>/       config.json  metrics.json  wandb.json  model.pt  [readout_mc5000.npz]
+```
+
+Each archive has an `index.csv` (one row per run: model, preset, dataset, fit seed, effect-map error)
+and a README. `arrays.npz` and the diagnostic plots are not included; everything in them can be
+recomputed from the weights. Rebuilding a run's dataset needs only the code and the MNIST files in
+`data/` (the dataset is rebuilt from `config.json` and checked against its recorded hash). Use the
+commit recorded in each run's `config.json` (`git.commit`) or a later commit of `multi-y-gaussian`.
+
+## TO DO (2026-10-05)
+
+1. Finish frengression's seeds 1001–1004 at 16×16; then the final 16×16 table (Gaussian-scale flow and
+   frengression, 5 × 5 on E1–E6).
+2. Decide the role of the Gaussian-scale flow in the paper; add it to `make_paper_outputs.py inference`.
+3. E4 / E6: test a treatment-aware dependence component (open whether it keeps the parametrisation frugal).
 4. 32×32: make the read-out cheaper before running it.
-5. Remove the 10 weightless all-digit 8×8 flow fits from 2026-09-28 once the grid's refits are confirmed identical.
-
-The older to-do list (axis sweeps on digit 0) is superseded; see git history for it.

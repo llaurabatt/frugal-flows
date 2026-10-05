@@ -2002,6 +2002,28 @@ def load_model(run_dir: str):
     return equinox.tree_deserialise_leaves(path, skeleton)
 
 
+def reload_effect_map(run_dir: str) -> np.ndarray:
+    """A saved flow run's effect map recomputed from its weights, exactly as the run read it out:
+    the run's n_mc paired draws with its seed_mc, mapped back through the outcome transform when the
+    run fitted standardised Y (Gaussian-scale arms with --y-scaling standardize), non-finite draws
+    dropped pairwise. Equals the run's saved tau_hat (2026-10-05). Flexible arms only."""
+    import dataset_store
+    from frugal_flows.interventions import interventional_samples
+
+    with open(os.path.join(run_dir, "config.json")) as f:
+        stored = json.load(f)["config"]
+    known = {fl.name for fl in fields(Config)}
+    cfg = Config(**{k: v for k, v in stored.items() if k in known})
+    data = dataset_store.build_for_run(run_dir)
+    flow = load_model(run_dir)
+    r = interventional_samples(jr.key(cfg.seed_mc), flow, cond_dim=int(np.asarray(data["X"]).shape[1]),
+                               n_mc=cfg.n_mc, dim_y=cfg.size ** 2,
+                               outcome_transform=outcome_transform_for(cfg, data))
+    y0, y1 = np.asarray(r["y0"]), np.asarray(r["y1"])
+    keep = np.isfinite(y0).all(axis=1) & np.isfinite(y1).all(axis=1)
+    return (y1[keep] - y0[keep]).mean(axis=0)
+
+
 def save_run(cfg: Config, data: dict, losses: dict, tau_hat: np.ndarray,
              u_z: np.ndarray, metrics: dict, extras: dict, run_dir: str):
     metrics = {"run_id": os.path.basename(run_dir), **metrics}

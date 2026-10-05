@@ -59,6 +59,23 @@ choices is in [`../docs/leftover_confounding/STATUS.md`](../docs/leftover_confou
 |---|---|---|
 | `exp_ate_recovery/grid_16x16_alldigits.sh` | E1, E2, E4, E6 × datasets 1–5; flow with fit seeds {k, 1001–1004} (method = 5-fit average), frengression one fit (seed k); paper defaults, `--size 16`, weights saved; slot pool `SLOTS` × 5 cores (default 48) | `runs/exp_ate_recovery/`, `runs/frengression/`; `grid_16x16_alldigits`, `grid_16x16_alldigits_frengression` |
 
+## Gaussian-scale flow and frengression with five seeds (2026-10-03 → 05)
+
+All on all ten digits with the paper settings, five fit seeds `{k, 1001–1004}` per dataset `k`, weights
+saved. The launchers pick free 5-core blocks themselves (they check which cores running fits use), so
+they can run next to other jobs.
+
+| script | what it does | wandb group |
+|---|---|---|
+| `exp_ate_recovery/gaussian_sanity_8x8.sh` | (A) refits Dan's five n = 5000 example fits (`examples/morphomnist_8x8_n5000`), same settings: errors close to his, same data hash; (B) Gaussian-scale flow on our 8×8 data, E2/E4 dataset 1 | `gaussian_sanity` |
+| `exp_ate_recovery/gaussian_16x16_check.sh` | Gaussian-scale flow at 16×16, E2/E4 dataset 1 | `gaussian_sanity` |
+| `exp_ate_recovery/gaussian_16x16_more.sh` | Gaussian-scale flow at 16×16, dataset 1 (E1, E3, E5, E6) and dataset 2 (E1–E6); frengression and baselines for E3/E5 there | `gaussian_16x16`, `gaussian_16x16_frengression` |
+| `exp_ate_recovery/gaussian_16x16_complete.sh` | the same on datasets 3–5 (E1–E6), so the Gaussian-scale flow has 5 datasets × 5 seeds on every preset | as above |
+| `exp_ate_recovery/frengression_16x16_5seeds.sh` | frengression seeds 1001–1004 on E1–E6 × datasets 1–5 at 16×16 (120 fits), so frengression also has 5 × 5 | `frengression_16x16_5seeds` |
+| `baselines/baselines_grid_16x16_alldigits.sh` | baselines on the 16×16 grid's datasets (E1, E2, E4, E6) | — |
+| `frengression/reread_mc5000.py` | re-reads frengression effect maps at 5000 paired draws from the weights (runs before 2026-10-03 used 50000); rerun after new 50000-draw runs | — |
+| `exp_ate_recovery/end_paused_launcher.sh <pid>` | ends a paused launcher by process id once its fits finish | — |
+
 ## Resolution checks (16×16, 32×32)
 
 | script | what it does | wandb group |
