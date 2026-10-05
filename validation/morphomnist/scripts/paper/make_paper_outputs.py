@@ -583,8 +583,37 @@ def runtime_table(out):
     return "table_runtime"
 
 
+def main_table(out, results):
+    """Main-text table: 5-fit averages of IFF and Frengression and OLS, 8x8 and 16x16 blocks, E1-E6."""
+    meths = [("OLS", "OLS"), ("Frengression, 5-fit average", "Frengression"), ("IFF, 5-fit average", "IFF")]
+    lines = [r"\begin{table*}[t]", r"\centering", r"\small", r"\begin{tabular}{l" + "c" * len(PRESETS) + "}",
+             r"\toprule", "Method & " + " & ".join(LABEL[p] for p in PRESETS) + r" \\"]
+    notes = []
+    for size in sorted(results):
+        x, status = results[size]
+        lines += [r"\midrule", f"\\multicolumn{{{len(PRESETS) + 1}}}{{l}}{{\\emph{{${size}\\times{size}$}}}} \\\\"]
+        for m, name in meths:
+            cells = [_cell(x[(x.preset == LABEL[p]) & (x.method == m)].mae, 1e3) for p in PRESETS]
+            lines.append(f"{name} & " + " & ".join(cells) + r" \\")
+        inc = status[status.included]
+        fr = (f"{inc.frengression.min()}--{inc.frengression.max()}" if inc.frengression.min() != inc.frengression.max()
+              else f"{inc.frengression.min()}")
+        notes.append(CAPTION_NOTE[size].replace("{fr}", fr).replace("of its five fits", f"of its five fits at ${size}\\times{size}$"))
+    lines += [r"\bottomrule", r"\end{tabular}",
+              r"\caption{Error of the estimated effect map: mean absolute difference between the estimated and "
+              r"the true ATE over the pixels, $\times 10^{3}$, averaged over the datasets of each preset (ten at "
+              r"$8\times8$, five at $16\times16$), standard error over datasets in brackets. IFF and Frengression: "
+              r"average of five fits per dataset. OLS (per-pixel regression on treatment and covariates) is shown "
+              r"as the strongest classical baseline; the other baselines, single fits and errors by region are in "
+              r"Appendix~\ref{app:inference}." + "".join(notes) + "}",
+              r"\label{tab:main-errors}", r"\end{table*}"]
+    open(os.path.join(out, "table_main_errors.tex"), "w").write("\n".join(lines) + "\n")
+    return "table_main_errors"
+
+
 def inference(out):
     parts = [hparams_table(out), runtime_table(out)]
+    results = {}
     for size in INF_GRID:
         x, shown, status = collect_inference(size)
         x.to_csv(os.path.join(out, f"scores_{size}x{size}.csv"), index=False)
@@ -598,7 +627,8 @@ def inference(out):
         status.to_csv(os.path.join(out, f"status_{size}x{size}.csv"), index=False)
         print(f"  {size}x{size}: datasets included per preset: {ok.groupby('preset').size().to_dict()}")
         parts += inference_tables(out, size, x, status) + [inference_error_figure(out, size, shown, status)]
-    return parts
+        results[size] = (x, status)
+    return parts + [main_table(out, results)]
 
 
 TOPICS = {"setup": setup, "inference": inference}
