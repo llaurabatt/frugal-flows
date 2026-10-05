@@ -315,8 +315,8 @@ FIT_SEEDS = lambda k: [k, 1001, 1002, 1003, 1004]   # noqa: E731
 FR_SEEDS = {8: lambda k: [k], 16: FIT_SEEDS}
 BASELINES = [("naive", "Naive difference"), ("ipw", "IPW"), ("ols", "OLS"), ("aipw", "AIPW"),
              ("oracle_ipw", "Oracle IPW")]
-METHOD_ORDER = [m for k, m in BASELINES if k != "oracle_ipw"] + ["Frengression, single fit", "Frengression, 5-fit average",
-                                                                  "IFF, single fit", "IFF, 5-fit average"]
+METHOD_ORDER = [m for k, m in BASELINES if k != "oracle_ipw"] + ["Frengression, single fit", "IFF, single fit",
+                                                                  "Frengression, 5-fit average", "IFF, 5-fit average"]
 
 
 def _runs(root, size, pattern):
@@ -411,7 +411,7 @@ def inference_tables(out, size, x, status):
              r"\begin{tabular}{l" + "c" * len(presets) + "}", r"\toprule",
              "Method & " + " & ".join(presets) + r" \\", r"\midrule"]
     for m in METHOD_ORDER:
-        if m == "Frengression, single fit":
+        if m in ("Frengression, single fit", "Frengression, 5-fit average"):
             lines.append(r"\midrule")
         cells = [_cell(x[(x.preset == pr) & (x.method == m)].mae, 1e3) for pr in presets]
         lines.append(f"{m} & " + " & ".join(cells) + r" \\")
@@ -460,9 +460,9 @@ def inference_tables(out, size, x, status):
 
 def inference_error_figure(out, size, shown, status):
     presets = [LABEL[p] for p in INF_GRID[size][0] if LABEL[p] in shown]
-    cols = ["OLS", "AIPW", "Frengression, single fit", "Frengression, 5-fit average", "IFF, single fit",
+    cols = ["OLS", "AIPW", "Frengression, single fit", "IFF, single fit", "Frengression, 5-fit average",
             "IFF, 5-fit average"]
-    titles = ["OLS", "AIPW", "Frengression\nsingle fit", "Frengression\n5-fit average", "IFF\nsingle fit",
+    titles = ["OLS", "AIPW", "Frengression\nsingle fit", "IFF\nsingle fit", "Frengression\n5-fit average",
               "IFF\n5-fit average"]
     D = disc_mask(size)
     errs = {(pr, c): (shown[pr][c] - shown[pr]["ate"]) if c in shown[pr] else None for pr in presets for c in cols}
