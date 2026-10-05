@@ -302,6 +302,9 @@ INF_GRID = {   # resolution -> (presets, assignment seeds), as run by the grid l
 # (2026-10-05); at 8x8 the uniform-base flow stays as a placeholder until the Gaussian 8x8 grid exists
 IFF_PATTERN = {8: r"flexcont_sa(?P<k>\d+)_lr0\.001_copw16",
                16: r"flexgauss_sa(?P<k>\d+)_lr0\.001_copw16_ystd"}
+# ablation (2026-10-05): the uniform-base flow (raw outcome) against IFF, at 16x16 on the presets where it was run
+ABLATION_PATTERN = {16: r"flexcont_sa(?P<k>\d+)_lr0\.001_copw16"}
+ABLATION_PRESETS = ["E1", "E2", "E4", "E6"]
 CAPTION_NOTE = {   # status notes appended to the captions of the inference tables and figures
     8: r" \dm{Placeholder: old results, with the uniform-base variant of IFF and one Frengression fit per "
        r"dataset; to be updated with the Gaussian-scale IFF and five Frengression fits.}",
@@ -344,6 +347,9 @@ def collect_inference(size):
     ff = _runs("exp_ate_recovery", size,
                rf"ff_(?P<p>e[1-6])_{IFF_PATTERN[size]}_k{K}_s(?P<s>\d+)_d0-9_[0-9a-f]{{6}}")
     fr = _runs("frengression", size, rf"frengression_(?P<p>e[1-6])_sa(?P<k>\d+)_k{K}_s(?P<s>\d+)_d0-9_[0-9a-f]{{6}}")
+    uni = (_runs("exp_ate_recovery", size,
+                 rf"ff_(?P<p>e[1-6])_{ABLATION_PATTERN[size]}_k{K}_s(?P<s>\d+)_d0-9_[0-9a-f]{{6}}")
+           if size in ABLATION_PATTERN else {})
     bidx = pd.read_csv(os.path.join(MM, "runs", "baselines", "index.csv"))
     presets, seeds = INF_GRID[size]
     D = disc_mask(size).ravel()
@@ -391,6 +397,9 @@ def collect_inference(size):
                 single_and_average("Frengression", fr_fits, None)
             if fits:
                 single_and_average("IFF", fits, 5)
+            uni_fits = [uni[(short, k, s)] for s in FIT_SEEDS(k) if (short, k, s) in uni]
+            if len(uni_fits) == 5:
+                single_and_average("Uniform base", uni_fits, 5)
             if k == SHOW_DATASET:
                 shown[LABEL[p]] = {"ate": ate, **ests}
     return pd.DataFrame(rows), shown, pd.DataFrame(status)
@@ -613,6 +622,34 @@ def main_table(out, results):
     return "table_main_errors"
 
 
+def ablation_base_table(out, size, x):
+    """Uniform-base flow (raw outcome) against IFF (Gaussian base, standardised outcome): single fits and
+    5-fit averages, on the presets and datasets where both have all five fits."""
+    ok = x[x.method == "Uniform base, 5-fit average"][["preset", "dataset"]]
+    x = x.merge(ok, on=["preset", "dataset"])
+    meths = [("Uniform base, single fit", "Uniform base, single fit"), ("IFF, single fit", "IFF, single fit"),
+             ("Uniform base, 5-fit average", "Uniform base, 5-fit average"), ("IFF, 5-fit average", "IFF, 5-fit average")]
+    lines = [r"\begin{table}[t]", r"\centering", r"\small",
+             r"\begin{tabular}{l" + "c" * len(ABLATION_PRESETS) + "}", r"\toprule",
+             "Method & " + " & ".join(ABLATION_PRESETS) + r" \\", r"\midrule"]
+    for i, (m, name) in enumerate(meths):
+        if i == 2:
+            lines.append(r"\midrule")
+        lines.append(f"{name} & " + " & ".join(_cell(x[(x.preset == pr) & (x.method == m)].mae, 1e3)
+                                               for pr in ABLATION_PRESETS) + r" \\")
+    counts = " & ".join(str(int((ok.preset == pr).sum())) for pr in ABLATION_PRESETS)
+    lines += [r"\midrule", f"Datasets & {counts} \\\\", r"\bottomrule", r"\end{tabular}",
+              f"\\caption{{Uniform versus Gaussian base at ${size}\\times{size}$: error of the estimated effect "
+              r"map (mean absolute difference between estimated and true ATE over the pixels, $\times 10^{3}$), "
+              r"averaged over datasets, standard error over datasets in brackets. Uniform base: the causal-margin "
+              r"flow of the original Frugal Flows, on $(0,1)^K$, fitted to the raw outcome; IFF: normal base, "
+              r"standardised outcome; all other settings as in Table~\ref{tab:hparams}. Single fit and 5-fit "
+              r"average as in Table~\ref{tab:errors" + str(size) + r"}.}",
+              r"\label{tab:ablation-base}", r"\end{table}"]
+    open(os.path.join(out, "table_ablation_base.tex"), "w").write("\n".join(lines) + "\n")
+    return "table_ablation_base"
+
+
 def inference(out):
     parts = [hparams_table(out), runtime_table(out)]
     results = {}
@@ -629,6 +666,8 @@ def inference(out):
         status.to_csv(os.path.join(out, f"status_{size}x{size}.csv"), index=False)
         print(f"  {size}x{size}: datasets included per preset: {ok.groupby('preset').size().to_dict()}")
         parts += inference_tables(out, size, x, status) + [inference_error_figure(out, size, shown, status)]
+        if size in ABLATION_PATTERN:
+            parts.append(ablation_base_table(out, size, x))
         results[size] = (x, status)
     return parts + [main_table(out, results)]
 
