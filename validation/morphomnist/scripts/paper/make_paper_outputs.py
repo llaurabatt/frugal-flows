@@ -308,8 +308,10 @@ ABLATION_PRESETS = ["E1", "E2", "E4", "E6"]
 CAPTION_NOTE = {   # status notes appended to the captions of the inference tables and figures
     8: r" \dm{Placeholder: old results, with the uniform-base variant of IFF and one Frengression fit per "
        r"dataset; to be updated with the Gaussian-scale IFF and five Frengression fits.}",
-    16: r" \lb{Frengression: {fr} of its five fits per dataset so far; to be updated when complete.}",
+    16: "",   # frengression's five fits per dataset complete (2026-10-06)
 }
+# NB (2026-10-06): the paper's 8x8 tables and figure are Dan's (Gaussian-scale IFF, five datasets, his runs, not on
+# this machine); the 8x8 outputs here are the old uniform-base placeholder and must not be copied into the paper.
 ERROR_MAP_VMAX = {8: 0.2, 16: 0.2}   # colour-scale limit of the error maps (user, 2026-10-05: +-0.2 at both)
 READOUT_MC = 5000             # paired draws for every effect read-out (both frugal models)
 FIT_SEEDS = lambda k: [k, 1001, 1002, 1003, 1004]   # noqa: E731
