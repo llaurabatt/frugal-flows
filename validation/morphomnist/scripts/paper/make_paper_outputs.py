@@ -294,10 +294,15 @@ def preview(out, parts):
 # --------------------------------------------------------------------------------------------- #
 # topic: inference
 # --------------------------------------------------------------------------------------------- #
+# 8x8 is NOT produced here (2026-10-06): the paper's 8x8 tables, figure and main-table block are Dan's
+# (Gaussian-scale IFF, five datasets, his runs, not on this machine); the 8x8 runs here are the old
+# uniform-base placeholder. Do not add 8 back unless Dan's 8x8 run folders are in runs/. main_table() copies
+# the 8x8 block from the paper's own table_main_errors.tex (PAPER_MAIN_TABLE).
 INF_GRID = {   # resolution -> (presets, assignment seeds), as run by the grid launchers
-    8: (PRESETS, range(1, 11)),                                               # grid_8x8_alldigits_v2.sh
     16: (PRESETS, range(1, 6)),               # gaussian_16x16_*.sh, frengression_16x16_5seeds.sh
 }
+assert 8 not in INF_GRID, "8x8 outputs would overwrite Dan's results in the paper (see comment above)"
+PAPER_MAIN_TABLE = os.path.join(MM, "..", "..", "..", "FF_multidim", "figures", "experiments", "table_main_errors.tex")
 # which flow is "IFF" at each resolution (run-name pattern after the preset): the Gaussian-scale flexible flow
 # (2026-10-05); at 8x8 the uniform-base flow stays as a placeholder until the Gaussian 8x8 grid exists
 IFF_PATTERN = {8: r"flexcont_sa(?P<k>\d+)_lr0\.001_copw16",
@@ -310,8 +315,6 @@ CAPTION_NOTE = {   # status notes appended to the captions of the inference tabl
        r"dataset; to be updated with the Gaussian-scale IFF and five Frengression fits.}",
     16: "",   # frengression's five fits per dataset complete (2026-10-06)
 }
-# NB (2026-10-06): the paper's 8x8 tables and figure are Dan's (Gaussian-scale IFF, five datasets, his runs, not on
-# this machine); the 8x8 outputs here are the old uniform-base placeholder and must not be copied into the paper.
 ERROR_MAP_VMAX = {8: 0.2, 16: 0.2}   # colour-scale limit of the error maps (user, 2026-10-05: +-0.2 at both)
 READOUT_MC = 5000             # paired draws for every effect read-out (both frugal models)
 FIT_SEEDS = lambda k: [k, 1001, 1002, 1003, 1004]   # noqa: E731
@@ -555,7 +558,7 @@ def runtime_table(out):
     and the effect read-out) for the grid runs, and per dataset for all baselines together."""
     import glob, json, re
     rows = []
-    for size in INF_GRID:
+    for size in (8, 16):   # 8x8 IFF times are the uniform-base runs' (the paper flags this; Dan's are not here)
         K = size ** 2
         for name, root, rx, nfits in (
                 ("IFF", "exp_ate_recovery", rf"ff_e[1-6]_{IFF_PATTERN[size]}_k{K}_s\d+_d0-9_[0-9a-f]{{6}}", 5),
@@ -600,6 +603,11 @@ def main_table(out, results):
              ("IFF, 5-fit average", "IFF")]
     lines = [r"\begin{table*}[t]", r"\centering", r"\small", r"\begin{tabular}{l" + "c" * len(PRESETS) + "}",
              r"\toprule", "Method & " + " & ".join(LABEL[p] for p in PRESETS) + r" \\"]
+    # the 8x8 block (from \midrule to the line before the next \midrule) is copied from the paper unchanged
+    paper = open(PAPER_MAIN_TABLE).read().splitlines()
+    i = next(j for j, l in enumerate(paper) if "multicolumn" in l and "8\\times8" in l)
+    k = next(j for j in range(i + 1, len(paper)) if paper[j].startswith(r"\midrule"))
+    lines += [r"\midrule"] + paper[i:k]
     notes = []
     for size in sorted(results):
         x, status = results[size]
@@ -613,8 +621,8 @@ def main_table(out, results):
         notes.append(CAPTION_NOTE[size].replace("{fr}", fr).replace("of its five fits", f"of its five fits at ${size}\\times{size}$"))
     lines += [r"\bottomrule", r"\end{tabular}",
               r"\caption{Error of the estimated effect map: mean absolute difference between the estimated and "
-              r"the true ATE over the pixels, $\times 10^{3}$, averaged over the datasets of each preset (ten at "
-              r"$8\times8$, five at $16\times16$), standard error over datasets in brackets. IFF and Frengression: "
+              r"the true ATE over the pixels, $\times 10^{3}$, averaged over the datasets of each preset (five at "
+              r"each resolution), standard error over datasets in brackets. IFF and Frengression: "
               r"average of five fits per dataset. The naive difference in means makes no adjustment, so its error "
               r"measures the size of the confounding. OLS (per-pixel regression on treatment and covariates) is "
               r"shown as the strongest classical baseline; the other baselines, single fits and errors by region are in "
